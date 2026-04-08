@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreateExpensesCatergoryDto } from './dto/create-expenses_catergory.dto';
@@ -12,9 +16,39 @@ export class ExpensesCatergoryService {
     private readonly expensesCategoryRepository: Repository<ExpensesCatergory>,
   ) {}
 
+  private async ensureUniqueName(
+    companyId: number,
+    name: string,
+    excludeId?: number,
+  ): Promise<void> {
+    const qb = this.expensesCategoryRepository
+      .createQueryBuilder('category')
+      .where('category.company_id = :companyId', { companyId })
+      .andWhere('LOWER(category.name) = LOWER(:name)', { name });
+
+    if (excludeId) {
+      qb.andWhere('category.id != :excludeId', { excludeId });
+    }
+
+    const existingCategory = await qb.getOne();
+    if (existingCategory) {
+      throw new ConflictException(
+        'Expense category with this name already exists for this company',
+      );
+    }
+  }
+
   async create(createExpensesCatergoryDto: CreateExpensesCatergoryDto) {
+    const normalizedName = createExpensesCatergoryDto.name.trim();
+
+    await this.ensureUniqueName(
+      createExpensesCatergoryDto.company_id,
+      normalizedName,
+    );
+
     const category = this.expensesCategoryRepository.create({
       ...createExpensesCatergoryDto,
+      name: normalizedName,
       is_common: createExpensesCatergoryDto.is_common ?? false,
       is_active: createExpensesCatergoryDto.is_active ?? true,
     });
@@ -46,7 +80,17 @@ export class ExpensesCatergoryService {
   ) {
     const category = await this.findOne(id);
 
-    this.expensesCategoryRepository.merge(category, updateExpensesCatergoryDto);
+    const normalizedName = updateExpensesCatergoryDto.name?.trim();
+    const companyId =
+      updateExpensesCatergoryDto.company_id ?? category.company_id;
+    const categoryName = normalizedName ?? category.name;
+
+    await this.ensureUniqueName(companyId, categoryName, id);
+
+    this.expensesCategoryRepository.merge(category, {
+      ...updateExpensesCatergoryDto,
+      ...(normalizedName !== undefined ? { name: normalizedName } : {}),
+    });
     return this.expensesCategoryRepository.save(category);
   }
 

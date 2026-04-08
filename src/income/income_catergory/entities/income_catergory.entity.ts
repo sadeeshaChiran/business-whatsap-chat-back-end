@@ -5,10 +5,12 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
+  Unique,
 } from 'typeorm';
 import { Income } from '../../entities/income.entity';
 
 @Entity()
+@Unique('UQ_income_category_company_name', ['company_id', 'name'])
 export class IncomeCatergory {
   @PrimaryGeneratedColumn()
   id: number;
