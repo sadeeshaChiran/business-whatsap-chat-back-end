@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { SourseType } from '../../expenses/entities/expense.entity';
 import { IncomeCatergory } from '../income_catergory/entities/income_catergory.entity';
+import { Company } from '../../company/entities/company.entity';
 
 @Entity()
 export class Income {
@@ -40,6 +41,14 @@ export class Income {
   })
   @JoinColumn({ name: 'income_category_id' })
   incomeCategory: IncomeCatergory;
+
+  @ManyToOne(() => Company, (company) => company.incomes, {
+    nullable: false,
+    onDelete: 'RESTRICT',
+    onUpdate: 'CASCADE',
+  })
+  @JoinColumn({ name: 'company_id' })
+  company: Company;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   created_at: Date;
