@@ -5,8 +5,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Company } from '../company/entities/company.entity';
+import { Industry } from '../company/industry/entities/industry.entity';
 import { User } from '../users/entities/user.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -37,6 +38,27 @@ export class AuthService {
     private readonly companyRepository: Repository<Company>,
   ) {}
 
+  private async getRegistrationIndustry(
+    manager: EntityManager,
+  ): Promise<Industry> {
+    const industryRepository = manager.getRepository(Industry);
+    const existingIndustry = await industryRepository.find({
+      order: { id: 'ASC' },
+      take: 1,
+    });
+
+    if (existingIndustry.length > 0) {
+      return existingIndustry[0];
+    }
+
+    const industry = industryRepository.create({
+      name: 'General',
+      is_active: true,
+    });
+
+    return industryRepository.save(industry);
+  }
+
   async register(registerDto: RegisterDto) {
     const email = registerDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({
@@ -48,6 +70,8 @@ export class AuthService {
     }
 
     const persistedUser = await this.dataSource.transaction(async (manager) => {
+      const industry = await this.getRegistrationIndustry(manager);
+
       const company = manager.getRepository(Company).create({
         name: registerDto.company.name.trim(),
         plan: '',
@@ -57,7 +81,7 @@ export class AuthService {
         is_email_nofications: true,
         is_weekly_report: true,
         is_monthly_report: true,
-        industry: null,
+        industry,
       });
 
       const savedCompany = await manager.getRepository(Company).save(company);

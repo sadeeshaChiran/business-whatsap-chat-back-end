@@ -42,12 +42,12 @@ export class Company {
   is_monthly_report: boolean;
 
   @ManyToOne(() => Industry, (industry) => industry.companies, {
-    nullable: true,
-    onDelete: 'SET NULL',
+    nullable: false,
+    onDelete: 'RESTRICT',
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'industry_id' })
-  industry: Industry | null;
+  industry: Industry;
 
   @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
   incomeCategories: IncomeCatergory[];
