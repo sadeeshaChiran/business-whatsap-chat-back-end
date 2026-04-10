@@ -11,6 +11,8 @@ import { Industry } from '../industry/entities/industry.entity';
 import { IncomeCatergory } from '../../income/income_catergory/entities/income_catergory.entity';
 import { Income } from '../../income/entities/income.entity';
 import { User } from '../../users/entities/user.entity';
+import { Note } from '../../notes/entities/note.entity';
+import { ColorTag } from '../../notes/color_tags/entities/color_tag.entity';
 
 @Entity()
 export class Company {
@@ -31,6 +33,9 @@ export class Company {
 
   @Column({ type: 'varchar', length: 255, default: '' })
   address: string;
+
+  @Column({ type: 'int', nullable: true })
+  admin_user_id: number | null;
 
   @Column({ type: 'boolean', default: true })
   is_email_nofications: boolean;
@@ -57,4 +62,10 @@ export class Company {
 
   @OneToMany(() => User, (user) => user.company)
   users: User[];
+
+  @OneToMany(() => Note, (note) => note.company)
+  notes: Note[];
+
+  @OneToMany(() => ColorTag, (colorTag) => colorTag.company)
+  color_tags: ColorTag[];
 }

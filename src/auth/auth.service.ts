@@ -95,6 +95,9 @@ export class AuthService {
 
       const savedUser = await manager.getRepository(User).save(user);
 
+      savedCompany.admin_user_id = savedUser.id;
+      await manager.getRepository(Company).save(savedCompany);
+
       return manager.getRepository(User).findOne({
         where: { id: savedUser.id },
         relations: {

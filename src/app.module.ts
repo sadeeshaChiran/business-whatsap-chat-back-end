@@ -8,6 +8,8 @@ import { AuthModule } from './auth/auth.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { IncomeModule } from './income/income.module';
 import { CompanyModule } from './company/company.module';
+import { NotesModule } from './notes/notes.module';
+import { ColorTagsModule } from './notes/color_tags/color_tags.module';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { CompanyModule } from './company/company.module';
     ExpensesModule,
     IncomeModule,
     CompanyModule,
+    NotesModule,
+    ColorTagsModule,
   ],
   controllers: [AppController],
   providers: [
