@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
+import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { SourseType } from '../expenses/entities/expense.entity';
 import { CreateIncomeDto } from './dto/create-income.dto';
 import { UpdateIncomeDto } from './dto/update-income.dto';
 import { Income } from './entities/income.entity';
-import { SourseType } from '../expenses/entities/expense.entity';
 import { IncomeCatergory } from './income_catergory/entities/income_catergory.entity';
 
 @Injectable()
@@ -16,38 +17,29 @@ export class IncomeService {
     private readonly incomeCategoryRepository: Repository<IncomeCatergory>,
   ) {}
 
-  async create(createIncomeDto: CreateIncomeDto) {
-    const category = await this.incomeCategoryRepository.findOne({
-      where: { id: createIncomeDto.income_category_id },
-    });
+  private async findAccessibleCategory(id: number, companyId: number) {
+    const category = await this.incomeCategoryRepository
+      .createQueryBuilder('category')
+      .where('category.id = :id', { id })
+      .andWhere(
+        new Brackets((subQuery) => {
+          subQuery
+            .where('category.company_id = :companyId', { companyId })
+            .orWhere('category.is_common = true');
+        }),
+      )
+      .getOne();
 
     if (!category) {
       throw new NotFoundException('Income category not found');
     }
 
-    const income = this.incomeRepository.create({
-      amount: createIncomeDto.amount,
-      date: createIncomeDto.date,
-      note: createIncomeDto.note ?? '',
-      sourse: createIncomeDto.sourse ?? SourseType.manual,
-      created_user_id: createIncomeDto.created_user_id ?? 0,
-      company_id: createIncomeDto.company_id,
-      incomeCategory: category,
-    });
-
-    return this.incomeRepository.save(income);
+    return category;
   }
 
-  async findAll() {
-    return this.incomeRepository.find({
-      relations: ['incomeCategory'],
-      order: { id: 'DESC' },
-    });
-  }
-
-  async findOne(id: number) {
+  private async findOwnedIncome(id: number, companyId: number) {
     const income = await this.incomeRepository.findOne({
-      where: { id },
+      where: { id, company_id: companyId },
       relations: ['incomeCategory'],
     });
 
@@ -58,19 +50,49 @@ export class IncomeService {
     return income;
   }
 
-  async update(id: number, updateIncomeDto: UpdateIncomeDto) {
-    const income = await this.findOne(id);
+  async create(createIncomeDto: CreateIncomeDto, user: AuthenticatedUser) {
+    const category = await this.findAccessibleCategory(
+      createIncomeDto.income_category_id,
+      user.company_id,
+    );
+
+    const income = this.incomeRepository.create({
+      amount: createIncomeDto.amount,
+      date: createIncomeDto.date,
+      note: createIncomeDto.note ?? '',
+      sourse: createIncomeDto.sourse ?? SourseType.manual,
+      created_user_id: user.id,
+      company_id: user.company_id,
+      incomeCategory: category,
+    });
+
+    return this.incomeRepository.save(income);
+  }
+
+  async findAll(user: AuthenticatedUser) {
+    return this.incomeRepository.find({
+      where: { company_id: user.company_id },
+      relations: ['incomeCategory'],
+      order: { id: 'DESC' },
+    });
+  }
+
+  async findOne(id: number, user: AuthenticatedUser) {
+    return this.findOwnedIncome(id, user.company_id);
+  }
+
+  async update(
+    id: number,
+    updateIncomeDto: UpdateIncomeDto,
+    user: AuthenticatedUser,
+  ) {
+    const income = await this.findOwnedIncome(id, user.company_id);
 
     if (updateIncomeDto.income_category_id !== undefined) {
-      const category = await this.incomeCategoryRepository.findOne({
-        where: { id: updateIncomeDto.income_category_id },
-      });
-
-      if (!category) {
-        throw new NotFoundException('Income category not found');
-      }
-
-      income.incomeCategory = category;
+      income.incomeCategory = await this.findAccessibleCategory(
+        updateIncomeDto.income_category_id,
+        user.company_id,
+      );
     }
 
     if (updateIncomeDto.amount !== undefined) {
@@ -85,18 +107,12 @@ export class IncomeService {
     if (updateIncomeDto.sourse !== undefined) {
       income.sourse = updateIncomeDto.sourse;
     }
-    if (updateIncomeDto.created_user_id !== undefined) {
-      income.created_user_id = updateIncomeDto.created_user_id ?? 0;
-    }
-    if (updateIncomeDto.company_id !== undefined) {
-      income.company_id = updateIncomeDto.company_id;
-    }
 
     return this.incomeRepository.save(income);
   }
 
-  async remove(id: number) {
-    const income = await this.findOne(id);
+  async remove(id: number, user: AuthenticatedUser) {
+    const income = await this.findOwnedIncome(id, user.company_id);
     await this.incomeRepository.remove(income);
 
     return { id };

@@ -10,6 +10,7 @@ import { Industry } from '../industry/entities/industry.entity';
 
 import { IncomeCatergory } from '../../income/income_catergory/entities/income_catergory.entity';
 import { Income } from '../../income/entities/income.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity()
 export class Company {
@@ -19,16 +20,16 @@ export class Company {
   @Column({ type: 'varchar', length: 255 })
   name: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', default: '' })
   plan: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   email: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   phone: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   address: string;
 
   @Column({ type: 'boolean', default: true })
@@ -41,16 +42,19 @@ export class Company {
   is_monthly_report: boolean;
 
   @ManyToOne(() => Industry, (industry) => industry.companies, {
-    nullable: false,
-    onDelete: 'RESTRICT',
+    nullable: true,
+    onDelete: 'SET NULL',
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'industry_id' })
-  industry: Industry;
+  industry: Industry | null;
 
   @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
   incomeCategories: IncomeCatergory[];
 
   @OneToMany(() => Income, (income) => income.company)
   incomes: Income[];
+
+  @OneToMany(() => User, (user) => user.company)
+  users: User[];
 }

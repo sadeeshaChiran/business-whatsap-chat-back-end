@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository } from 'typeorm';
+import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 import { Expense, SourseType } from './entities/expense.entity';
@@ -15,38 +16,29 @@ export class ExpensesService {
     private readonly expensesCategoryRepository: Repository<ExpensesCatergory>,
   ) {}
 
-  async create(createExpenseDto: CreateExpenseDto) {
-    const category = await this.expensesCategoryRepository.findOne({
-      where: { id: createExpenseDto.expense_category_id },
-    });
+  private async findAccessibleCategory(id: number, companyId: number) {
+    const category = await this.expensesCategoryRepository
+      .createQueryBuilder('category')
+      .where('category.id = :id', { id })
+      .andWhere(
+        new Brackets((subQuery) => {
+          subQuery
+            .where('category.company_id = :companyId', { companyId })
+            .orWhere('category.is_common = true');
+        }),
+      )
+      .getOne();
 
     if (!category) {
       throw new NotFoundException('Expense category not found');
     }
 
-    const expense = this.expenseRepository.create({
-      amount: createExpenseDto.amount,
-      date: createExpenseDto.date,
-      note: createExpenseDto.note ?? '',
-      sourse: createExpenseDto.sourse ?? SourseType.manual,
-      created_user_id: createExpenseDto.created_user_id ?? 0,
-      company_id: createExpenseDto.company_id,
-      expenseCategory: category,
-    });
-
-    return this.expenseRepository.save(expense);
+    return category;
   }
 
-  async findAll() {
-    return this.expenseRepository.find({
-      relations: ['expenseCategory'],
-      order: { id: 'DESC' },
-    });
-  }
-
-  async findOne(id: number) {
+  private async findOwnedExpense(id: number, companyId: number) {
     const expense = await this.expenseRepository.findOne({
-      where: { id },
+      where: { id, company_id: companyId },
       relations: ['expenseCategory'],
     });
 
@@ -57,19 +49,49 @@ export class ExpensesService {
     return expense;
   }
 
-  async update(id: number, updateExpenseDto: UpdateExpenseDto) {
-    const expense = await this.findOne(id);
+  async create(createExpenseDto: CreateExpenseDto, user: AuthenticatedUser) {
+    const category = await this.findAccessibleCategory(
+      createExpenseDto.expense_category_id,
+      user.company_id,
+    );
+
+    const expense = this.expenseRepository.create({
+      amount: createExpenseDto.amount,
+      date: createExpenseDto.date,
+      note: createExpenseDto.note ?? '',
+      sourse: createExpenseDto.sourse ?? SourseType.manual,
+      created_user_id: user.id,
+      company_id: user.company_id,
+      expenseCategory: category,
+    });
+
+    return this.expenseRepository.save(expense);
+  }
+
+  async findAll(user: AuthenticatedUser) {
+    return this.expenseRepository.find({
+      where: { company_id: user.company_id },
+      relations: ['expenseCategory'],
+      order: { id: 'DESC' },
+    });
+  }
+
+  async findOne(id: number, user: AuthenticatedUser) {
+    return this.findOwnedExpense(id, user.company_id);
+  }
+
+  async update(
+    id: number,
+    updateExpenseDto: UpdateExpenseDto,
+    user: AuthenticatedUser,
+  ) {
+    const expense = await this.findOwnedExpense(id, user.company_id);
 
     if (updateExpenseDto.expense_category_id !== undefined) {
-      const category = await this.expensesCategoryRepository.findOne({
-        where: { id: updateExpenseDto.expense_category_id },
-      });
-
-      if (!category) {
-        throw new NotFoundException('Expense category not found');
-      }
-
-      expense.expenseCategory = category;
+      expense.expenseCategory = await this.findAccessibleCategory(
+        updateExpenseDto.expense_category_id,
+        user.company_id,
+      );
     }
 
     if (updateExpenseDto.amount !== undefined) {
@@ -84,18 +106,12 @@ export class ExpensesService {
     if (updateExpenseDto.sourse !== undefined) {
       expense.sourse = updateExpenseDto.sourse;
     }
-    if (updateExpenseDto.created_user_id !== undefined) {
-      expense.created_user_id = updateExpenseDto.created_user_id ?? 0;
-    }
-    if (updateExpenseDto.company_id !== undefined) {
-      expense.company_id = updateExpenseDto.company_id;
-    }
 
     return this.expenseRepository.save(expense);
   }
 
-  async remove(id: number) {
-    const expense = await this.findOne(id);
+  async remove(id: number, user: AuthenticatedUser) {
+    const expense = await this.findOwnedExpense(id, user.company_id);
     await this.expenseRepository.remove(expense);
 
     return { id };

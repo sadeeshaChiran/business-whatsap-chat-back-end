@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { AuthModule } from './auth/auth.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { IncomeModule } from './income/income.module';
 import { CompanyModule } from './company/company.module';
@@ -20,6 +21,7 @@ import { CompanyModule } from './company/company.module';
       autoLoadEntities: true,
       synchronize: true,
     }),
+    AuthModule,
     ExpensesModule,
     IncomeModule,
     CompanyModule,
