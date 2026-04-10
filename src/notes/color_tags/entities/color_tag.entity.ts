@@ -22,7 +22,7 @@ export class ColorTag {
   @Column({ type: 'varchar', length: 255 })
   meaning: string;
 
-  @ManyToOne(() => Company, (company) => company.color_tags, {
+  @ManyToOne(() => Company, (company) => company.colorTags, {
     nullable: false,
     onDelete: 'RESTRICT',
     onUpdate: 'CASCADE',

@@ -22,4 +22,9 @@ export class CreateNoteDto {
   @IsInt()
   @Min(1)
   company_id: number;
+
+  @ApiProperty({ example: 1, minimum: 1 })
+  @IsInt()
+  @Min(1)
+  created_user_id: number;
 }
