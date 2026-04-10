@@ -66,6 +66,14 @@ export class NotesService {
     });
   }
 
+  async findByCompany(user: AuthenticatedUser) {
+    return this.noteRepository.find({
+      where: { company: { id: user.company_id } },
+      relations: ['color_tag'],
+      order: { id: 'DESC' },
+    });
+  }
+
   async findOne(id: number, user: AuthenticatedUser) {
     return this.findOwnedNote(id, user.company_id);
   }

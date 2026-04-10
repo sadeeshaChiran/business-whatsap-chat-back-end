@@ -53,6 +53,18 @@ export class ColorTagsService {
     });
   }
 
+  async findColorCodesByCompany(user: AuthenticatedUser) {
+    const colorTags = await this.colorTagRepository.find({
+      where: { company: { id: user.company_id } },
+      order: { id: 'DESC' },
+    });
+
+    return {
+      company_id: user.company_id,
+      color_codes: colorTags.map((tag) => tag.color_code),
+    };
+  }
+
   async findOne(id: number, user: AuthenticatedUser) {
     return this.findOwnedColorTag(id, user.company_id);
   }

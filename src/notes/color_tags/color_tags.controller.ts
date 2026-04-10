@@ -36,6 +36,11 @@ export class ColorTagsController {
     return this.colorTagsService.findAll(user);
   }
 
+  @Get('color-codes')
+  findColorCodesByCompany(@CurrentUser() user: AuthenticatedUser) {
+    return this.colorTagsService.findColorCodesByCompany(user);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,

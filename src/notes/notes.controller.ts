@@ -36,6 +36,11 @@ export class NotesController {
     return this.notesService.findAll(user);
   }
 
+  @Get('company')
+  findByCompany(@CurrentUser() user: AuthenticatedUser) {
+    return this.notesService.findByCompany(user);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,
