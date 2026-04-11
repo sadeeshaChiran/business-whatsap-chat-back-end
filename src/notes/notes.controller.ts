@@ -1,39 +1,44 @@
 import {
-  Controller,
-  Get,
-  Post,
   Body,
-  Patch,
-  Param,
+  Controller,
   Delete,
+  Get,
+  Param,
   ParseIntPipe,
+  Patch,
+  Post,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { CompanyService } from './company.service';
-import { CreateCompanyDto } from './dto/create-company.dto';
-import { UpdateCompanyDto } from './dto/update-company.dto';
+import { NotesService } from './notes.service';
+import { CreateNoteDto } from './dto/create-note.dto';
+import { UpdateNoteDto } from './dto/update-note.dto';
 
-@Controller('company')
+@Controller('notes')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
-export class CompanyController {
-  constructor(private readonly companyService: CompanyService) {}
+export class NotesController {
+  constructor(private readonly notesService: NotesService) {}
 
   @Post()
   create(
-    @Body() createCompanyDto: CreateCompanyDto,
+    @Body() createNoteDto: CreateNoteDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.companyService.create(createCompanyDto, user);
+    return this.notesService.create(createNoteDto, user);
   }
 
   @Get()
   findAll(@CurrentUser() user: AuthenticatedUser) {
-    return this.companyService.findCurrent(user);
+    return this.notesService.findAll(user);
+  }
+
+  @Get('company')
+  findByCompany(@CurrentUser() user: AuthenticatedUser) {
+    return this.notesService.findByCompany(user);
   }
 
   @Get(':id')
@@ -41,16 +46,16 @@ export class CompanyController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.companyService.findOne(id, user);
+    return this.notesService.findOne(id, user);
   }
 
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() updateCompanyDto: UpdateCompanyDto,
+    @Body() updateNoteDto: UpdateNoteDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.companyService.update(id, updateCompanyDto, user);
+    return this.notesService.update(id, updateNoteDto, user);
   }
 
   @Delete(':id')
@@ -58,6 +63,6 @@ export class CompanyController {
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.companyService.remove(id, user);
+    return this.notesService.remove(id, user);
   }
 }

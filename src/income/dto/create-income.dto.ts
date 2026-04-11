@@ -12,11 +12,6 @@ import {
 import { SourseType } from '../../expenses/entities/expense.entity';
 
 export class CreateIncomeDto {
-  @ApiProperty({ example: 1, minimum: 1 })
-  @IsInt()
-  @Min(1)
-  company_id: number;
-
   @ApiProperty({ example: 15000, minimum: 1 })
   @IsInt()
   @Min(1)
@@ -41,12 +36,6 @@ export class CreateIncomeDto {
   @IsOptional()
   @IsEnum(SourseType)
   sourse: SourseType;
-
-  @ApiPropertyOptional({ example: 1, minimum: 0, nullable: true })
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  created_user_id: number | null;
 
   @ApiProperty({ example: 1, minimum: 1 })
   @IsInt()

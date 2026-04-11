@@ -19,6 +19,16 @@ async function bootstrap() {
     .setTitle('Business Health Scanner API')
     .setDescription('API documentation for Business Health Scanner backend')
     .setVersion('1.0')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Enter JWT token',
+      },
+      'bearer',
+    )
+    .addSecurityRequirements('bearer')
     .build();
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup(`${globalPrefix}/swagger`, app, swaggerDocument);

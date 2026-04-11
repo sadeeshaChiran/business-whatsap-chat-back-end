@@ -1,23 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsBoolean,
-  IsInt,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateIncomeCatergoryDto {
   @ApiProperty({ example: 'Sales', maxLength: 100 })
   @IsString()
   @MaxLength(100)
   name: string;
-
-  @ApiProperty({ example: 1, minimum: 1 })
-  @IsInt()
-  @Min(1)
-  company_id: number;
 
   @ApiPropertyOptional({ example: false })
   @IsOptional()

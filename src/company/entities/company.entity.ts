@@ -10,6 +10,9 @@ import { Industry } from '../industry/entities/industry.entity';
 
 import { IncomeCatergory } from '../../income/income_catergory/entities/income_catergory.entity';
 import { Income } from '../../income/entities/income.entity';
+import { User } from '../../users/entities/user.entity';
+import { ColorTag } from '../../notes/color_tags/entities/color_tag.entity';
+import { Note } from '../../notes/entities/note.entity';
 
 @Entity()
 export class Company {
@@ -19,17 +22,20 @@ export class Company {
   @Column({ type: 'varchar', length: 255 })
   name: string;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', default: '' })
   plan: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   email: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   phone: string;
 
-  @Column({ type: 'varchar', length: 255 })
+  @Column({ type: 'varchar', length: 255, default: '' })
   address: string;
+
+  @Column({ type: 'int', nullable: true })
+  admin_user_id: number | null;
 
   @Column({ type: 'boolean', default: true })
   is_email_nofications: boolean;
@@ -53,4 +59,13 @@ export class Company {
 
   @OneToMany(() => Income, (income) => income.company)
   incomes: Income[];
+
+  @OneToMany(() => User, (user) => user.company)
+  users: User[];
+
+  @OneToMany(() => ColorTag, (colorTag) => colorTag.company)
+  colorTags: ColorTag[];
+
+  @OneToMany(() => Note, (note) => note.company)
+  notes: Note[];
 }

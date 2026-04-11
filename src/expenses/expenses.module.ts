@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from '../auth/auth.module';
 import { ExpensesService } from './expenses.service';
 import { ExpensesController } from './expenses.controller';
 import { ExpensesCatergoryModule } from './expenses_catergory/expenses_catergory.module';
@@ -11,6 +12,7 @@ import { ExpensesCatergory } from './expenses_catergory/entities/expenses_caterg
   providers: [ExpensesService],
   imports: [
     TypeOrmModule.forFeature([Expense, ExpensesCatergory]),
+    AuthModule,
     ExpensesCatergoryModule,
   ],
 })

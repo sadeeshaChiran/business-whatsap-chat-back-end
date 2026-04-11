@@ -4,9 +4,12 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { AuthModule } from './auth/auth.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { IncomeModule } from './income/income.module';
 import { CompanyModule } from './company/company.module';
+import { NotesModule } from './notes/notes.module';
+import { ColorTagsModule } from './notes/color_tags/color_tags.module';
 
 @Module({
   imports: [
@@ -20,9 +23,12 @@ import { CompanyModule } from './company/company.module';
       autoLoadEntities: true,
       synchronize: true,
     }),
+    AuthModule,
     ExpensesModule,
     IncomeModule,
     CompanyModule,
+    NotesModule,
+    ColorTagsModule,
   ],
   controllers: [AppController],
   providers: [
