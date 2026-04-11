@@ -11,7 +11,7 @@ import { Industry } from '../industry/entities/industry.entity';
 import { IncomeCatergory } from '../../income/income_catergory/entities/income_catergory.entity';
 import { Income } from '../../income/entities/income.entity';
 import { User } from '../../users/entities/user.entity';
-import { ColorTag } from '../../notes/color_tags/entities/color_tag.entity';
+import { NoteColorTags } from '../../notes/color_tags/entities/color_tag.entity';
 import { Note } from '../../notes/entities/note.entity';
 
 @Entity()
@@ -63,8 +63,8 @@ export class Company {
   @OneToMany(() => User, (user) => user.company)
   users: User[];
 
-  @OneToMany(() => ColorTag, (colorTag) => colorTag.company)
-  colorTags: ColorTag[];
+  @OneToMany(() => NoteColorTags, (colorTag) => colorTag.company)
+  colorTags: NoteColorTags[];
 
   @OneToMany(() => Note, (note) => note.company)
   notes: Note[];

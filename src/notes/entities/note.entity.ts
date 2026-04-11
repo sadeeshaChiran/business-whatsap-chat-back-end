@@ -8,7 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Company } from '../../company/entities/company.entity';
-import { ColorTag } from '../color_tags/entities/color_tag.entity';
+import { NoteColorTags } from '../color_tags/entities/color_tag.entity';
 
 @Entity()
 export class Note {
@@ -24,13 +24,13 @@ export class Note {
   @Column()
   created_user_id: number;
 
-  @ManyToOne(() => ColorTag, (colorTag) => colorTag.notes, {
+  @ManyToOne(() => NoteColorTags, (colorTag) => colorTag.notes, {
     nullable: false,
     onDelete: 'RESTRICT',
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'color_tag_id' })
-  color_tag: ColorTag;
+  color_tag: NoteColorTags;
 
   @ManyToOne(() => Company, (company) => company.notes, {
     nullable: false,

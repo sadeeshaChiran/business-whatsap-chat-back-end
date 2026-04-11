@@ -18,8 +18,8 @@ export class ExpensesCatergory {
   @Column({ type: 'varchar', length: 100 })
   name!: string;
 
-  @Column()
-  company_id!: number;
+  @Column({ type: 'int', nullable: true })
+  company_id!: number | null;
 
   @Column({ type: 'boolean', default: false })
   is_common!: boolean;

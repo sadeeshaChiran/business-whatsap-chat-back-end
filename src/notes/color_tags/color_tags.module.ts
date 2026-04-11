@@ -1,13 +1,13 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../../auth/auth.module';
-import { ColorTagsService } from './color_tags.service';
-import { ColorTagsController } from './color_tags.controller';
-import { ColorTag } from './entities/color_tag.entity';
+import { NoteColorTagsService } from './color_tags.service';
+import { NoteColorTagsController } from './color_tags.controller';
+import { NoteColorTags } from './entities/color_tag.entity';
 
 @Module({
-  controllers: [ColorTagsController],
-  providers: [ColorTagsService],
-  imports: [TypeOrmModule.forFeature([ColorTag]), AuthModule],
+  controllers: [NoteColorTagsController],
+  providers: [NoteColorTagsService],
+  imports: [TypeOrmModule.forFeature([NoteColorTags]), AuthModule],
 })
-export class ColorTagsModule {}
+export class NoteColorTagsModule {}
