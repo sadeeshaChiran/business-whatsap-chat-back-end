@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { ColorTag } from './color_tags/entities/color_tag.entity';
+import { NoteColorTags } from './color_tags/entities/color_tag.entity';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { UpdateNoteDto } from './dto/update-note.dto';
 import { Note } from './entities/note.entity';
@@ -12,8 +12,8 @@ export class NotesService {
   constructor(
     @InjectRepository(Note)
     private readonly noteRepository: Repository<Note>,
-    @InjectRepository(ColorTag)
-    private readonly colorTagRepository: Repository<ColorTag>,
+    @InjectRepository(NoteColorTags)
+    private readonly colorTagRepository: Repository<NoteColorTags>,
   ) {}
 
   private async findOwnedNote(id: number, companyId: number) {
@@ -31,7 +31,10 @@ export class NotesService {
 
   private async findOwnedColorTag(id: number, companyId: number) {
     const colorTag = await this.colorTagRepository.findOne({
-      where: { id, company: { id: companyId } },
+      where: [
+        { id, company: { id: companyId } },
+        { id, is_common: true },
+      ],
     });
 
     if (!colorTag) {

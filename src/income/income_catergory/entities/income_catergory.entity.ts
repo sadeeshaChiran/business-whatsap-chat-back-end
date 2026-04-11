@@ -21,8 +21,8 @@ export class IncomeCatergory {
   @Column({ type: 'varchar', length: 100 })
   name: string;
 
-  @Column()
-  company_id: number;
+  @Column({ type: 'int', nullable: true })
+  company_id: number | null;
 
   @Column({ type: 'boolean', default: false })
   is_common: boolean;
@@ -40,10 +40,10 @@ export class IncomeCatergory {
   updated_at: Date;
 
   @ManyToOne(() => Company, (company) => company.incomeCategories, {
-    nullable: false,
+    nullable: true,
     onDelete: 'RESTRICT',
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'company_id' })
-  company: Company;
+  company: Company | null;
 }

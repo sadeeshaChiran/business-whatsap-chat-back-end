@@ -13,22 +13,22 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
-import { ColorTagsService } from './color_tags.service';
-import { CreateColorTagDto } from './dto/create-color_tag.dto';
-import { UpdateColorTagDto } from './dto/update-color_tag.dto';
+import { NoteColorTagsService } from './color_tags.service';
+import { CreateNoteColorTagsDto } from './dto/create-color_tag.dto';
+import { UpdateNoteColorTagsDto } from './dto/update-color_tag.dto';
 
 @Controller('color-tags')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
-export class ColorTagsController {
-  constructor(private readonly colorTagsService: ColorTagsService) {}
+export class NoteColorTagsController {
+  constructor(private readonly colorTagsService: NoteColorTagsService) {}
 
   @Post()
   create(
-    @Body() createColorTagDto: CreateColorTagDto,
+    @Body() createNoteColorTagsDto: CreateNoteColorTagsDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.colorTagsService.create(createColorTagDto, user);
+    return this.colorTagsService.create(createNoteColorTagsDto, user);
   }
 
   @Get()
@@ -52,10 +52,10 @@ export class ColorTagsController {
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() updateColorTagDto: UpdateColorTagDto,
+    @Body() updateNoteColorTagsDto: UpdateNoteColorTagsDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.colorTagsService.update(id, updateColorTagDto, user);
+    return this.colorTagsService.update(id, updateNoteColorTagsDto, user);
   }
 
   @Delete(':id')

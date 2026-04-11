@@ -12,7 +12,7 @@ import { Company } from '../../../company/entities/company.entity';
 import { Note } from '../../entities/note.entity';
 
 @Entity()
-export class ColorTag {
+export class NoteColorTags {
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -22,13 +22,16 @@ export class ColorTag {
   @Column({ type: 'varchar', length: 255 })
   meaning: string;
 
+  @Column({ type: 'boolean', default: false })
+  is_common: boolean;
+
   @ManyToOne(() => Company, (company) => company.colorTags, {
-    nullable: false,
+    nullable: true,
     onDelete: 'RESTRICT',
     onUpdate: 'CASCADE',
   })
   @JoinColumn({ name: 'company_id' })
-  company: Company;
+  company: Company | null;
 
   @OneToMany(() => Note, (note) => note.color_tag)
   notes: Note[];

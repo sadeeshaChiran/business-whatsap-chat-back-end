@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsInt, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
-export class CreateColorTagDto {
+export class CreateNoteColorTagsDto {
 	@ApiProperty({ example: '#FFD966', maxLength: 255 })
 	@IsString()
 	@MaxLength(255)
@@ -12,8 +12,14 @@ export class CreateColorTagDto {
 	@MaxLength(255)
 	meaning: string;
 
-	@ApiProperty({ example: 1, minimum: 1 })
+	@ApiProperty({ example: 1, minimum: 1, required: false })
+	@IsOptional()
 	@IsInt()
 	@Min(1)
-	company_id: number;
+	company_id?: number;
+
+	@ApiProperty({ example: false, required: false })
+	@IsOptional()
+	@IsBoolean()
+	is_common?: boolean;
 }

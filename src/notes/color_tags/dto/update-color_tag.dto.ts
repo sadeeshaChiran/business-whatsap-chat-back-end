@@ -1,4 +1,4 @@
 import { PartialType } from '@nestjs/swagger';
-import { CreateColorTagDto } from './create-color_tag.dto';
+import { CreateNoteColorTagsDto } from './create-color_tag.dto';
 
-export class UpdateColorTagDto extends PartialType(CreateColorTagDto) {}
+export class UpdateNoteColorTagsDto extends PartialType(CreateNoteColorTagsDto) {}

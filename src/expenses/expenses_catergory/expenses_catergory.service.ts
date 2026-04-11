@@ -67,7 +67,7 @@ export class ExpensesCatergoryService {
 
     const category = this.expensesCategoryRepository.create({
       ...createExpensesCatergoryDto,
-      company_id: user.company_id,
+      company_id: createExpensesCatergoryDto.is_common ? null : user.company_id,
       name: normalizedName,
       is_common: createExpensesCatergoryDto.is_common ?? false,
       is_active: createExpensesCatergoryDto.is_active ?? true,
@@ -97,7 +97,7 @@ export class ExpensesCatergoryService {
 
   private async findOwnedOne(id: number, companyId: number) {
     const category = await this.expensesCategoryRepository.findOne({
-      where: { id, company_id: companyId },
+      where: [{ id, company_id: companyId }, { id, is_common: true }],
     });
 
     if (!category) {
@@ -129,7 +129,7 @@ export class ExpensesCatergoryService {
 
     this.expensesCategoryRepository.merge(category, {
       ...updateExpensesCatergoryDto,
-      company_id: user.company_id,
+      company_id: updateExpensesCatergoryDto.is_common ? null : (category.company_id ?? user.company_id),
       ...(normalizedName !== undefined ? { name: normalizedName } : {}),
     });
     return this.expensesCategoryRepository.save(category);
