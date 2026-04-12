@@ -14,6 +14,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { NotesService } from './notes.service';
+import { CreateManyNotesDto } from './dto/create-many-notes.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { UpdateNoteDto } from './dto/update-note.dto';
 
@@ -29,6 +30,14 @@ export class NotesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.notesService.create(createNoteDto, user);
+  }
+
+  @Post('bulk')
+  createMany(
+    @Body() createManyNotesDto: CreateManyNotesDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.notesService.createMany(createManyNotesDto.items, user);
   }
 
   @Get()

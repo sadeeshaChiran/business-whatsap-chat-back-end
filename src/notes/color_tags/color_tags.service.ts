@@ -55,6 +55,28 @@ export class NoteColorTagsService {
     return this.noteColorTagsRepository.save(noteColorTags);
   }
 
+  async createMany(
+    createNoteColorTagsDtos: CreateNoteColorTagsDto[],
+    user: AuthenticatedUser,
+  ) {
+    const noteColorTags = createNoteColorTagsDtos.map((colorTag) => {
+      if (!colorTag.is_common && colorTag.company_id !== user.company_id) {
+        throw new ForbiddenException(
+          'You can only create color tags for your company',
+        );
+      }
+
+      return this.noteColorTagsRepository.create({
+        color_code: colorTag.color_code.trim(),
+        meaning: colorTag.meaning.trim(),
+        is_common: colorTag.is_common ?? false,
+        company: colorTag.is_common ? null : { id: colorTag.company_id },
+      });
+    });
+
+    return this.noteColorTagsRepository.save(noteColorTags);
+  }
+
   async findAll(user: AuthenticatedUser) {
     return this.noteColorTagsRepository.find({
       where: [{ company: { id: user.company_id } }, { is_common: true }],

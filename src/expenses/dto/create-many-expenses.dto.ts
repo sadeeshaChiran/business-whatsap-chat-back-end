@@ -9,5 +9,5 @@ export class CreateManyExpensesDto {
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => CreateExpenseDto)
-  items: CreateExpenseDto[];
+  items!: CreateExpenseDto[];
 }

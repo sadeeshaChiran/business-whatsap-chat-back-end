@@ -14,6 +14,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
 import { NoteColorTagsService } from './color_tags.service';
+import { CreateManyNoteColorTagsDto } from './dto/create-many-color_tags.dto';
 import { CreateNoteColorTagsDto } from './dto/create-color_tag.dto';
 import { UpdateNoteColorTagsDto } from './dto/update-color_tag.dto';
 
@@ -29,6 +30,14 @@ export class NoteColorTagsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.colorTagsService.create(createNoteColorTagsDto, user);
+  }
+
+  @Post('bulk')
+  createMany(
+    @Body() createManyNoteColorTagsDto: CreateManyNoteColorTagsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.colorTagsService.createMany(createManyNoteColorTagsDto.items, user);
   }
 
   @Get()
