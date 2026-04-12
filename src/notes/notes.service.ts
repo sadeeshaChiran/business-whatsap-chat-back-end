@@ -61,6 +61,26 @@ export class NotesService {
     return this.noteRepository.save(note);
   }
 
+  async createMany(createNoteDtos: CreateNoteDto[], user: AuthenticatedUser) {
+    const colorTags = await Promise.all(
+      createNoteDtos.map((note) =>
+        this.findOwnedColorTag(note.color_tag_id, user.company_id),
+      ),
+    );
+
+    const notes = createNoteDtos.map((note, index) =>
+      this.noteRepository.create({
+        title: note.title.trim(),
+        content: note.content.trim(),
+        created_user_id: user.id,
+        company: { id: user.company_id },
+        color_tag: colorTags[index],
+      }),
+    );
+
+    return this.noteRepository.save(notes);
+  }
+
   async findAll(user: AuthenticatedUser) {
     return this.noteRepository.find({
       where: { company: { id: user.company_id } },
@@ -81,7 +101,11 @@ export class NotesService {
     return this.findOwnedNote(id, user.company_id);
   }
 
-  async update(id: number, updateNoteDto: UpdateNoteDto, user: AuthenticatedUser) {
+  async update(
+    id: number,
+    updateNoteDto: UpdateNoteDto,
+    user: AuthenticatedUser,
+  ) {
     const note = await this.findOwnedNote(id, user.company_id);
 
     if (updateNoteDto.color_tag_id !== undefined) {

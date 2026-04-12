@@ -13,6 +13,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { ExpensesService } from './expenses.service';
+import { CreateManyExpensesDto } from './dto/create-many-expenses.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
 
@@ -28,6 +29,14 @@ export class ExpensesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.expensesService.create(createExpenseDto, user);
+  }
+
+  @Post('bulk')
+  createMany(
+    @Body() createManyExpensesDto: CreateManyExpensesDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.expensesService.createMany(createManyExpensesDto.items, user);
   }
 
   @Get()

@@ -68,6 +68,31 @@ export class ExpensesService {
     return this.expenseRepository.save(expense);
   }
 
+  async createMany(
+    createExpenseDtos: CreateExpenseDto[],
+    user: AuthenticatedUser,
+  ) {
+    const categories = await Promise.all(
+      createExpenseDtos.map((expense) =>
+        this.findAccessibleCategory(expense.expense_category_id, user.company_id),
+      ),
+    );
+
+    const expenses = createExpenseDtos.map((expense, index) =>
+      this.expenseRepository.create({
+        amount: expense.amount,
+        date: expense.date,
+        note: expense.note ?? '',
+        sourse: expense.sourse ?? SourseType.manual,
+        created_user_id: user.id,
+        company_id: user.company_id,
+        expenseCategory: categories[index],
+      }),
+    );
+
+    return this.expenseRepository.save(expenses);
+  }
+
   async findAll(user: AuthenticatedUser) {
     return this.expenseRepository.find({
       where: { company_id: user.company_id },
