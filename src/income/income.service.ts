@@ -69,6 +69,28 @@ export class IncomeService {
     return this.incomeRepository.save(income);
   }
 
+  async createMany(createIncomeDtos: CreateIncomeDto[], user: AuthenticatedUser) {
+    const categories = await Promise.all(
+      createIncomeDtos.map((income) =>
+        this.findAccessibleCategory(income.income_category_id, user.company_id),
+      ),
+    );
+
+    const incomes = createIncomeDtos.map((income, index) =>
+      this.incomeRepository.create({
+        amount: income.amount,
+        date: income.date,
+        note: income.note ?? '',
+        sourse: income.sourse ?? SourseType.manual,
+        created_user_id: user.id,
+        company_id: user.company_id,
+        incomeCategory: categories[index],
+      }),
+    );
+
+    return this.incomeRepository.save(incomes);
+  }
+
   async findAll(user: AuthenticatedUser) {
     return this.incomeRepository.find({
       where: { company_id: user.company_id },

@@ -13,6 +13,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { IncomeService } from './income.service';
+import { CreateManyIncomeDto } from './dto/create-many-income.dto';
 import { CreateIncomeDto } from './dto/create-income.dto';
 import { UpdateIncomeDto } from './dto/update-income.dto';
 
@@ -28,6 +29,14 @@ export class IncomeController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.incomeService.create(createIncomeDto, user);
+  }
+
+  @Post('bulk')
+  createMany(
+    @Body() createManyIncomeDto: CreateManyIncomeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.incomeService.createMany(createManyIncomeDto.items, user);
   }
 
   @Get()
