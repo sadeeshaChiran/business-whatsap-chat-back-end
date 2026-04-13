@@ -37,7 +37,10 @@ export class NoteColorTagsController {
     @Body() createManyNoteColorTagsDto: CreateManyNoteColorTagsDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.colorTagsService.createMany(createManyNoteColorTagsDto.items, user);
+    return this.colorTagsService.createMany(
+      createManyNoteColorTagsDto.items,
+      user,
+    );
   }
 
   @Get()

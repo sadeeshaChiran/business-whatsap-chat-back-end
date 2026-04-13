@@ -22,6 +22,9 @@ export class NoteColorTags {
   @Column({ type: 'varchar', length: 255 })
   meaning: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  name: string | null;
+
   @Column({ type: 'boolean', default: false })
   is_common: boolean;
 

@@ -46,6 +46,7 @@ export class NoteColorTagsService {
     const noteColorTags = this.noteColorTagsRepository.create({
       color_code: createNoteColorTagsDto.color_code.trim(),
       meaning: createNoteColorTagsDto.meaning.trim(),
+      name: createNoteColorTagsDto.name?.trim() || null,
       is_common: createNoteColorTagsDto.is_common ?? false,
       company: createNoteColorTagsDto.is_common
         ? null
@@ -69,6 +70,7 @@ export class NoteColorTagsService {
       return this.noteColorTagsRepository.create({
         color_code: colorTag.color_code.trim(),
         meaning: colorTag.meaning.trim(),
+        name: colorTag.name?.trim() || null,
         is_common: colorTag.is_common ?? false,
         company: colorTag.is_common ? null : { id: colorTag.company_id },
       });
@@ -113,6 +115,10 @@ export class NoteColorTagsService {
 
     if (updateNoteColorTagsDto.meaning !== undefined) {
       noteColorTags.meaning = updateNoteColorTagsDto.meaning.trim();
+    }
+
+    if (updateNoteColorTagsDto.name !== undefined) {
+      noteColorTags.name = updateNoteColorTagsDto.name.trim() || null;
     }
     
     if (updateNoteColorTagsDto.is_common !== undefined) {
