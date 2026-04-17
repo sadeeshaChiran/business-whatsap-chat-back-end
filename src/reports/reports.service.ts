@@ -75,6 +75,7 @@ export class ReportsService {
   async buildBusinessSummary(user: AuthenticatedUser, period: ReportPeriod) {
     const report = await this.buildReport(user, period);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
+    const fallback = this.buildFallbackSummary(report);
 
     try {
       const response = await fetch(`${botBaseUrl}/bot/report-summary`, {
@@ -89,48 +90,27 @@ export class ReportsService {
         }),
       });
 
-      const payload = (await response.json()) as { reply?: string; error?: string };
+      const payload = (await response.json()) as {
+        reply?: string;
+        error?: string;
+      };
 
       if (!response.ok) {
-        return {
-          summary:
-            'Business summary is unavailable right now. The live report data is still available.',
-        };
+        return fallback;
       }
 
       return {
-        summary:
-          payload.reply ??
-          'Business summary is unavailable right now. The live report data is still available.',
+        summary: payload.reply ?? fallback.summary,
       };
     } catch {
-      return {
-        summary:
-          'Business summary is unavailable right now. The live report data is still available.',
-      };
+      return fallback;
     }
   }
 
   async buildBusinessAdvice(user: AuthenticatedUser, period: ReportPeriod) {
     const report = await this.buildReport(user, period);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
-    const fallback: ReportAdvicePayload = {
-      period,
-      generated_for: report.generatedFor,
-      insights: [
-        `Report generated for ${report.generatedFor}.`,
-        `Net ${report.summary.netProfit >= 0 ? 'profit' : 'loss'} is ${Math.abs(report.summary.netProfit).toFixed(2)}.`,
-        `Top expense category: ${report.topExpenseCategory}.`,
-      ],
-      advice: [
-        'Prioritize high-margin products/services to improve future income.',
-        'Track and reduce non-essential recurring expenses to protect profit.',
-      ],
-      predictions: [
-        'If income momentum is sustained, next period revenue is likely to improve.',
-        'Without expense control, margin can tighten in the next period.',
-      ],
-    };
+    const fallback = this.buildFallbackAdvice(report, period);
 
     try {
       const response = await fetch(`${botBaseUrl}/bot/report-advice`, {
@@ -145,9 +125,10 @@ export class ReportsService {
         }),
       });
 
-      const payload = (await response.json()) as Partial<ReportAdvicePayload> & {
-        error?: string;
-      };
+      const payload =
+        (await response.json()) as Partial<ReportAdvicePayload> & {
+          error?: string;
+        };
 
       if (!response.ok) {
         return fallback;
@@ -156,7 +137,9 @@ export class ReportsService {
       return {
         period,
         generated_for: payload.generated_for ?? report.generatedFor,
-        insights: payload.insights?.length ? payload.insights : fallback.insights,
+        insights: payload.insights?.length
+          ? payload.insights
+          : fallback.insights,
         advice: payload.advice?.length ? payload.advice : fallback.advice,
         predictions: payload.predictions?.length
           ? payload.predictions
@@ -178,10 +161,10 @@ export class ReportsService {
     expenses: Expense[];
     notes: Note[];
   }) {
-    const latestDate = this.findLatestDate(incomes, expenses);
-    const currentRange = this.createRange(latestDate, period);
+    const anchorDate = this.resolveAnchorDate(incomes, expenses, period);
+    const currentRange = this.createRange(anchorDate, period);
     const previousRange = this.createRange(
-      period === 'weekly' ? subWeeks(latestDate, 1) : subMonths(latestDate, 1),
+      period === 'weekly' ? subWeeks(anchorDate, 1) : subMonths(anchorDate, 1),
       period,
     );
 
@@ -244,8 +227,17 @@ export class ReportsService {
       .sort((left, right) => right[1] - left[1])
       .map(([name, value], index) => ({
         name,
-        value: categoryGrandTotal ? Math.round((value / categoryGrandTotal) * 100) : 0,
-        color: ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4'][index % 6],
+        value: categoryGrandTotal
+          ? Math.round((value / categoryGrandTotal) * 100)
+          : 0,
+        color: [
+          '#10b981',
+          '#3b82f6',
+          '#8b5cf6',
+          '#f59e0b',
+          '#ef4444',
+          '#06b6d4',
+        ][index % 6],
       }));
 
     const expenseTotals = new Map<string, number>();
@@ -253,6 +245,26 @@ export class ReportsService {
       const name = item.expenseCategory?.name || 'Uncategorized';
       expenseTotals.set(name, (expenseTotals.get(name) ?? 0) + item.amount);
     });
+    const expenseGrandTotal = [...expenseTotals.values()].reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const expenseCategoryData = [...expenseTotals.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([name, value], index) => ({
+        name,
+        value: expenseGrandTotal
+          ? Math.round((value / expenseGrandTotal) * 100)
+          : 0,
+        color: [
+          '#ef4444',
+          '#f97316',
+          '#f59e0b',
+          '#eab308',
+          '#06b6d4',
+          '#8b5cf6',
+        ][index % 6],
+      }));
 
     return {
       period,
@@ -266,7 +278,10 @@ export class ReportsService {
         netProfit,
         incomeChange: this.calculateChange(totalIncome, previousIncome),
         expenseChange: this.calculateChange(totalExpenses, previousExpense),
-        profitChange: this.calculateChange(netProfit, previousIncome - previousExpense),
+        profitChange: this.calculateChange(
+          netProfit,
+          previousIncome - previousExpense,
+        ),
       },
       previousSummary: {
         totalIncome: previousIncome,
@@ -275,12 +290,21 @@ export class ReportsService {
       },
       rows,
       categoryData,
-      topIncomeRow: [...rows].sort((left, right) => right.income - left.income)[0] ?? null,
-      topExpenseRow: [...rows].sort((left, right) => right.expense - left.expense)[0] ?? null,
+      expenseCategoryData,
+      topIncomeRow:
+        [...rows].sort((left, right) => right.income - left.income)[0] ?? null,
+      topExpenseRow:
+        [...rows].sort((left, right) => right.expense - left.expense)[0] ??
+        null,
+      topIncomeCategory:
+        [...categoryTotals.entries()].sort(
+          (left, right) => right[1] - left[1],
+        )[0]?.[0] ?? 'None',
       topExpenseCategory:
-        [...expenseTotals.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ??
-        'None',
-      noteContext: currentNotes
+        [...expenseTotals.entries()].sort(
+          (left, right) => right[1] - left[1],
+        )[0]?.[0] ?? 'None',
+      noteContext: (currentNotes.length ? currentNotes : notes)
         .slice(0, 3)
         .map((note) => `${note.title}: ${note.content}`)
         .join(' | '),
@@ -308,6 +332,40 @@ export class ReportsService {
     return dates.length ? new Date(Math.max(...dates)) : new Date();
   }
 
+  private resolveAnchorDate(
+    incomes: Income[],
+    expenses: Expense[],
+    period: ReportPeriod,
+  ) {
+    const records = [...incomes, ...expenses].map((item) => new Date(item.date));
+    const today = new Date();
+    const hasDataInCurrentWeek = records.some((date) =>
+      isWithinInterval(date, {
+        start: startOfWeek(today, { weekStartsOn: 1 }),
+        end: endOfWeek(today, { weekStartsOn: 1 }),
+      }),
+    );
+    const hasDataInCurrentMonth = records.some((date) =>
+      isWithinInterval(date, {
+        start: startOfMonth(today),
+        end: endOfMonth(today),
+      }),
+    );
+
+    if (
+      (period === 'weekly' && hasDataInCurrentWeek) ||
+      (period === 'monthly' && hasDataInCurrentMonth)
+    ) {
+      return today;
+    }
+
+    const latestNonFuture = records
+      .filter((date) => !Number.isNaN(date.getTime()) && date.getTime() <= today.getTime())
+      .sort((left, right) => right.getTime() - left.getTime())[0];
+
+    return latestNonFuture ?? this.findLatestDate(incomes, expenses);
+  }
+
   private findTopCategory(dayIncomes: Income[], dayExpenses: Expense[]) {
     const totals = new Map<string, number>();
 
@@ -321,7 +379,10 @@ export class ReportsService {
       totals.set(name, (totals.get(name) ?? 0) + item.amount);
     });
 
-    return [...totals.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || 'No activity';
+    return (
+      [...totals.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ||
+      'No activity'
+    );
   }
 
   private calculateChange(current: number, previous: number) {
@@ -330,5 +391,107 @@ export class ReportsService {
     }
 
     return ((current - previous) / previous) * 100;
+  }
+
+  private buildFallbackSummary(
+    report: Awaited<ReturnType<ReportsService['buildReport']>>,
+  ) {
+    const totalIncome = report.summary.totalIncome;
+    const totalExpenses = report.summary.totalExpenses;
+    const netProfit = report.summary.netProfit;
+    const direction = netProfit >= 0 ? 'profit' : 'loss';
+    const positive =
+      totalIncome >= totalExpenses
+        ? `Income is ahead of expenses in ${report.generatedFor}, led by ${report.topIncomeCategory || 'the strongest income category'}.`
+        : `There is still a revenue base in ${report.topIncomeCategory || 'your top income category'} that can be reinforced.`;
+    const watchOut =
+      report.summary.expenseChange !== null && report.summary.expenseChange > 0
+        ? `Expenses are rising, especially around ${report.topExpenseCategory}.`
+        : `Watch the ${report.topExpenseCategory} category to keep margin stable next period.`;
+
+    return {
+      summary: [
+        `SUMMARY: For ${report.generatedFor}, total income is ${totalIncome.toFixed(2)}, total expenses are ${totalExpenses.toFixed(2)}, and net ${direction} is ${Math.abs(netProfit).toFixed(2)}.`,
+        `POSITIVE: ${positive}`,
+        `WATCHOUT: ${watchOut}`,
+      ].join('\n'),
+    };
+  }
+
+  private buildFallbackAdvice(
+    report: Awaited<ReturnType<ReportsService['buildReport']>>,
+    period: ReportPeriod,
+  ): ReportAdvicePayload {
+    const profitDirection = report.summary.netProfit >= 0 ? 'profit' : 'loss';
+    const topIncomeRow = report.topIncomeRow;
+    const topExpenseRow = report.topExpenseRow;
+    const noteSnippet = report.noteContext
+      ? `Recent notes mention: ${report.noteContext}.`
+      : '';
+    const highExpenseRatio =
+      report.summary.totalIncome > 0 &&
+      report.summary.totalExpenses / report.summary.totalIncome >= 0.75;
+    const incomeSoftening =
+      typeof report.summary.incomeChange === 'number' &&
+      report.summary.incomeChange < 0;
+    const expensesRising =
+      typeof report.summary.expenseChange === 'number' &&
+      report.summary.expenseChange > 0;
+
+    const insights = [
+      `${report.generatedFor} closed with a net ${profitDirection} of ${Math.abs(report.summary.netProfit).toFixed(2)} from income ${report.summary.totalIncome.toFixed(2)} and expenses ${report.summary.totalExpenses.toFixed(2)}.`,
+      topIncomeRow
+        ? `The strongest income day was ${topIncomeRow.day} with ${topIncomeRow.income.toFixed(2)}.`
+        : `The strongest income category in this period was ${report.topIncomeCategory}.`,
+      topExpenseRow
+        ? `The heaviest expense day was ${topExpenseRow.day} with ${topExpenseRow.expense.toFixed(2)}, mainly influenced by ${report.topExpenseCategory}.`
+        : `The largest expense pressure came from ${report.topExpenseCategory}.`,
+    ];
+
+    if (noteSnippet) {
+      insights.push(noteSnippet);
+    }
+
+    const advice = [
+      incomeSoftening
+        ? `Strengthen activity around ${report.topIncomeCategory} and focus promotions before the next ${period} closes.`
+        : `Repeat the actions behind ${report.topIncomeCategory}, especially around high-performing days.`,
+      expensesRising
+        ? `Review the ${report.topExpenseCategory} category first and cut non-essential spending before the next ${period}.`
+        : `Keep the current expense controls in place and monitor ${report.topExpenseCategory} for drift.`,
+    ];
+
+    if (noteSnippet) {
+      advice.push(
+        'Use the recent note reminders as part of the next-period action plan so financial follow-ups are not missed.',
+      );
+    } else {
+      advice.push(
+        'Document planned follow-ups and payment reminders so next-period execution stays consistent.',
+      );
+    }
+
+    const predictions = [
+      incomeSoftening
+        ? `If the current income slowdown continues, the next ${period} may close with lower revenue unless ${report.topIncomeCategory} improves.`
+        : `If current income momentum holds, the next ${period} should keep revenue at a similar or better level.`,
+      highExpenseRatio || expensesRising
+        ? `If expense pressure in ${report.topExpenseCategory} is not reduced, net margin is likely to tighten next ${period}.`
+        : `If expense discipline holds, profit margin should remain more stable in the next ${period}.`,
+    ];
+
+    if (noteSnippet) {
+      predictions.push(
+        `If the note-related follow-ups are completed on time, operational risks should stay lower in the next ${period}.`,
+      );
+    }
+
+    return {
+      period,
+      generated_for: report.generatedFor,
+      insights,
+      advice,
+      predictions,
+    };
   }
 }
