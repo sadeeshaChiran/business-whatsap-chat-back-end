@@ -2,11 +2,13 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
@@ -16,6 +18,8 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { NotesService } from './notes.service';
 import { CreateManyNotesDto } from './dto/create-many-notes.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
+import { SelectedNotesQueryDto } from './dto/selected-notes-query.dto';
+import { SelectNotesForAiDto } from './dto/select-notes-for-ai.dto';
 import { UpdateNoteDto } from './dto/update-note.dto';
 
 @Controller('notes')
@@ -48,6 +52,34 @@ export class NotesController {
   @Get('company')
   findByCompany(@CurrentUser() user: AuthenticatedUser) {
     return this.notesService.findByCompany(user);
+  }
+
+  @Post('select-for-ai')
+  selectForAi(
+    @Body() selectNotesForAiDto: SelectNotesForAiDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (selectNotesForAiDto.user_id !== user.id) {
+      throw new ForbiddenException('You can only manage your own selected notes');
+    }
+
+    return this.notesService.selectNotesForAi(
+      selectNotesForAiDto.user_id,
+      selectNotesForAiDto.note_ids,
+      user,
+    );
+  }
+
+  @Get('selected')
+  getSelectedNotes(
+    @Query() query: SelectedNotesQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    if (query.user_id !== user.id) {
+      throw new ForbiddenException('You can only view your own selected notes');
+    }
+
+    return this.notesService.getSelectedNotes(query.user_id, user);
   }
 
   @Get(':id')

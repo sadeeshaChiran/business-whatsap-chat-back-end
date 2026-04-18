@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { NoteColorTags } from './color_tags/entities/color_tag.entity';
 import { CreateNoteDto } from './dto/create-note.dto';
@@ -131,5 +135,73 @@ export class NotesService {
     await this.noteRepository.remove(note);
 
     return { id };
+  }
+
+  async selectNotesForAi(userId: number, noteIds: number[], user: AuthenticatedUser) {
+    const uniqueNoteIds = [...new Set(noteIds)];
+
+    if (uniqueNoteIds.length > 3) {
+      throw new BadRequestException('A maximum of 3 notes can be selected for AI');
+    }
+
+    const ownedNotes = uniqueNoteIds.length
+      ? await this.noteRepository.find({
+          where: {
+            id: In(uniqueNoteIds),
+            company: { id: user.company_id },
+            created_user_id: userId,
+          },
+          select: {
+            id: true,
+          },
+        })
+      : [];
+
+    if (ownedNotes.length !== uniqueNoteIds.length) {
+      throw new BadRequestException('One or more notes do not belong to the user');
+    }
+
+    await this.noteRepository.manager.transaction(async (manager) => {
+      await manager
+        .createQueryBuilder()
+        .update(Note)
+        .set({ is_selected_for_ai: false })
+        .where('company_id = :companyId', { companyId: user.company_id })
+        .andWhere('created_user_id = :userId', { userId })
+        .execute();
+
+      if (uniqueNoteIds.length) {
+        await manager
+          .createQueryBuilder()
+          .update(Note)
+          .set({ is_selected_for_ai: true })
+          .where('company_id = :companyId', { companyId: user.company_id })
+          .andWhere('created_user_id = :userId', { userId })
+          .andWhere('id IN (:...noteIds)', { noteIds: uniqueNoteIds })
+          .execute();
+      }
+    });
+
+    return this.getSelectedNotes(userId, user);
+  }
+
+  async getSelectedNotes(userId: number, user: AuthenticatedUser) {
+    return this.noteRepository.find({
+      where: {
+        company: { id: user.company_id },
+        created_user_id: userId,
+        is_selected_for_ai: true,
+      },
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        created_user_id: true,
+        is_selected_for_ai: true,
+        created_at: true,
+        updated_at: true,
+      },
+      order: { updated_at: 'DESC' },
+    });
   }
 }

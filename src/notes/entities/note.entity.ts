@@ -24,6 +24,9 @@ export class Note {
   @Column()
   created_user_id: number;
 
+  @Column({ type: 'boolean', default: false })
+  is_selected_for_ai: boolean;
+
   @ManyToOne(() => NoteColorTags, (colorTag) => colorTag.notes, {
     nullable: false,
     onDelete: 'RESTRICT',
