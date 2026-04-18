@@ -39,6 +39,15 @@ type ReportAdvicePayload = {
   predictions: string[];
 };
 
+type ParsedSelectedNoteEntry = {
+  id: number;
+  type: 'income' | 'expense';
+  amount: number;
+  date: Date;
+  category: string;
+  summaryText: string;
+};
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -51,7 +60,7 @@ export class ReportsService {
   ) {}
 
   async buildReport(user: AuthenticatedUser, period: ReportPeriod) {
-    const [incomes, expenses, notes] = await Promise.all([
+    const [incomes, expenses, selectedNotes] = await Promise.all([
       this.incomeRepository.find({
         where: { company_id: user.company_id },
         relations: ['incomeCategory'],
@@ -63,19 +72,32 @@ export class ReportsService {
         order: { date: 'DESC' },
       }),
       this.noteRepository.find({
-        where: { company: { id: user.company_id } },
+        where: {
+          company: { id: user.company_id },
+          created_user_id: user.id,
+          is_selected_for_ai: true,
+        },
         relations: ['color_tag'],
-        order: { created_at: 'DESC' },
+        order: { updated_at: 'DESC' },
       }),
     ]);
 
-    return this.composeReportPayload({ period, incomes, expenses, notes });
+    return this.composeReportPayload({
+      period,
+      incomes,
+      expenses,
+      notes: selectedNotes,
+    });
   }
 
   async buildBusinessSummary(user: AuthenticatedUser, period: ReportPeriod) {
     const report = await this.buildReport(user, period);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
     const fallback = this.buildFallbackSummary(report);
+
+    if (!report.noteContext?.trim()) {
+      return fallback;
+    }
 
     try {
       const response = await fetch(`${botBaseUrl}/bot/report-summary`, {
@@ -111,6 +133,10 @@ export class ReportsService {
     const report = await this.buildReport(user, period);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
     const fallback = this.buildFallbackAdvice(report, period);
+
+    if (!report.noteContext?.trim()) {
+      return fallback;
+    }
 
     try {
       const response = await fetch(`${botBaseUrl}/bot/report-advice`, {
@@ -161,7 +187,13 @@ export class ReportsService {
     expenses: Expense[];
     notes: Note[];
   }) {
-    const anchorDate = this.resolveAnchorDate(incomes, expenses, period);
+    const parsedNoteEntries = this.parseSelectedNoteEntries(notes);
+    const anchorDate = this.resolveAnchorDate(
+      incomes,
+      expenses,
+      parsedNoteEntries,
+      period,
+    );
     const currentRange = this.createRange(anchorDate, period);
     const previousRange = this.createRange(
       period === 'weekly' ? subWeeks(anchorDate, 1) : subMonths(anchorDate, 1),
@@ -174,10 +206,9 @@ export class ReportsService {
     const currentExpenses = expenses.filter((item) =>
       isWithinInterval(new Date(item.date), currentRange),
     );
-    const currentNotes = notes.filter((item) =>
-      isWithinInterval(new Date(item.created_at), currentRange),
+    const currentNoteEntries = parsedNoteEntries.filter((item) =>
+      isWithinInterval(item.date, currentRange),
     );
-
     const rows = eachDayOfInterval(currentRange).map((date, index) => {
       const key = format(date, 'yyyy-MM-dd');
       const dayIncomes = currentIncomes.filter(
@@ -186,11 +217,26 @@ export class ReportsService {
       const dayExpenses = currentExpenses.filter(
         (item) => format(new Date(item.date), 'yyyy-MM-dd') === key,
       );
-      const income = dayIncomes.reduce((sum, item) => sum + item.amount, 0);
-      const expense = dayExpenses.reduce((sum, item) => sum + item.amount, 0);
+      const dayNoteEntries = currentNoteEntries.filter(
+        (item) => format(item.date, 'yyyy-MM-dd') === key,
+      );
+      const income =
+        dayIncomes.reduce((sum, item) => sum + item.amount, 0) +
+        dayNoteEntries
+          .filter((item) => item.type === 'income')
+          .reduce((sum, item) => sum + item.amount, 0);
+      const expense =
+        dayExpenses.reduce((sum, item) => sum + item.amount, 0) +
+        dayNoteEntries
+          .filter((item) => item.type === 'expense')
+          .reduce((sum, item) => sum + item.amount, 0);
       const profit = income - expense;
       const margin = income > 0 ? (profit / income) * 100 : 0;
-      const category = this.findTopCategory(dayIncomes, dayExpenses);
+      const category = this.findTopCategory(
+        dayIncomes,
+        dayExpenses,
+        dayNoteEntries,
+      );
 
       return {
         id: index + 1,
@@ -210,6 +256,15 @@ export class ReportsService {
     const previousExpense = expenses
       .filter((item) => isWithinInterval(new Date(item.date), previousRange))
       .reduce((sum, item) => sum + item.amount, 0);
+    const previousNoteEntries = parsedNoteEntries.filter((item) =>
+      isWithinInterval(item.date, previousRange),
+    );
+    const previousNoteIncome = previousNoteEntries
+      .filter((item) => item.type === 'income')
+      .reduce((sum, item) => sum + item.amount, 0);
+    const previousNoteExpense = previousNoteEntries
+      .filter((item) => item.type === 'expense')
+      .reduce((sum, item) => sum + item.amount, 0);
     const totalIncome = rows.reduce((sum, row) => sum + row.income, 0);
     const totalExpenses = rows.reduce((sum, row) => sum + row.expense, 0);
     const netProfit = totalIncome - totalExpenses;
@@ -219,6 +274,14 @@ export class ReportsService {
       const name = item.incomeCategory?.name || 'Uncategorized';
       categoryTotals.set(name, (categoryTotals.get(name) ?? 0) + item.amount);
     });
+    currentNoteEntries
+      .filter((item) => item.type === 'income')
+      .forEach((item) => {
+        categoryTotals.set(
+          item.category,
+          (categoryTotals.get(item.category) ?? 0) + item.amount,
+        );
+      });
     const categoryGrandTotal = [...categoryTotals.values()].reduce(
       (sum, value) => sum + value,
       0,
@@ -245,6 +308,14 @@ export class ReportsService {
       const name = item.expenseCategory?.name || 'Uncategorized';
       expenseTotals.set(name, (expenseTotals.get(name) ?? 0) + item.amount);
     });
+    currentNoteEntries
+      .filter((item) => item.type === 'expense')
+      .forEach((item) => {
+        expenseTotals.set(
+          item.category,
+          (expenseTotals.get(item.category) ?? 0) + item.amount,
+        );
+      });
     const expenseGrandTotal = [...expenseTotals.values()].reduce(
       (sum, value) => sum + value,
       0,
@@ -276,17 +347,24 @@ export class ReportsService {
         totalIncome,
         totalExpenses,
         netProfit,
-        incomeChange: this.calculateChange(totalIncome, previousIncome),
-        expenseChange: this.calculateChange(totalExpenses, previousExpense),
+        incomeChange: this.calculateChange(
+          totalIncome,
+          previousIncome + previousNoteIncome,
+        ),
+        expenseChange: this.calculateChange(
+          totalExpenses,
+          previousExpense + previousNoteExpense,
+        ),
         profitChange: this.calculateChange(
           netProfit,
-          previousIncome - previousExpense,
+          previousIncome + previousNoteIncome - previousExpense - previousNoteExpense,
         ),
       },
       previousSummary: {
-        totalIncome: previousIncome,
-        totalExpenses: previousExpense,
-        netProfit: previousIncome - previousExpense,
+        totalIncome: previousIncome + previousNoteIncome,
+        totalExpenses: previousExpense + previousNoteExpense,
+        netProfit:
+          previousIncome + previousNoteIncome - previousExpense - previousNoteExpense,
       },
       rows,
       categoryData,
@@ -304,10 +382,7 @@ export class ReportsService {
         [...expenseTotals.entries()].sort(
           (left, right) => right[1] - left[1],
         )[0]?.[0] ?? 'None',
-      noteContext: (currentNotes.length ? currentNotes : notes)
-        .slice(0, 3)
-        .map((note) => `${note.title}: ${note.content}`)
-        .join(' | '),
+      noteContext: this.buildRelevantNoteContext(notes, parsedNoteEntries),
     };
   }
 
@@ -335,9 +410,14 @@ export class ReportsService {
   private resolveAnchorDate(
     incomes: Income[],
     expenses: Expense[],
+    noteEntries: ParsedSelectedNoteEntry[],
     period: ReportPeriod,
   ) {
-    const records = [...incomes, ...expenses].map((item) => new Date(item.date));
+    const records = [
+      ...incomes.map((item) => new Date(item.date)),
+      ...expenses.map((item) => new Date(item.date)),
+      ...noteEntries.map((item) => item.date),
+    ];
     const today = new Date();
     const hasDataInCurrentWeek = records.some((date) =>
       isWithinInterval(date, {
@@ -366,7 +446,11 @@ export class ReportsService {
     return latestNonFuture ?? this.findLatestDate(incomes, expenses);
   }
 
-  private findTopCategory(dayIncomes: Income[], dayExpenses: Expense[]) {
+  private findTopCategory(
+    dayIncomes: Income[],
+    dayExpenses: Expense[],
+    dayNoteEntries: ParsedSelectedNoteEntry[],
+  ) {
     const totals = new Map<string, number>();
 
     dayIncomes.forEach((item) => {
@@ -377,6 +461,10 @@ export class ReportsService {
     dayExpenses.forEach((item) => {
       const name = item.expenseCategory?.name || 'Expense';
       totals.set(name, (totals.get(name) ?? 0) + item.amount);
+    });
+
+    dayNoteEntries.forEach((item) => {
+      totals.set(item.category, (totals.get(item.category) ?? 0) + item.amount);
     });
 
     return (
@@ -393,6 +481,139 @@ export class ReportsService {
     return ((current - previous) / previous) * 100;
   }
 
+  private buildRelevantNoteContext(
+    notes: Note[],
+    parsedNoteEntries: ParsedSelectedNoteEntry[],
+  ) {
+    const parsedEntryIds = new Set(parsedNoteEntries.map((item) => item.id));
+
+    return notes
+      .filter((note) => parsedEntryIds.has(note.id))
+      .slice(0, 3)
+      .map((note) => {
+        const matchingEntry = parsedNoteEntries.find((item) => item.id === note.id);
+        if (!matchingEntry) {
+          return `${note.title}: ${note.content}`;
+        }
+
+        return `${format(matchingEntry.date, 'MMM d, yyyy')} ${matchingEntry.type} ${matchingEntry.amount.toFixed(2)} from ${matchingEntry.category}`;
+      })
+      .join(' | ');
+  }
+
+  private parseSelectedNoteEntries(notes: Note[]): ParsedSelectedNoteEntry[] {
+    return notes
+      .map((note) => {
+        const combinedText = `${note.title ?? ''} ${note.content ?? ''}`.trim();
+        const normalizedText = combinedText.toLowerCase();
+        const type = this.detectNoteEntryType(normalizedText);
+        const amount = this.extractAmountFromNote(combinedText);
+        const date = this.resolveNoteEntryDate(note);
+
+        if (!type || amount === null || Number.isNaN(date.getTime())) {
+          return null;
+        }
+
+        return {
+          id: note.id,
+          type,
+          amount,
+          date,
+          category: note.title?.trim() || (type === 'income' ? 'Income' : 'Expense'),
+          summaryText: `${note.title}: ${note.content}`,
+        } satisfies ParsedSelectedNoteEntry;
+      })
+      .filter((item): item is ParsedSelectedNoteEntry => Boolean(item));
+  }
+
+  private detectNoteEntryType(value: string): 'income' | 'expense' | null {
+    const incomeKeywords = [
+      'income',
+      'revenue',
+      'sale',
+      'sales',
+      'payment received',
+      'paid by client',
+      'received',
+      'earning',
+      'earnings',
+      'cash in',
+      'profit',
+    ];
+    const expenseKeywords = [
+      'expense',
+      'expenses',
+      'cost',
+      'costs',
+      'bill',
+      'bills',
+      'payment',
+      'paid for',
+      'spent',
+      'spend',
+      'marketing',
+      'debt',
+      'cash out',
+    ];
+
+    const hasIncomeKeyword = incomeKeywords.some((keyword) =>
+      value.includes(keyword),
+    );
+    const hasExpenseKeyword = expenseKeywords.some((keyword) =>
+      value.includes(keyword),
+    );
+
+    if (hasIncomeKeyword && !hasExpenseKeyword) {
+      return 'income';
+    }
+
+    if (hasExpenseKeyword && !hasIncomeKeyword) {
+      return 'expense';
+    }
+
+    if (value.includes('income')) {
+      return 'income';
+    }
+
+    if (value.includes('expense')) {
+      return 'expense';
+    }
+
+    return null;
+  }
+
+  private extractAmountFromNote(value: string): number | null {
+    const matches = value.match(
+      /(?:rs\.?|lkr|\$)?\s*([0-9]+(?:,[0-9]{3})*(?:\.[0-9]{1,2})?)/gi,
+    );
+
+    if (!matches?.length) {
+      return null;
+    }
+
+    const parsedAmounts = matches
+      .map((item) =>
+        Number.parseFloat(item.replace(/[^0-9.,]/g, '').replace(/,/g, '')),
+      )
+      .filter(
+        (item) =>
+          Number.isFinite(item) &&
+          item > 0 &&
+          item < 100000000 &&
+          !(Number.isInteger(item) && item >= 1900 && item <= 2100),
+      );
+
+    if (!parsedAmounts.length) {
+      return null;
+    }
+
+    return parsedAmounts[0];
+  }
+
+  private resolveNoteEntryDate(note: Note) {
+    return new Date(note.updated_at ?? note.created_at);
+  }
+
   private buildFallbackSummary(
     report: Awaited<ReturnType<ReportsService['buildReport']>>,
   ) {
@@ -400,6 +621,8 @@ export class ReportsService {
     const totalExpenses = report.summary.totalExpenses;
     const netProfit = report.summary.netProfit;
     const direction = netProfit >= 0 ? 'profit' : 'loss';
+    const noteContext = report.noteContext?.trim() ?? '';
+    const noteContextLower = noteContext.toLowerCase();
     const positive =
       totalIncome >= totalExpenses
         ? `Income is ahead of expenses in ${report.generatedFor}, led by ${report.topIncomeCategory || 'the strongest income category'}.`
@@ -408,12 +631,33 @@ export class ReportsService {
       report.summary.expenseChange !== null && report.summary.expenseChange > 0
         ? `Expenses are rising, especially around ${report.topExpenseCategory}.`
         : `Watch the ${report.topExpenseCategory} category to keep margin stable next period.`;
+    const positiveWithNotes =
+      noteContext &&
+      ['income', 'sale', 'sales', 'revenue', 'payment', 'cash', 'client'].some(
+        (keyword) => noteContextLower.includes(keyword),
+      )
+        ? `${positive} Selected notes also mention: ${noteContext}.`
+        : positive;
+    const watchOutWithNotes =
+      noteContext &&
+      [
+        'expense',
+        'expenses',
+        'cost',
+        'costs',
+        'bill',
+        'bills',
+        'debt',
+        'marketing',
+      ].some((keyword) => noteContextLower.includes(keyword))
+        ? `${watchOut} Selected notes mention: ${noteContext}.`
+        : watchOut;
 
     return {
       summary: [
         `SUMMARY: For ${report.generatedFor}, total income is ${totalIncome.toFixed(2)}, total expenses are ${totalExpenses.toFixed(2)}, and net ${direction} is ${Math.abs(netProfit).toFixed(2)}.`,
-        `POSITIVE: ${positive}`,
-        `WATCHOUT: ${watchOut}`,
+        `POSITIVE: ${positiveWithNotes}`,
+        `WATCHOUT: ${watchOutWithNotes}`,
       ].join('\n'),
     };
   }
