@@ -78,6 +78,20 @@ type DetailedNoteItem = {
   created_at: string;
 };
 
+type HealthMetric = {
+  label: string;
+  value: string;
+  status: 'healthy' | 'warning' | 'risk';
+  formula: string;
+};
+
+type HealthRisk = {
+  title: string;
+  level: 'low' | 'medium' | 'high';
+  score: number;
+  detail: string;
+};
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -203,6 +217,207 @@ export class ReportsService {
     } catch {
       return fallback;
     }
+  }
+
+  async buildHealthCheck(user: AuthenticatedUser, query: ReportQueryDto) {
+    const report = await this.buildReport(user, query);
+    const totalIncome = report.summary.totalIncome;
+    const totalExpenses = report.summary.totalExpenses;
+    const netProfit = report.summary.netProfit;
+    const noteContext = report.noteContext?.toLowerCase() ?? '';
+    const expenseRatio =
+      totalIncome > 0 ? report.summary.totalExpenses / report.summary.totalIncome : 1;
+    const netMargin =
+      totalIncome > 0 ? report.summary.netProfit / report.summary.totalIncome : 0;
+    const currentRatio =
+      totalExpenses > 0 ? report.summary.totalIncome / report.summary.totalExpenses : null;
+    const quickRatio = currentRatio;
+    const debtToEquity =
+      netProfit > 0 ? report.summary.totalExpenses / report.summary.netProfit : null;
+    const noteRiskHits = [
+      'debt',
+      'late',
+      'overdue',
+      'loss',
+      'cash out',
+      'marketing',
+      'bill',
+      'bills',
+      'expense',
+    ].filter((keyword) => noteContext.includes(keyword)).length;
+
+    const executionRiskScore =
+      (expenseRatio >= 0.85 ? 5 : expenseRatio >= 0.7 ? 3 : 1) + noteRiskHits;
+    const liquidityRiskScore =
+      currentRatio === null ? 1 : currentRatio < 1 ? 5 : currentRatio < 1.25 ? 3 : 1;
+    const profitabilityRiskScore =
+      netMargin <= 0 ? 5 : netMargin < 0.1 ? 3 : 1;
+
+    const overallRiskScore = Math.min(
+      25,
+      executionRiskScore + liquidityRiskScore + profitabilityRiskScore,
+    );
+    const healthScore = Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(100 - overallRiskScore * 3 - Math.max(0, noteRiskHits - 1) * 4),
+      ),
+    );
+
+    const metrics: HealthMetric[] = [
+      {
+        label: 'Net Profit Margin',
+        value: `${(netMargin * 100).toFixed(1)}%`,
+        status: netMargin >= 0.2 ? 'healthy' : netMargin >= 0.1 ? 'warning' : 'risk',
+        formula: 'Net Profit / Total Income',
+      },
+      {
+        label: 'Gross Profit Margin',
+        value: `${(netMargin * 100).toFixed(1)}%`,
+        status: netMargin >= 0.2 ? 'healthy' : netMargin >= 0.1 ? 'warning' : 'risk',
+        formula: '(Income - Expenses) / Income',
+      },
+      {
+        label: 'EBITDA %',
+        value: `${(netMargin * 100).toFixed(1)}%`,
+        status: netMargin >= 0.15 ? 'healthy' : netMargin >= 0.05 ? 'warning' : 'risk',
+        formula: 'Operating Profit Proxy / Income',
+      },
+      {
+        label: 'Current Ratio',
+        value: currentRatio === null ? 'N/A' : currentRatio.toFixed(2),
+        status:
+          currentRatio === null
+            ? 'warning'
+            : currentRatio >= 1.5
+              ? 'healthy'
+              : currentRatio >= 1
+                ? 'warning'
+                : 'risk',
+        formula: 'Income Coverage / Expenses',
+      },
+      {
+        label: 'Quick Ratio',
+        value: quickRatio === null ? 'N/A' : quickRatio.toFixed(2),
+        status:
+          quickRatio === null
+            ? 'warning'
+            : quickRatio >= 1
+              ? 'healthy'
+              : quickRatio >= 0.8
+                ? 'warning'
+                : 'risk',
+        formula: 'Immediate Cashflow Coverage / Expenses',
+      },
+      {
+        label: 'Debt-to-Equity',
+        value: debtToEquity === null ? 'N/A' : debtToEquity.toFixed(2),
+        status:
+          debtToEquity === null
+            ? 'warning'
+            : debtToEquity <= 1
+              ? 'healthy'
+              : debtToEquity <= 2
+                ? 'warning'
+                : 'risk',
+        formula: 'Expense Load / Net Profit',
+      },
+    ];
+
+    const risks: HealthRisk[] = [
+      {
+        title: 'Profitability Risk',
+        level:
+          profitabilityRiskScore >= 5
+            ? 'high'
+            : profitabilityRiskScore >= 3
+              ? 'medium'
+              : 'low',
+        score: profitabilityRiskScore,
+        detail:
+          netMargin <= 0
+            ? 'Profit has been fully diluted by expenses in the selected period.'
+            : netMargin < 0.1
+              ? 'Profit margin is thin and can erode quickly with small cost increases.'
+              : 'Profit margin is stable relative to current expense load.',
+      },
+      {
+        title: 'Liquidity Risk',
+        level:
+          liquidityRiskScore >= 5
+            ? 'high'
+            : liquidityRiskScore >= 3
+              ? 'medium'
+              : 'low',
+        score: liquidityRiskScore,
+        detail:
+          currentRatio !== null && currentRatio < 1
+            ? 'Income coverage is below expense pressure, creating cash fragility.'
+            : currentRatio !== null && currentRatio < 1.25
+              ? 'Short-term coverage is present but tight.'
+              : 'Short-term coverage looks stable based on current income and expense flow.',
+      },
+      {
+        title: 'Execution Risk',
+        level:
+          executionRiskScore >= 6
+            ? 'high'
+            : executionRiskScore >= 3
+              ? 'medium'
+              : 'low',
+        score: executionRiskScore,
+        detail:
+          noteRiskHits > 0
+            ? `Selected notes indicate operational pressure: ${report.noteContext || 'recent note warnings detected'}.`
+            : 'No major operational warning signals were detected in selected notes.',
+      },
+    ];
+
+    const strengths = [
+      netMargin > 0.15
+        ? 'Profit generation is healthy relative to the current expense base.'
+        : 'Income is still covering core expense activity in the current period.',
+      currentRatio !== null && currentRatio >= 1.25
+        ? 'Short-term cashflow coverage is stable.'
+        : 'The business still has active income flow to support near-term operations.',
+      report.topIncomeCategory && report.topIncomeCategory !== 'None'
+        ? `${report.topIncomeCategory} remains the strongest income driver.`
+        : 'Income sources remain active across the selected range.',
+    ];
+
+    const warnings = [
+      expenseRatio >= 0.75
+        ? 'Expense pressure is high relative to income and can compress margins quickly.'
+        : 'Expense growth should still be watched to protect margin.',
+      noteRiskHits > 0
+        ? 'Selected notes contain risk-related wording that suggests follow-up is needed.'
+        : 'Operational notes do not currently show major flagged risk patterns.',
+      report.topExpenseCategory !== 'None'
+        ? `${report.topExpenseCategory} is the key category to monitor for leakage.`
+        : 'Expense distribution should be monitored as volume grows.',
+    ];
+
+    const focusAreas = [
+      'Operational Efficiency',
+      'Customer / Client Engagement',
+      'Management & Strategy',
+      'Compliance & Financial Discipline',
+    ];
+
+    return {
+      generatedFor: report.generatedFor,
+      healthScore,
+      overallRiskScore,
+      status:
+        healthScore >= 75 ? 'Strong' : healthScore >= 50 ? 'Stable with Risk' : 'Fragile',
+      metrics,
+      risks,
+      strengths,
+      warnings,
+      focusAreas,
+      noteContext: report.noteContext,
+    };
   }
 
   async buildExcelExport(user: AuthenticatedUser, query: ReportQueryDto) {
