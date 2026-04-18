@@ -37,6 +37,14 @@ export class ReportsController {
     return this.reportsService.buildBusinessAdvice(user, query);
   }
 
+  @Get('health-check')
+  getHealthCheck(
+    @Query() query: ReportQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.reportsService.buildHealthCheck(user, query);
+  }
+
   @Get('export/pdf')
   async exportPdf(
     @Query() query: ReportQueryDto,
