@@ -1,13 +1,18 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  addDays,
+  differenceInCalendarDays,
   eachDayOfInterval,
+  endOfDay,
   endOfMonth,
   endOfWeek,
   format,
   isWithinInterval,
+  startOfDay,
   startOfMonth,
   startOfWeek,
+  subDays,
   subMonths,
   subWeeks,
 } from 'date-fns';
@@ -17,6 +22,7 @@ import { Expense } from '../expenses/entities/expense.entity';
 import { Income } from '../income/entities/income.entity';
 import { Note } from '../notes/entities/note.entity';
 import type { ReportPeriod } from './dto/report-query.dto';
+import { ReportQueryDto } from './dto/report-query.dto';
 
 type Range = { start: Date; end: Date };
 
@@ -45,7 +51,31 @@ type ParsedSelectedNoteEntry = {
   amount: number;
   date: Date;
   category: string;
-  summaryText: string;
+};
+
+type DetailedIncomeItem = {
+  id: number;
+  amount: number;
+  date: string;
+  note: string;
+  category: string;
+  source: 'table' | 'selected_note';
+};
+
+type DetailedExpenseItem = {
+  id: number;
+  amount: number;
+  date: string;
+  note: string;
+  category: string;
+  source: 'table' | 'selected_note';
+};
+
+type DetailedNoteItem = {
+  id: number;
+  title: string;
+  content: string;
+  created_at: string;
 };
 
 @Injectable()
@@ -59,7 +89,7 @@ export class ReportsService {
     private readonly noteRepository: Repository<Note>,
   ) {}
 
-  async buildReport(user: AuthenticatedUser, period: ReportPeriod) {
+  async buildReport(user: AuthenticatedUser, query: ReportQueryDto) {
     const [incomes, expenses, selectedNotes] = await Promise.all([
       this.incomeRepository.find({
         where: { company_id: user.company_id },
@@ -83,15 +113,15 @@ export class ReportsService {
     ]);
 
     return this.composeReportPayload({
-      period,
+      query,
       incomes,
       expenses,
       notes: selectedNotes,
     });
   }
 
-  async buildBusinessSummary(user: AuthenticatedUser, period: ReportPeriod) {
-    const report = await this.buildReport(user, period);
+  async buildBusinessSummary(user: AuthenticatedUser, query: ReportQueryDto) {
+    const report = await this.buildReport(user, query);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
     const fallback = this.buildFallbackSummary(report);
 
@@ -106,7 +136,7 @@ export class ReportsService {
         body: JSON.stringify({
           company_id: user.company_id,
           user_id: user.id,
-          period,
+          period: report.period,
           generated_for: report.generatedFor,
           report,
         }),
@@ -114,7 +144,6 @@ export class ReportsService {
 
       const payload = (await response.json()) as {
         reply?: string;
-        error?: string;
       };
 
       if (!response.ok) {
@@ -129,10 +158,10 @@ export class ReportsService {
     }
   }
 
-  async buildBusinessAdvice(user: AuthenticatedUser, period: ReportPeriod) {
-    const report = await this.buildReport(user, period);
+  async buildBusinessAdvice(user: AuthenticatedUser, query: ReportQueryDto) {
+    const report = await this.buildReport(user, query);
     const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
-    const fallback = this.buildFallbackAdvice(report, period);
+    const fallback = this.buildFallbackAdvice(report, report.period);
 
     if (!report.noteContext?.trim()) {
       return fallback;
@@ -145,7 +174,7 @@ export class ReportsService {
         body: JSON.stringify({
           company_id: user.company_id,
           user_id: user.id,
-          period,
+          period: report.period,
           generated_for: report.generatedFor,
           report,
         }),
@@ -161,7 +190,7 @@ export class ReportsService {
       }
 
       return {
-        period,
+        period: report.period,
         generated_for: payload.generated_for ?? report.generatedFor,
         insights: payload.insights?.length
           ? payload.insights
@@ -176,29 +205,98 @@ export class ReportsService {
     }
   }
 
+  async buildExcelExport(user: AuthenticatedUser, query: ReportQueryDto) {
+    const report = await this.buildReport(user, query);
+    const header = ['Date', 'Day', 'Category', 'Income', 'Expenses', 'Profit', 'Margin'];
+    const rows = report.rows.map((row) => [
+      row.date,
+      row.day,
+      row.category,
+      row.income.toFixed(2),
+      row.expense.toFixed(2),
+      row.profit.toFixed(2),
+      `${row.margin.toFixed(1)}%`,
+    ]);
+
+    const notes = report.notes.map((note) => [
+      note.created_at,
+      note.title,
+      note.content.replace(/\s+/g, ' ').trim(),
+    ]);
+
+    const sections = [
+      ['Generated For', report.generatedFor],
+      ['Total Income', report.summary.totalIncome.toFixed(2)],
+      ['Total Expenses', report.summary.totalExpenses.toFixed(2)],
+      ['Net Profit', report.summary.netProfit.toFixed(2)],
+      [],
+      header,
+      ...rows,
+      [],
+      ['Selected AI Notes'],
+      ['Created At', 'Title', 'Content'],
+      ...notes,
+    ];
+
+    const content = sections
+      .map((line) => line.map((value) => `${value ?? ''}`).join('\t'))
+      .join('\n');
+
+    return {
+      filename: `report-${this.buildFileSuffix(query)}.xls`,
+      content,
+    };
+  }
+
+  async buildPdfExport(user: AuthenticatedUser, query: ReportQueryDto) {
+    const report = await this.buildReport(user, query);
+    const lines = [
+      `Report`,
+      `Generated For: ${report.generatedFor}`,
+      `Total Income: ${report.summary.totalIncome.toFixed(2)}`,
+      `Total Expenses: ${report.summary.totalExpenses.toFixed(2)}`,
+      `Net Profit: ${report.summary.netProfit.toFixed(2)}`,
+      '',
+      'Rows:',
+      ...report.rows.map(
+        (row) =>
+          `${row.date} | ${row.day} | ${row.category} | Income ${row.income.toFixed(2)} | Expenses ${row.expense.toFixed(2)} | Profit ${row.profit.toFixed(2)}`,
+      ),
+      '',
+      'Selected AI Notes:',
+      ...report.notes.map(
+        (note) =>
+          `${note.created_at} | ${note.title} | ${note.content.replace(/\s+/g, ' ').trim()}`,
+      ),
+    ];
+
+    return {
+      filename: `report-${this.buildFileSuffix(query)}.pdf`,
+      content: this.buildSimplePdf(lines),
+    };
+  }
+
   private composeReportPayload({
-    period,
+    query,
     incomes,
     expenses,
     notes,
   }: {
-    period: ReportPeriod;
+    query: ReportQueryDto;
     incomes: Income[];
     expenses: Expense[];
     notes: Note[];
   }) {
+    const period = query.period ?? 'weekly';
     const parsedNoteEntries = this.parseSelectedNoteEntries(notes);
-    const anchorDate = this.resolveAnchorDate(
+    const currentRange = this.resolveCurrentRange({
+      query,
       incomes,
       expenses,
-      parsedNoteEntries,
+      noteEntries: parsedNoteEntries,
       period,
-    );
-    const currentRange = this.createRange(anchorDate, period);
-    const previousRange = this.createRange(
-      period === 'weekly' ? subWeeks(anchorDate, 1) : subMonths(anchorDate, 1),
-      period,
-    );
+    });
+    const previousRange = this.resolvePreviousRange(currentRange, query, period);
 
     const currentIncomes = incomes.filter((item) =>
       isWithinInterval(new Date(item.date), currentRange),
@@ -209,6 +307,10 @@ export class ReportsService {
     const currentNoteEntries = parsedNoteEntries.filter((item) =>
       isWithinInterval(item.date, currentRange),
     );
+    const currentNotes = notes.filter((note) =>
+      isWithinInterval(new Date(note.created_at), currentRange),
+    );
+
     const rows = eachDayOfInterval(currentRange).map((date, index) => {
       const key = format(date, 'yyyy-MM-dd');
       const dayIncomes = currentIncomes.filter(
@@ -220,6 +322,7 @@ export class ReportsService {
       const dayNoteEntries = currentNoteEntries.filter(
         (item) => format(item.date, 'yyyy-MM-dd') === key,
       );
+
       const income =
         dayIncomes.reduce((sum, item) => sum + item.amount, 0) +
         dayNoteEntries
@@ -232,17 +335,17 @@ export class ReportsService {
           .reduce((sum, item) => sum + item.amount, 0);
       const profit = income - expense;
       const margin = income > 0 ? (profit / income) * 100 : 0;
-      const category = this.findTopCategory(
-        dayIncomes,
-        dayExpenses,
-        dayNoteEntries,
-      );
 
       return {
         id: index + 1,
-        day: period === 'weekly' ? format(date, 'EEE') : format(date, 'MMM d'),
+        day:
+          query.start_date && query.end_date
+            ? format(date, 'MMM d')
+            : period === 'weekly'
+              ? format(date, 'EEE')
+              : format(date, 'MMM d'),
         date: key,
-        category,
+        category: this.findTopCategory(dayIncomes, dayExpenses, dayNoteEntries),
         income,
         expense,
         profit,
@@ -265,84 +368,48 @@ export class ReportsService {
     const previousNoteExpense = previousNoteEntries
       .filter((item) => item.type === 'expense')
       .reduce((sum, item) => sum + item.amount, 0);
+
     const totalIncome = rows.reduce((sum, row) => sum + row.income, 0);
     const totalExpenses = rows.reduce((sum, row) => sum + row.expense, 0);
     const netProfit = totalIncome - totalExpenses;
 
-    const categoryTotals = new Map<string, number>();
+    const incomeCategoryTotals = new Map<string, number>();
     currentIncomes.forEach((item) => {
-      const name = item.incomeCategory?.name || 'Uncategorized';
-      categoryTotals.set(name, (categoryTotals.get(name) ?? 0) + item.amount);
+      const category = item.incomeCategory?.name || 'Uncategorized';
+      incomeCategoryTotals.set(
+        category,
+        (incomeCategoryTotals.get(category) ?? 0) + item.amount,
+      );
     });
     currentNoteEntries
       .filter((item) => item.type === 'income')
       .forEach((item) => {
-        categoryTotals.set(
+        incomeCategoryTotals.set(
           item.category,
-          (categoryTotals.get(item.category) ?? 0) + item.amount,
+          (incomeCategoryTotals.get(item.category) ?? 0) + item.amount,
         );
       });
-    const categoryGrandTotal = [...categoryTotals.values()].reduce(
-      (sum, value) => sum + value,
-      0,
-    );
-    const categoryData = [...categoryTotals.entries()]
-      .sort((left, right) => right[1] - left[1])
-      .map(([name, value], index) => ({
-        name,
-        value: categoryGrandTotal
-          ? Math.round((value / categoryGrandTotal) * 100)
-          : 0,
-        color: [
-          '#10b981',
-          '#3b82f6',
-          '#8b5cf6',
-          '#f59e0b',
-          '#ef4444',
-          '#06b6d4',
-        ][index % 6],
-      }));
 
-    const expenseTotals = new Map<string, number>();
+    const expenseCategoryTotals = new Map<string, number>();
     currentExpenses.forEach((item) => {
-      const name = item.expenseCategory?.name || 'Uncategorized';
-      expenseTotals.set(name, (expenseTotals.get(name) ?? 0) + item.amount);
+      const category = item.expenseCategory?.name || 'Uncategorized';
+      expenseCategoryTotals.set(
+        category,
+        (expenseCategoryTotals.get(category) ?? 0) + item.amount,
+      );
     });
     currentNoteEntries
       .filter((item) => item.type === 'expense')
       .forEach((item) => {
-        expenseTotals.set(
+        expenseCategoryTotals.set(
           item.category,
-          (expenseTotals.get(item.category) ?? 0) + item.amount,
+          (expenseCategoryTotals.get(item.category) ?? 0) + item.amount,
         );
       });
-    const expenseGrandTotal = [...expenseTotals.values()].reduce(
-      (sum, value) => sum + value,
-      0,
-    );
-    const expenseCategoryData = [...expenseTotals.entries()]
-      .sort((left, right) => right[1] - left[1])
-      .map(([name, value], index) => ({
-        name,
-        value: expenseGrandTotal
-          ? Math.round((value / expenseGrandTotal) * 100)
-          : 0,
-        color: [
-          '#ef4444',
-          '#f97316',
-          '#f59e0b',
-          '#eab308',
-          '#06b6d4',
-          '#8b5cf6',
-        ][index % 6],
-      }));
 
     return {
       period,
-      generatedFor:
-        period === 'weekly'
-          ? `${format(currentRange.start, 'MMM d')} - ${format(currentRange.end, 'MMM d, yyyy')}`
-          : format(currentRange.start, 'MMMM yyyy'),
+      generatedFor: this.formatGeneratedFor(currentRange, query, period),
       summary: {
         totalIncome,
         totalExpenses,
@@ -357,54 +424,167 @@ export class ReportsService {
         ),
         profitChange: this.calculateChange(
           netProfit,
-          previousIncome + previousNoteIncome - previousExpense - previousNoteExpense,
+          previousIncome +
+            previousNoteIncome -
+            previousExpense -
+            previousNoteExpense,
         ),
       },
       previousSummary: {
         totalIncome: previousIncome + previousNoteIncome,
         totalExpenses: previousExpense + previousNoteExpense,
         netProfit:
-          previousIncome + previousNoteIncome - previousExpense - previousNoteExpense,
+          previousIncome +
+          previousNoteIncome -
+          previousExpense -
+          previousNoteExpense,
       },
       rows,
-      categoryData,
-      expenseCategoryData,
+      categoryData: this.mapCategorySlices(incomeCategoryTotals, [
+        '#10b981',
+        '#3b82f6',
+        '#8b5cf6',
+        '#f59e0b',
+        '#ef4444',
+        '#06b6d4',
+      ]),
+      expenseCategoryData: this.mapCategorySlices(expenseCategoryTotals, [
+        '#ef4444',
+        '#f97316',
+        '#f59e0b',
+        '#eab308',
+        '#06b6d4',
+        '#8b5cf6',
+      ]),
       topIncomeRow:
         [...rows].sort((left, right) => right.income - left.income)[0] ?? null,
       topExpenseRow:
         [...rows].sort((left, right) => right.expense - left.expense)[0] ??
         null,
       topIncomeCategory:
-        [...categoryTotals.entries()].sort(
+        [...incomeCategoryTotals.entries()].sort(
           (left, right) => right[1] - left[1],
         )[0]?.[0] ?? 'None',
       topExpenseCategory:
-        [...expenseTotals.entries()].sort(
+        [...expenseCategoryTotals.entries()].sort(
           (left, right) => right[1] - left[1],
         )[0]?.[0] ?? 'None',
-      noteContext: this.buildRelevantNoteContext(notes, parsedNoteEntries),
+      noteContext: this.buildRelevantNoteContext(currentNotes, currentNoteEntries),
+      income: [
+        ...currentIncomes.map((item) => ({
+          id: item.id,
+          amount: item.amount,
+          date: format(new Date(item.date), 'yyyy-MM-dd'),
+          note: item.note,
+          category: item.incomeCategory?.name || 'Uncategorized',
+          source: 'table' as const,
+        })),
+        ...currentNoteEntries
+          .filter((item) => item.type === 'income')
+          .map((item) => ({
+            id: item.id,
+            amount: item.amount,
+            date: format(item.date, 'yyyy-MM-dd'),
+            note: `Selected note income from ${item.category}`,
+            category: item.category,
+            source: 'selected_note' as const,
+          })),
+      ] satisfies DetailedIncomeItem[],
+      expenses: [
+        ...currentExpenses.map((item) => ({
+          id: item.id,
+          amount: item.amount,
+          date: format(new Date(item.date), 'yyyy-MM-dd'),
+          note: item.note,
+          category: item.expenseCategory?.name || 'Uncategorized',
+          source: 'table' as const,
+        })),
+        ...currentNoteEntries
+          .filter((item) => item.type === 'expense')
+          .map((item) => ({
+            id: item.id,
+            amount: item.amount,
+            date: format(item.date, 'yyyy-MM-dd'),
+            note: `Selected note expense from ${item.category}`,
+            category: item.category,
+            source: 'selected_note' as const,
+          })),
+      ] satisfies DetailedExpenseItem[],
+      notes: currentNotes.map((note) => ({
+        id: note.id,
+        title: note.title,
+        content: note.content,
+        created_at: format(new Date(note.created_at), 'yyyy-MM-dd'),
+      })) satisfies DetailedNoteItem[],
     };
   }
 
-  private createRange(anchor: Date, period: ReportPeriod): Range {
+  private resolveCurrentRange({
+    query,
+    incomes,
+    expenses,
+    noteEntries,
+    period,
+  }: {
+    query: ReportQueryDto;
+    incomes: Income[];
+    expenses: Expense[];
+    noteEntries: ParsedSelectedNoteEntry[];
+    period: ReportPeriod;
+  }) {
+    if (query.start_date && query.end_date) {
+      return {
+        start: startOfDay(new Date(query.start_date)),
+        end: endOfDay(new Date(query.end_date)),
+      };
+    }
+
+    const anchorDate = this.resolveAnchorDate(
+      incomes,
+      expenses,
+      noteEntries,
+      period,
+    );
+
     return period === 'weekly'
       ? {
-          start: startOfWeek(anchor, { weekStartsOn: 1 }),
-          end: endOfWeek(anchor, { weekStartsOn: 1 }),
+          start: startOfWeek(anchorDate, { weekStartsOn: 1 }),
+          end: endOfWeek(anchorDate, { weekStartsOn: 1 }),
         }
       : {
-          start: startOfMonth(anchor),
-          end: endOfMonth(anchor),
+          start: startOfMonth(anchorDate),
+          end: endOfMonth(anchorDate),
         };
   }
 
-  private findLatestDate(incomes: Income[], expenses: Expense[]) {
-    const dates = [
-      ...incomes.map((item) => new Date(item.date).getTime()),
-      ...expenses.map((item) => new Date(item.date).getTime()),
-    ].filter((value) => !Number.isNaN(value));
+  private resolvePreviousRange(
+    currentRange: Range,
+    query: ReportQueryDto,
+    period: ReportPeriod,
+  ) {
+    if (query.start_date && query.end_date) {
+      const dayCount = differenceInCalendarDays(
+        startOfDay(currentRange.end),
+        startOfDay(currentRange.start),
+      );
+      const previousEnd = endOfDay(subDays(currentRange.start, 1));
+      const previousStart = startOfDay(subDays(currentRange.start, dayCount + 1));
+      return {
+        start: previousStart,
+        end: previousEnd,
+      };
+    }
 
-    return dates.length ? new Date(Math.max(...dates)) : new Date();
+    const anchor = currentRange.start;
+    return period === 'weekly'
+      ? {
+          start: startOfWeek(subWeeks(anchor, 1), { weekStartsOn: 1 }),
+          end: endOfWeek(subWeeks(anchor, 1), { weekStartsOn: 1 }),
+        }
+      : {
+          start: startOfMonth(subMonths(anchor, 1)),
+          end: endOfMonth(subMonths(anchor, 1)),
+        };
   }
 
   private resolveAnchorDate(
@@ -440,10 +620,27 @@ export class ReportsService {
     }
 
     const latestNonFuture = records
-      .filter((date) => !Number.isNaN(date.getTime()) && date.getTime() <= today.getTime())
+      .filter(
+        (date) =>
+          !Number.isNaN(date.getTime()) && date.getTime() <= today.getTime(),
+      )
       .sort((left, right) => right.getTime() - left.getTime())[0];
 
-    return latestNonFuture ?? this.findLatestDate(incomes, expenses);
+    return latestNonFuture ?? today;
+  }
+
+  private formatGeneratedFor(
+    range: Range,
+    query: ReportQueryDto,
+    period: ReportPeriod,
+  ) {
+    if (query.start_date && query.end_date) {
+      return `${format(range.start, 'MMM d, yyyy')} - ${format(range.end, 'MMM d, yyyy')}`;
+    }
+
+    return period === 'weekly'
+      ? `${format(range.start, 'MMM d')} - ${format(range.end, 'MMM d, yyyy')}`
+      : format(range.start, 'MMMM yyyy');
   }
 
   private findTopCategory(
@@ -473,6 +670,18 @@ export class ReportsService {
     );
   }
 
+  private mapCategorySlices(totals: Map<string, number>, colors: string[]) {
+    const grandTotal = [...totals.values()].reduce((sum, value) => sum + value, 0);
+
+    return [...totals.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .map(([name, value], index) => ({
+        name,
+        value: grandTotal ? Math.round((value / grandTotal) * 100) : 0,
+        color: colors[index % colors.length],
+      }));
+  }
+
   private calculateChange(current: number, previous: number) {
     if (previous === 0) {
       return current === 0 ? 0 : null;
@@ -485,30 +694,30 @@ export class ReportsService {
     notes: Note[],
     parsedNoteEntries: ParsedSelectedNoteEntry[],
   ) {
-    const parsedEntryIds = new Set(parsedNoteEntries.map((item) => item.id));
+    const entryMap = new Map(parsedNoteEntries.map((item) => [item.id, item]));
 
     return notes
-      .filter((note) => parsedEntryIds.has(note.id))
+      .filter((note) => entryMap.has(note.id))
       .slice(0, 3)
       .map((note) => {
-        const matchingEntry = parsedNoteEntries.find((item) => item.id === note.id);
-        if (!matchingEntry) {
+        const entry = entryMap.get(note.id);
+        if (!entry) {
           return `${note.title}: ${note.content}`;
         }
 
-        return `${format(matchingEntry.date, 'MMM d, yyyy')} ${matchingEntry.type} ${matchingEntry.amount.toFixed(2)} from ${matchingEntry.category}`;
+        return `${format(entry.date, 'MMM d, yyyy')} ${entry.type} ${entry.amount.toFixed(2)} from ${entry.category}`;
       })
       .join(' | ');
   }
 
-  private parseSelectedNoteEntries(notes: Note[]): ParsedSelectedNoteEntry[] {
+  private parseSelectedNoteEntries(notes: Note[]) {
     return notes
       .map((note) => {
         const combinedText = `${note.title ?? ''} ${note.content ?? ''}`.trim();
         const normalizedText = combinedText.toLowerCase();
         const type = this.detectNoteEntryType(normalizedText);
         const amount = this.extractAmountFromNote(combinedText);
-        const date = this.resolveNoteEntryDate(note);
+        const date = new Date(note.updated_at ?? note.created_at);
 
         if (!type || amount === null || Number.isNaN(date.getTime())) {
           return null;
@@ -520,7 +729,6 @@ export class ReportsService {
           amount,
           date,
           category: note.title?.trim() || (type === 'income' ? 'Income' : 'Expense'),
-          summaryText: `${note.title}: ${note.content}`,
         } satisfies ParsedSelectedNoteEntry;
       })
       .filter((item): item is ParsedSelectedNoteEntry => Boolean(item));
@@ -547,7 +755,6 @@ export class ReportsService {
       'costs',
       'bill',
       'bills',
-      'payment',
       'paid for',
       'spent',
       'spend',
@@ -603,15 +810,7 @@ export class ReportsService {
           !(Number.isInteger(item) && item >= 1900 && item <= 2100),
       );
 
-    if (!parsedAmounts.length) {
-      return null;
-    }
-
-    return parsedAmounts[0];
-  }
-
-  private resolveNoteEntryDate(note: Note) {
-    return new Date(note.updated_at ?? note.created_at);
+    return parsedAmounts.length ? parsedAmounts[0] : null;
   }
 
   private buildFallbackSummary(
@@ -737,5 +936,59 @@ export class ReportsService {
       advice,
       predictions,
     };
+  }
+
+  private buildFileSuffix(query: ReportQueryDto) {
+    if (query.start_date && query.end_date) {
+      return `${query.start_date}_to_${query.end_date}`;
+    }
+
+    return query.period ?? 'weekly';
+  }
+
+  private buildSimplePdf(lines: string[]) {
+    const sanitizedLines = lines.map((line) =>
+      line
+        .replace(/\\/g, '\\\\')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)'),
+    );
+
+    const contentStream = [
+      'BT',
+      '/F1 12 Tf',
+      '50 780 Td',
+      ...sanitizedLines.flatMap((line, index) =>
+        index === 0
+          ? [`(${line}) Tj`]
+          : ['0 -16 Td', `(${line}) Tj`],
+      ),
+      'ET',
+    ].join('\n');
+
+    const objects = [
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
+      '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
+      `5 0 obj << /Length ${Buffer.byteLength(contentStream, 'utf8')} >> stream\n${contentStream}\nendstream endobj`,
+    ];
+
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [0];
+    objects.forEach((object) => {
+      offsets.push(Buffer.byteLength(pdf, 'utf8'));
+      pdf += `${object}\n`;
+    });
+
+    const xrefPosition = Buffer.byteLength(pdf, 'utf8');
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += '0000000000 65535 f \n';
+    offsets.slice(1).forEach((offset) => {
+      pdf += `${offset.toString().padStart(10, '0')} 00000 n \n`;
+    });
+    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPosition}\n%%EOF`;
+
+    return Buffer.from(pdf, 'utf8');
   }
 }
