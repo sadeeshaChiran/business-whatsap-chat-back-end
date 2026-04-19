@@ -10,6 +10,7 @@ import { IncomeModule } from './income/income.module';
 import { CompanyModule } from './company/company.module';
 import { NotesModule } from './notes/notes.module';
 import { NoteColorTagsModule } from './notes/color_tags/color_tags.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 
 @Module({
@@ -30,6 +31,7 @@ import { ReportsModule } from './reports/reports.module';
     CompanyModule,
     NotesModule,
     NoteColorTagsModule,
+    NotificationsModule,
     ReportsModule,
   ],
   controllers: [AppController],
