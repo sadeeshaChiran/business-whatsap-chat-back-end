@@ -221,13 +221,69 @@ export class NotificationsService {
         healthWeekly.healthScore <= healthMonthly.healthScore
           ? healthWeekly
           : healthMonthly;
+      const primaryWarning =
+        weakerHealth.warnings.find((warning) => warning?.trim()) ??
+        'Business risk indicators need immediate review.';
       notifications.push(
         this.createNotification({
           id: 'risk-business-health-check',
           type: 'RISK',
           title: 'Business Risk Alert',
-          message: `Business health score dropped to ${weakerHealth.healthScore}. ${weakerHealth.status} conditions need attention.`,
+          message: `Business health score dropped to ${weakerHealth.healthScore}. ${weakerHealth.status} conditions need attention. ${primaryWarning}`,
           priority: 'HIGH',
+          createdAt: now,
+        }),
+      );
+    }
+
+    const metricHealth =
+      healthWeekly.healthScore <= healthMonthly.healthScore
+        ? healthWeekly
+        : healthMonthly;
+    const currentRatioMetric = metricHealth.metrics.find(
+      (metric) => metric.label === 'Current Ratio',
+    );
+    const netProfitMarginMetric = metricHealth.metrics.find(
+      (metric) => metric.label === 'Net Profit Margin',
+    );
+    const topExpenseWarning = metricHealth.warnings.find((warning) =>
+      warning.toLowerCase().includes('key category to monitor for leakage'),
+    );
+
+    if (currentRatioMetric?.status === 'risk') {
+      notifications.push(
+        this.createNotification({
+          id: 'risk-current-ratio',
+          type: 'RISK',
+          title: 'Liquidity Coverage Alert',
+          message: `Current Ratio is at ${currentRatioMetric.value}. Short-term income coverage is below expense pressure and needs action.`,
+          priority: 'HIGH',
+          createdAt: now,
+        }),
+      );
+    }
+
+    if (netProfitMarginMetric?.status === 'risk') {
+      notifications.push(
+        this.createNotification({
+          id: 'risk-net-profit-margin',
+          type: 'RISK',
+          title: 'Net Margin Risk',
+          message: `Net Profit Margin is at ${netProfitMarginMetric.value}. Profitability is under pressure and costs should be reviewed immediately.`,
+          priority: 'HIGH',
+          createdAt: now,
+        }),
+      );
+    }
+
+    if (topExpenseWarning) {
+      notifications.push(
+        this.createNotification({
+          id: 'warning-expense-category-leakage',
+          type: 'RISK',
+          title: 'Expense Leakage Watch',
+          message: topExpenseWarning,
+          priority: 'MEDIUM',
           createdAt: now,
         }),
       );
