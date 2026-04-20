@@ -92,6 +92,19 @@ type HealthRisk = {
   detail: string;
 };
 
+type BotHealthPayload = {
+  generatedFor?: string;
+  healthScore?: number;
+  overallRiskScore?: number;
+  status?: string;
+  metrics?: HealthMetric[];
+  risks?: HealthRisk[];
+  strengths?: string[];
+  warnings?: string[];
+  focus_areas?: string[];
+  noteContext?: string;
+};
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -221,6 +234,7 @@ export class ReportsService {
 
   async buildHealthCheck(user: AuthenticatedUser, query: ReportQueryDto) {
     const report = await this.buildReport(user, query);
+    const botBaseUrl = process.env.BOT_BASE_URL ?? 'http://localhost:5005';
     const totalIncome = report.summary.totalIncome;
     const totalExpenses = report.summary.totalExpenses;
     const netProfit = report.summary.netProfit;
@@ -405,7 +419,7 @@ export class ReportsService {
       'Compliance & Financial Discipline',
     ];
 
-    return {
+    const healthCheck = {
       generatedFor: report.generatedFor,
       healthScore,
       overallRiskScore,
@@ -418,6 +432,50 @@ export class ReportsService {
       focusAreas,
       noteContext: report.noteContext,
     };
+
+    try {
+      const response = await fetch(`${botBaseUrl}/bot/report-health`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: user.company_id,
+          user_id: user.id,
+          period: report.period,
+          generated_for: report.generatedFor,
+          start_date: query.start_date,
+          end_date: query.end_date,
+          report,
+          health_check: healthCheck,
+        }),
+      });
+
+      const payload = (await response.json()) as BotHealthPayload & {
+        error?: string;
+      };
+
+      if (!response.ok) {
+        return healthCheck;
+      }
+
+      return {
+        ...healthCheck,
+        generatedFor: payload.generatedFor ?? healthCheck.generatedFor,
+        healthScore: typeof payload.healthScore === 'number' ? payload.healthScore : healthCheck.healthScore,
+        overallRiskScore:
+          typeof payload.overallRiskScore === 'number'
+            ? payload.overallRiskScore
+            : healthCheck.overallRiskScore,
+        status: payload.status ?? healthCheck.status,
+        metrics: payload.metrics?.length ? payload.metrics : healthCheck.metrics,
+        risks: payload.risks?.length ? payload.risks : healthCheck.risks,
+        strengths: payload.strengths?.length ? payload.strengths : healthCheck.strengths,
+        warnings: payload.warnings?.length ? payload.warnings : healthCheck.warnings,
+        focusAreas: payload.focus_areas?.length ? payload.focus_areas : healthCheck.focusAreas,
+        noteContext: payload.noteContext ?? healthCheck.noteContext,
+      };
+    } catch {
+      return healthCheck;
+    }
   }
 
   async buildExcelExport(user: AuthenticatedUser, query: ReportQueryDto) {
