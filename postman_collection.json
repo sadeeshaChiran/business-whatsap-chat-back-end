@@ -1,0 +1,361 @@
+{
+  "info": {
+    "_postman_id": "1f2c2d37-e8f9-4fd5-8d0e-c3afc0d2ef11",
+    "name": "Business Health Scanner API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Postman collection for the NestJS `/v1/api` backend, including products and product categories."
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000/v1/api"
+    },
+    {
+      "key": "bearer_token",
+      "value": ""
+    },
+    {
+      "key": "product_id",
+      "value": "1"
+    },
+    {
+      "key": "product_category_id",
+      "value": "1"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{bearer_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Product Categories",
+      "item": [
+        {
+          "name": "Create Product Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Apparel\",\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/product-catergory",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "product-catergory"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Product Categories",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/product-catergory",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "product-catergory"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Product Category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/product-catergory/{{product_category_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "product-catergory",
+                "{{product_category_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Product Category",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Updated Apparel\",\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/product-catergory/{{product_category_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "product-catergory",
+                "{{product_category_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Product Category",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/product-catergory/{{product_category_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "product-catergory",
+                "{{product_category_id}}"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Premium T-Shirt\",\n  \"description\": \"Soft cotton branded t-shirt\",\n  \"price\": 2000,\n  \"category_id\": {{product_category_id}},\n  \"has_variants\": true,\n  \"variants\": [\n    {\n      \"variant_name\": \"Size\",\n      \"variant_value\": \"XL\"\n    },\n    {\n      \"variant_name\": \"Color\",\n      \"variant_value\": \"Red\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/products",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/products",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Products By Category",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/products?category_id={{product_category_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products"
+              ],
+              "query": [
+                {
+                  "key": "category_id",
+                  "value": "{{product_category_id}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/products/{{product_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products",
+                "{{product_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Premium T-Shirt Updated\",\n  \"description\": \"Updated product description\",\n  \"price\": 2500,\n  \"category_id\": {{product_category_id}},\n  \"has_variants\": true,\n  \"variants\": [\n    {\n      \"variant_name\": \"Size\",\n      \"variant_value\": \"L\"\n    },\n    {\n      \"variant_name\": \"Color\",\n      \"variant_value\": \"Black\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/products/{{product_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products",
+                "{{product_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Product",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/products/{{product_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products",
+                "{{product_id}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Import Products",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/products/import",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "products",
+                "import"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
