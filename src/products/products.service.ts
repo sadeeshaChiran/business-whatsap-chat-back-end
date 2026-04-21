@@ -244,8 +244,8 @@ export class ProductsService {
 
   async remove(id: number, user: AuthenticatedUser) {
     const product = await this.findOwnedProduct(id, user.company_id);
-    product.is_deleted = true;
-    await this.productRepository.save(product);
+    await this.productVariantRepository.delete({ product_id: product.id });
+    await this.productRepository.remove(product);
 
     return { id };
   }
