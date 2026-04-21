@@ -1,14 +1,10 @@
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsOptional,
   IsString,
   MaxLength,
-  IsArray,
-  ValidateNested,
 } from 'class-validator';
-import { CreateProductCategoryVariantDto } from './create-product-category-variant.dto';
 
 export class CreateProductCatergoryDto {
   @ApiProperty({ example: 'Apparel', maxLength: 100 })
@@ -25,11 +21,4 @@ export class CreateProductCatergoryDto {
   @IsOptional()
   @IsBoolean()
   is_common?: boolean;
-
-  @ApiPropertyOptional({ type: [CreateProductCategoryVariantDto] })
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateProductCategoryVariantDto)
-  default_variants?: CreateProductCategoryVariantDto[];
 }

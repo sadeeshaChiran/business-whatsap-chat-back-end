@@ -11,7 +11,6 @@ import {
 } from 'typeorm';
 import { Company } from '../../../company/entities/company.entity';
 import { Product } from '../../entities/product.entity';
-import { ProductCategoryVariant } from './product_category_variant.entity';
 
 @Entity()
 @Unique('UQ_product_category_company_name', ['company_id', 'name'])
@@ -41,13 +40,6 @@ export class ProductCatergory {
 
   @OneToMany(() => Product, (product) => product.category)
   products: Product[];
-
-  @OneToMany(
-    () => ProductCategoryVariant,
-    (defaultVariant) => defaultVariant.category,
-    { cascade: true },
-  )
-  default_variants: ProductCategoryVariant[];
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   created_at: Date;

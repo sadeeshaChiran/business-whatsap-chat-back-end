@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
-import { ProductCategoryVariant } from './entities/product_category_variant.entity';
+import { Company } from '../../company/entities/company.entity';
 import { CreateProductCatergoryDto } from './dto/create-product_catergory.dto';
 import { UpdateProductCatergoryDto } from './dto/update-product_catergory.dto';
 import { ProductCatergory } from './entities/product_catergory.entity';
@@ -16,57 +16,9 @@ export class ProductCatergoryService {
   constructor(
     @InjectRepository(ProductCatergory)
     private readonly productCategoryRepository: Repository<ProductCatergory>,
-    @InjectRepository(ProductCategoryVariant)
-    private readonly productCategoryVariantRepository: Repository<ProductCategoryVariant>,
+    @InjectRepository(Company)
+    private readonly companyRepository: Repository<Company>,
   ) {}
-
-  private normalizeDefaultVariants(
-    defaultVariants?: Array<{ variant_name: string }>,
-  ) {
-    const seen = new Set<string>();
-
-    return (defaultVariants ?? [])
-      .map((variant) => ({
-        variant_name: variant.variant_name.trim(),
-      }))
-      .filter((variant) => {
-        if (!variant.variant_name) {
-          return false;
-        }
-
-        const key = variant.variant_name.toLowerCase();
-        if (seen.has(key)) {
-          return false;
-        }
-
-        seen.add(key);
-        return true;
-      });
-  }
-
-  private async setDefaultVariants(
-    category: ProductCatergory,
-    defaultVariants?: Array<{ variant_name: string }>,
-  ) {
-    const normalizedVariants = this.normalizeDefaultVariants(defaultVariants);
-
-    await this.productCategoryVariantRepository.delete({
-      category_id: category.id,
-    });
-
-    if (!normalizedVariants.length) {
-      return [];
-    }
-
-    return this.productCategoryVariantRepository.save(
-      normalizedVariants.map((variant) =>
-        this.productCategoryVariantRepository.create({
-          category_id: category.id,
-          variant_name: variant.variant_name,
-        }),
-      ),
-    );
-  }
 
   private async ensureUniqueName(
     companyId: number,
@@ -94,11 +46,26 @@ export class ProductCatergoryService {
     }
   }
 
+  private async ensureCompanyExists(companyId: number) {
+    const exists = await this.companyRepository.exist({
+      where: { id: companyId },
+    });
+
+    if (!exists) {
+      throw new NotFoundException(
+        'Company not found for the current login. Please log out and log in again.',
+      );
+    }
+  }
+
   async create(
     createProductCatergoryDto: CreateProductCatergoryDto,
     user: AuthenticatedUser,
   ) {
     const name = createProductCatergoryDto.name.trim();
+    if (!createProductCatergoryDto.is_common) {
+      await this.ensureCompanyExists(user.company_id);
+    }
     await this.ensureUniqueName(user.company_id, name);
 
     const category = this.productCategoryRepository.create({
@@ -109,10 +76,6 @@ export class ProductCatergoryService {
     });
 
     const savedCategory = await this.productCategoryRepository.save(category);
-    await this.setDefaultVariants(
-      savedCategory,
-      createProductCatergoryDto.default_variants,
-    );
 
     return this.findOne(savedCategory.id, user);
   }
@@ -120,7 +83,6 @@ export class ProductCatergoryService {
   async findAll(user: AuthenticatedUser) {
     return this.productCategoryRepository
       .createQueryBuilder('category')
-      .leftJoinAndSelect('category.default_variants', 'default_variants')
       .where(
         new Brackets((subQuery) => {
           subQuery
@@ -136,7 +98,6 @@ export class ProductCatergoryService {
   async findOne(id: number, user: AuthenticatedUser) {
     const category = await this.productCategoryRepository
       .createQueryBuilder('category')
-      .leftJoinAndSelect('category.default_variants', 'default_variants')
       .where('category.id = :id', { id })
       .andWhere(
         new Brackets((subQuery) => {
@@ -182,13 +143,6 @@ export class ProductCatergoryService {
     });
 
     const savedCategory = await this.productCategoryRepository.save(category);
-
-    if (updateProductCatergoryDto.default_variants !== undefined) {
-      await this.setDefaultVariants(
-        savedCategory,
-        updateProductCatergoryDto.default_variants,
-      );
-    }
 
     return this.findOne(savedCategory.id, user);
   }
