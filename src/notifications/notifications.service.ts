@@ -152,9 +152,10 @@ export class NotificationsService {
 
     const now = new Date();
     const notifications: NotificationItem[] = [];
+    const hasFinancialActivity = incomes.length > 0 || expenses.length > 0;
 
     const totals7d = this.sumPeriod(incomes, expenses, 7);
-    if (totals7d.expenses > totals7d.income) {
+    if (hasFinancialActivity && totals7d.expenses > totals7d.income) {
       notifications.push(
         this.createNotification({
           id: 'risk-expense-vs-income-7d',
@@ -169,7 +170,7 @@ export class NotificationsService {
     }
 
     const totals30d = this.sumPeriod(incomes, expenses, 30);
-    if (totals30d.expenses > totals30d.income) {
+    if (hasFinancialActivity && totals30d.expenses > totals30d.income) {
       notifications.push(
         this.createNotification({
           id: 'risk-expense-vs-income-30d',
@@ -216,7 +217,10 @@ export class NotificationsService {
       );
     }
 
-    if (healthWeekly.healthScore < 50 || healthMonthly.healthScore < 50) {
+    if (
+      hasFinancialActivity &&
+      (healthWeekly.healthScore < 50 || healthMonthly.healthScore < 50)
+    ) {
       const weakerHealth =
         healthWeekly.healthScore <= healthMonthly.healthScore
           ? healthWeekly
@@ -250,7 +254,7 @@ export class NotificationsService {
       warning.toLowerCase().includes('key category to monitor for leakage'),
     );
 
-    if (currentRatioMetric?.status === 'risk') {
+    if (hasFinancialActivity && currentRatioMetric?.status === 'risk') {
       notifications.push(
         this.createNotification({
           id: 'risk-current-ratio',
@@ -263,7 +267,7 @@ export class NotificationsService {
       );
     }
 
-    if (netProfitMarginMetric?.status === 'risk') {
+    if (hasFinancialActivity && netProfitMarginMetric?.status === 'risk') {
       notifications.push(
         this.createNotification({
           id: 'risk-net-profit-margin',
@@ -276,7 +280,7 @@ export class NotificationsService {
       );
     }
 
-    if (topExpenseWarning) {
+    if (hasFinancialActivity && topExpenseWarning) {
       notifications.push(
         this.createNotification({
           id: 'warning-expense-category-leakage',
