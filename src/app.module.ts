@@ -13,6 +13,7 @@ import { NoteColorTagsModule } from './notes/color_tags/color_tags.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { ProductsModule } from './products/products.module';
+import { BotAdminModule } from './bot-admin/bot-admin.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ProductsModule } from './products/products.module';
     NotificationsModule,
     ReportsModule,
     ProductsModule,
+    BotAdminModule,
   ],
   controllers: [AppController],
   providers: [
