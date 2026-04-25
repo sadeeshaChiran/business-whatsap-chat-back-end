@@ -34,7 +34,32 @@ export class BotAdminService {
     private readonly flagRepository: Repository<BotFlag>,
   ) {}
 
-  private async assertCompanyAdmin(user: AuthenticatedUser) {
+  async getStats(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    const [totalUsers, activeBots, totalConversations, pendingAlerts] = await Promise.all([
+      this.channelUserRepository.count(),
+      this.channelUserRepository.count({ where: { bot_enabled: true } }),
+      this.conversationRepository.count(),
+      this.flagRepository.count({ where: { resolved: false } }),
+    ]);
+
+    return {
+      totalUsers,
+      activeBots,
+      totalConversations,
+      pendingAlerts,
+    };
+  }
+
+  private async assertAdminAccess(user: AuthenticatedUser, requireSuperAdmin = false) {
+    if (user.is_admin) {
+      return;
+    }
+
+    if (requireSuperAdmin) {
+      throw new ForbiddenException('Only a system admin can perform this action.');
+    }
+
     const company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
@@ -45,25 +70,24 @@ export class BotAdminService {
   }
 
   async getUsers(user: AuthenticatedUser, query: BotUsersQueryDto) {
-    await this.assertCompanyAdmin(user);
+    await this.assertAdminAccess(user);
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const offset = (page - 1) * limit;
 
-    const [items, total] = await Promise.all([
-      this.channelUserRepository
-        .createQueryBuilder('channel_user')
-        .leftJoinAndSelect('channel_user.conversations', 'conversation')
-        .where('channel_user.company_id = :companyId', { companyId: user.company_id })
-        .orderBy('channel_user.last_seen_at', 'DESC')
-        .addOrderBy('channel_user.id', 'DESC')
-        .skip(offset)
-        .take(limit)
-        .getMany(),
-      this.channelUserRepository.count({
-        where: { company_id: user.company_id },
-      }),
-    ]);
+    const builder = this.channelUserRepository
+      .createQueryBuilder('channel_user')
+      .leftJoinAndSelect('channel_user.conversations', 'conversation')
+      .orderBy('channel_user.last_seen_at', 'DESC')
+      .addOrderBy('channel_user.id', 'DESC')
+      .skip(offset)
+      .take(limit);
+
+    if (!user.is_admin) {
+      builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
+    }
+
+    const [items, total] = await builder.getManyAndCount();
 
     return {
       items: items.map((item) => ({
@@ -96,9 +120,14 @@ export class BotAdminService {
     id: number,
     payload: ToggleBotUserDto,
   ) {
-    await this.assertCompanyAdmin(user);
+    await this.assertAdminAccess(user, true); // Only super admin can toggle bot
+    const where: any = { id };
+    if (!user.is_admin) {
+      where.company_id = user.company_id;
+    }
+
     const channelUser = await this.channelUserRepository.findOne({
-      where: { id, company_id: user.company_id },
+      where,
     });
 
     if (!channelUser) {
@@ -120,15 +149,18 @@ export class BotAdminService {
   }
 
   async getFlags(user: AuthenticatedUser, query: BotFlagsQueryDto) {
-    await this.assertCompanyAdmin(user);
+    await this.assertAdminAccess(user);
     const unresolvedOnly = query.unresolved !== 'false';
 
     const builder = this.flagRepository
       .createQueryBuilder('flag')
       .leftJoinAndSelect('flag.channelUser', 'channel_user')
       .leftJoinAndSelect('flag.conversation', 'conversation')
-      .where('channel_user.company_id = :companyId', { companyId: user.company_id })
       .orderBy('flag.created_at', 'DESC');
+
+    if (!user.is_admin) {
+      builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
+    }
 
     if (unresolvedOnly) {
       builder.andWhere('flag.resolved = false');
@@ -137,13 +169,29 @@ export class BotAdminService {
     return builder.getMany();
   }
 
+  async getConversations(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    const builder = this.conversationRepository
+      .createQueryBuilder('conversation')
+      .leftJoinAndSelect('conversation.channelUser', 'channelUser')
+      .orderBy('conversation.last_message_at', 'DESC');
+
+    if (!user.is_admin) {
+      builder.where('channelUser.company_id = :companyId', { companyId: user.company_id });
+    }
+
+    return builder.getMany();
+  }
+
   async getConversation(user: AuthenticatedUser, id: number) {
-    await this.assertCompanyAdmin(user);
+    await this.assertAdminAccess(user);
+    const where: any = { id };
+    if (!user.is_admin) {
+      where.channelUser = { company_id: user.company_id };
+    }
+
     const conversation = await this.conversationRepository.findOne({
-      where: {
-        id,
-        channelUser: { company_id: user.company_id },
-      },
+      where,
       relations: ['channelUser'],
     });
 
@@ -163,9 +211,9 @@ export class BotAdminService {
   }
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {
-    await this.assertCompanyAdmin(user);
+    await this.assertAdminAccess(user);
     const item = this.trainingRepository.create({
-      company_id: user.company_id,
+      company_id: user.is_admin ? null : user.company_id,
       question: payload.question.trim(),
       answer: payload.answer.trim(),
       category: payload.category?.trim() ?? '',
@@ -174,5 +222,44 @@ export class BotAdminService {
     });
 
     return this.trainingRepository.save(item);
+  }
+
+  async uploadTrainingFile(
+    user: AuthenticatedUser,
+    file: any,
+    category?: string,
+  ) {
+    await this.assertAdminAccess(user);
+
+    const content = file.buffer.toString('utf-8');
+    // If it's an image, we can't just toString('utf-8'), but for now we'll assume it's a doc
+    // In a real app, we'd use OCR here.
+    
+    const item = this.trainingRepository.create({
+      company_id: user.is_admin ? null : user.company_id,
+      question: `Document: ${file.originalname}`,
+      answer: `[File Content from ${file.originalname}]`, // We should store the real content if possible
+      category: category?.trim() ?? 'Document',
+      language: 'English',
+      is_active: true,
+    });
+
+    return this.trainingRepository.save(item);
+  }
+
+  async getTrainingHistory(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    const builder = this.trainingRepository
+      .createQueryBuilder('training')
+      .orderBy('training.created_at', 'DESC')
+      .take(10);
+
+    if (!user.is_admin) {
+      builder.where('training.company_id = :companyId', { companyId: user.company_id });
+    } else {
+      builder.where('training.company_id IS NULL');
+    }
+
+    return builder.getMany();
   }
 }

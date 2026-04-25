@@ -33,4 +33,9 @@ export class AuthController {
   me(@CurrentUser() user: AuthenticatedUser) {
     return this.authService.getProfile(user.id);
   }
+
+  @Post('setup-admin')
+  async setupAdmin(@Body() loginDto: LoginDto) {
+    return this.authService.setupAdmin(loginDto);
+  }
 }
