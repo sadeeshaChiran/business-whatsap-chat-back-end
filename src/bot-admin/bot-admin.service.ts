@@ -51,15 +51,7 @@ export class BotAdminService {
     };
   }
 
-  private async assertAdminAccess(user: AuthenticatedUser, requireSuperAdmin = false) {
-    if (user.is_admin) {
-      return;
-    }
-
-    if (requireSuperAdmin) {
-      throw new ForbiddenException('Only a system admin can perform this action.');
-    }
-
+  private async assertAdminAccess(user: AuthenticatedUser) {
     const company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
@@ -83,9 +75,7 @@ export class BotAdminService {
       .skip(offset)
       .take(limit);
 
-    if (!user.is_admin) {
-      builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
-    }
+    builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
 
     const [items, total] = await builder.getManyAndCount();
 
@@ -120,11 +110,8 @@ export class BotAdminService {
     id: number,
     payload: ToggleBotUserDto,
   ) {
-    await this.assertAdminAccess(user, true); // Only super admin can toggle bot
-    const where: any = { id };
-    if (!user.is_admin) {
-      where.company_id = user.company_id;
-    }
+    await this.assertAdminAccess(user);
+    const where: any = { id, company_id: user.company_id };
 
     const channelUser = await this.channelUserRepository.findOne({
       where,
@@ -158,9 +145,7 @@ export class BotAdminService {
       .leftJoinAndSelect('flag.conversation', 'conversation')
       .orderBy('flag.created_at', 'DESC');
 
-    if (!user.is_admin) {
-      builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
-    }
+    builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
 
     if (unresolvedOnly) {
       builder.andWhere('flag.resolved = false');
@@ -176,19 +161,14 @@ export class BotAdminService {
       .leftJoinAndSelect('conversation.channelUser', 'channelUser')
       .orderBy('conversation.last_message_at', 'DESC');
 
-    if (!user.is_admin) {
-      builder.where('channelUser.company_id = :companyId', { companyId: user.company_id });
-    }
+    builder.where('channelUser.company_id = :companyId', { companyId: user.company_id });
 
     return builder.getMany();
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {
     await this.assertAdminAccess(user);
-    const where: any = { id };
-    if (!user.is_admin) {
-      where.channelUser = { company_id: user.company_id };
-    }
+    const where: any = { id, channelUser: { company_id: user.company_id } };
 
     const conversation = await this.conversationRepository.findOne({
       where,
@@ -213,7 +193,7 @@ export class BotAdminService {
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {
     await this.assertAdminAccess(user);
     const item = this.trainingRepository.create({
-      company_id: user.is_admin ? null : user.company_id,
+      company_id: user.company_id,
       question: payload.question.trim(),
       answer: payload.answer.trim(),
       category: payload.category?.trim() ?? '',
@@ -236,7 +216,7 @@ export class BotAdminService {
     // In a real app, we'd use OCR here.
     
     const item = this.trainingRepository.create({
-      company_id: user.is_admin ? null : user.company_id,
+      company_id: user.company_id,
       question: `Document: ${file.originalname}`,
       answer: `[File Content from ${file.originalname}]`, // We should store the real content if possible
       category: category?.trim() ?? 'Document',
@@ -254,11 +234,7 @@ export class BotAdminService {
       .orderBy('training.created_at', 'DESC')
       .take(10);
 
-    if (!user.is_admin) {
-      builder.where('training.company_id = :companyId', { companyId: user.company_id });
-    } else {
-      builder.where('training.company_id IS NULL');
-    }
+    builder.where('training.company_id = :companyId', { companyId: user.company_id });
 
     return builder.getMany();
   }

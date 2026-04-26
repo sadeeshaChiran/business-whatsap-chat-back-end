@@ -18,7 +18,7 @@ interface JwtPayload {
   name: string;
   email: string;
   company_id: number;
-  is_admin: boolean;
+
   iat: number;
   exp: number;
 }
@@ -190,29 +190,9 @@ export class AuthService {
       name: payload.name,
       email: payload.email,
       company_id: payload.company_id ?? 0,
-      is_admin: payload.is_admin,
     };
   }
 
-  async setupAdmin(loginDto: LoginDto) {
-    const email = loginDto.email.trim().toLowerCase();
-    let user = await this.userRepository.findOne({ where: { email } });
-
-    if (user) {
-      user.is_admin = true;
-    } else {
-      user = this.userRepository.create({
-        name: 'System Admin',
-        email,
-        password_hash: this.hashPassword(loginDto.password),
-        is_admin: true,
-        company: null,
-      });
-    }
-
-    await this.userRepository.save(user);
-    return { message: 'Admin setup successful', email };
-  }
 
   private buildAuthResponse(user: User) {
     const accessToken = this.generateToken(user);
@@ -233,7 +213,6 @@ export class AuthService {
       company_id: user.company?.id ?? 0,
       company_name: user.company?.name,
       is_active: user.is_active,
-      is_admin: user.is_admin,
       created_at: user.created_at,
       updated_at: user.updated_at,
     };
@@ -246,7 +225,6 @@ export class AuthService {
       name: user.name,
       email: user.email,
       company_id: user.company?.id ?? 0,
-      is_admin: user.is_admin,
       iat: currentTimestamp,
       exp: currentTimestamp + this.jwtTtlSeconds,
     };
