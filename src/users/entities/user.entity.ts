@@ -28,8 +28,6 @@ export class User {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @Column({ type: 'boolean', default: false })
-  is_admin: boolean;
 
   @ManyToOne(() => Company, (company) => company.users, {
     nullable: true,

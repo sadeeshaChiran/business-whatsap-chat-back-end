@@ -3,5 +3,4 @@ export interface AuthenticatedUser {
   name: string;
   email: string;
   company_id: number;
-  is_admin: boolean;
 }
