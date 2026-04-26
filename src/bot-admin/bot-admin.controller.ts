@@ -5,9 +5,12 @@ import {
   Param,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
@@ -23,6 +26,11 @@ import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 @UseGuards(JwtAuthGuard)
 export class BotAdminController {
   constructor(private readonly botAdminService: BotAdminService) {}
+
+  @Get('stats')
+  getStats(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getStats(user);
+  }
 
   @Get('users')
   getUsers(
@@ -49,6 +57,11 @@ export class BotAdminController {
     return this.botAdminService.getFlags(user, query);
   }
 
+  @Get('conversations')
+  getConversations(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getConversations(user);
+  }
+
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
@@ -63,5 +76,30 @@ export class BotAdminController {
     @Body() payload: CreateBotTrainingDto,
   ) {
     return this.botAdminService.createTraining(user, payload);
+  }
+
+  @Post('train/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        category: { type: 'string' },
+      },
+    },
+  })
+  uploadDocument(
+    @CurrentUser() user: AuthenticatedUser,
+    @UploadedFile() file: any,
+    @Body('category') category?: string,
+  ) {
+    return this.botAdminService.uploadTrainingFile(user, file, category);
+  }
+
+  @Get('train/history')
+  getTrainingHistory(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getTrainingHistory(user);
   }
 }

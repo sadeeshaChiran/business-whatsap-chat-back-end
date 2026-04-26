@@ -14,8 +14,8 @@ export class BotTrainingData {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
-  company_id: number;
+  @Column({ nullable: true })
+  company_id: number | null;
 
   @Column({ type: 'varchar', length: 100, default: '' })
   category: string;
@@ -32,9 +32,9 @@ export class BotTrainingData {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @ManyToOne(() => Company, { nullable: false, onDelete: 'RESTRICT', onUpdate: 'CASCADE' })
+  @ManyToOne(() => Company, { nullable: true, onDelete: 'SET NULL', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'company_id' })
-  company: Company;
+  company: Company | null;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   created_at: Date;
