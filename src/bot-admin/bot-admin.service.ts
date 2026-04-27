@@ -36,11 +36,22 @@ export class BotAdminService {
 
   async getStats(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
+    const company_id = user.company_id;
+
     const [totalUsers, activeBots, totalConversations, pendingAlerts] = await Promise.all([
-      this.channelUserRepository.count(),
-      this.channelUserRepository.count({ where: { bot_enabled: true } }),
-      this.conversationRepository.count(),
-      this.flagRepository.count({ where: { resolved: false } }),
+      this.channelUserRepository.count({ where: { company_id } }),
+      this.channelUserRepository.count({ where: { company_id, bot_enabled: true } }),
+      this.conversationRepository
+        .createQueryBuilder('conversation')
+        .leftJoin('conversation.channelUser', 'channelUser')
+        .where('channelUser.company_id = :company_id', { company_id })
+        .getCount(),
+      this.flagRepository
+        .createQueryBuilder('flag')
+        .leftJoin('flag.channelUser', 'channelUser')
+        .where('channelUser.company_id = :company_id', { company_id })
+        .andWhere('flag.resolved = false')
+        .getCount(),
     ]);
 
     return {
@@ -192,6 +203,29 @@ export class BotAdminService {
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {
     await this.assertAdminAccess(user);
+
+    // Call the Python bot's AI extraction endpoint for better Q&A generation
+    try {
+      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: user.company_id,
+          admin_user_id: user.id,
+          content: payload.answer, // Use the pasted content as raw input
+          category: payload.category?.trim() ?? 'Manual',
+          language: payload.language?.trim() ?? 'English',
+        }),
+      });
+
+      if (response.ok) {
+        return response.json();
+      }
+    } catch (error) {
+      console.error('Failed to call bot extraction endpoint:', error);
+    }
+
+    // Fallback to simple creation if bot is down or fails
     const item = this.trainingRepository.create({
       company_id: user.company_id,
       question: payload.question.trim(),
@@ -211,14 +245,38 @@ export class BotAdminService {
   ) {
     await this.assertAdminAccess(user);
 
-    const content = file.buffer.toString('utf-8');
-    // If it's an image, we can't just toString('utf-8'), but for now we'll assume it's a doc
-    // In a real app, we'd use OCR here.
+    // Convert file to base64 with proper data URL prefix so the bot can detect the mime type
+    const mimeType = file.mimetype || 'image/jpeg';
+    const imageBase64 = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
     
+    try {
+      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: user.company_id,
+          admin_user_id: user.id,
+          content: `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`,
+          image_base64: imageBase64,
+          category: category?.trim() ?? 'Document',
+        }),
+      });
+
+      if (response.ok) {
+        return response.json();
+      }
+      
+      const errBody = await response.text();
+      console.error('Bot training upload failed:', response.status, errBody);
+    } catch (error) {
+      console.error('Failed to connect to Python bot for file training:', error);
+    }
+
+    // Fallback: simple record (not ideal, but prevents crash)
     const item = this.trainingRepository.create({
       company_id: user.company_id,
       question: `Document: ${file.originalname}`,
-      answer: `[File Content from ${file.originalname}]`, // We should store the real content if possible
+      answer: `[Processing Failed] Content from ${file.originalname}`,
       category: category?.trim() ?? 'Document',
       language: 'English',
       is_active: true,
