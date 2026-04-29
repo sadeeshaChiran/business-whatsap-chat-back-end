@@ -32,6 +32,9 @@ export class BotTrainingData {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
+  @Column({ type: 'longblob', nullable: true, select: false })
+  vector_embedding: Buffer | null;
+
   @ManyToOne(() => Company, { nullable: true, onDelete: 'SET NULL', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'company_id' })
   company: Company | null;

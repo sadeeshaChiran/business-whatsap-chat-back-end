@@ -57,6 +57,9 @@ export class Product {
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 
+  @Column({ type: 'longblob', nullable: true, select: false })
+  vector_embedding: Buffer | null;
+
   @ManyToOne(() => ProductCatergory, (category) => category.products, {
     nullable: false,
     onDelete: 'RESTRICT',

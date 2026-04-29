@@ -94,8 +94,9 @@ export class BotAdminController {
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFile() file: any,
     @Body('category') category?: string,
+    @Body('content') content?: string,
   ) {
-    return this.botAdminService.uploadTrainingFile(user, file, category);
+    return this.botAdminService.uploadTrainingFile(user, file, category, content);
   }
 
   @Get('train/history')

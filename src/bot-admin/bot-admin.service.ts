@@ -242,12 +242,16 @@ export class BotAdminService {
     user: AuthenticatedUser,
     file: any,
     category?: string,
+    content?: string,
   ) {
     await this.assertAdminAccess(user);
 
     // Convert file to base64 with proper data URL prefix so the bot can detect the mime type
     const mimeType = file.mimetype || 'image/jpeg';
     const imageBase64 = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
+    const rawContent = content?.trim()
+      ? content.trim()
+      : `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`;
     
     try {
       const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
@@ -256,7 +260,7 @@ export class BotAdminService {
         body: JSON.stringify({
           company_id: user.company_id,
           admin_user_id: user.id,
-          content: `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`,
+          content: rawContent,
           image_base64: imageBase64,
           category: category?.trim() ?? 'Document',
         }),
