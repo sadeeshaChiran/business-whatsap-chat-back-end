@@ -48,12 +48,12 @@ export class BotAdminService {
   ) {}
 
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
-    Pending: 'Your order #{orderId} is pending.',
-    Confirmed: 'Your order #{orderId} has been confirmed.',
-    Processing: 'Your order #{orderId} is being processed.',
-    Shipped: 'Your order #{orderId} has been shipped.',
-    Delivered: 'Your order #{orderId} has been delivered.',
-    Cancelled: 'Your order #{orderId} has been cancelled.',
+    Pending: 'Your order  is pending.',
+    Confirmed: 'Your order  has been confirmed.',
+    Processing: 'Your order  is being processed.',
+    Shipped: 'Your order  has been shipped.',
+    Delivered: 'Your order  has been delivered.',
+    Cancelled: 'Your order  has been cancelled.',
   };
 
   async getStats(user: AuthenticatedUser) {
