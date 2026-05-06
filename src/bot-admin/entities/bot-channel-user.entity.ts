@@ -36,6 +36,12 @@ export class BotChannelUser {
   @Column({ type: 'varchar', length: 30, default: 'English' })
   language: string;
 
+  @Column({ type: 'boolean', default: false })
+  language_locked: boolean;
+
+  @Column({ type: 'text', nullable: true })
+  session_state: string | null;
+
   @Column({ type: 'boolean', default: true })
   bot_enabled: boolean;
 

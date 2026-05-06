@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join, resolve } from 'path';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Company } from '../company/entities/company.entity';
@@ -11,10 +13,15 @@ import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
 import { BotMessage } from './entities/bot-message.entity';
+import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
+import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
+import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 
 @Injectable()
@@ -32,7 +39,22 @@ export class BotAdminService {
     private readonly trainingRepository: Repository<BotTrainingData>,
     @InjectRepository(BotFlag)
     private readonly flagRepository: Repository<BotFlag>,
+    @InjectRepository(BotOrder)
+    private readonly orderRepository: Repository<BotOrder>,
+    @InjectRepository(BotOrderStatusHistory)
+    private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
+    @InjectRepository(BotOrderStatusTemplate)
+    private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
   ) {}
+
+  private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
+    Pending: 'Your order  is pending.',
+    Confirmed: 'Your order  has been confirmed.',
+    Processing: 'Your order  is being processed.',
+    Shipped: 'Your order  has been shipped.',
+    Delivered: 'Your order  has been delivered.',
+    Cancelled: 'Your order  has been cancelled.',
+  };
 
   async getStats(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
@@ -299,5 +321,335 @@ export class BotAdminService {
     builder.where('training.company_id = :companyId', { companyId: user.company_id });
 
     return builder.getMany();
+  }
+
+  async getOrders(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    return this.orderRepository.find({
+      where: { company_id: user.company_id },
+      relations: ['channelUser', 'items', 'statusHistory'],
+      order: { id: 'DESC' },
+      take: 100,
+    });
+  }
+
+  async updateOrderStatus(
+    user: AuthenticatedUser,
+    id: number,
+    payload: UpdateOrderStatusDto,
+  ) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id, company_id: user.company_id },
+      relations: ['channelUser', 'items'],
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+
+    order.status = payload.status;
+    const saved = await this.orderRepository.save(order);
+    const message = await this.renderOrderStatusMessage(user.company_id, saved);
+    await this.orderStatusHistoryRepository.save(
+      this.orderStatusHistoryRepository.create({
+        order_id: saved.id,
+        status: saved.status,
+        message,
+      }),
+    );
+    await this.sendWhatsappStatusMessage(saved.channelUser?.external_user_id, message);
+    return { order: saved, message };
+  }
+
+  async getStatusTemplates(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    const existing = await this.orderStatusTemplateRepository.find({
+      where: { company_id: user.company_id },
+      order: { status: 'ASC' },
+    });
+    const map = new Map(existing.map((item) => [item.status, item]));
+    return Object.entries(this.defaultStatusTemplates).map(([status, template]) => ({
+      status,
+      template: map.get(status as BotOrderStatus)?.template ?? template,
+    }));
+  }
+
+  async updateStatusTemplate(
+    user: AuthenticatedUser,
+    payload: UpdateStatusTemplateDto,
+  ) {
+    await this.assertAdminAccess(user);
+    let template = await this.orderStatusTemplateRepository.findOne({
+      where: { company_id: user.company_id, status: payload.status },
+    });
+    if (!template) {
+      template = this.orderStatusTemplateRepository.create({
+        company_id: user.company_id,
+        status: payload.status,
+      });
+    }
+    template.template = payload.template.trim();
+    return this.orderStatusTemplateRepository.save(template);
+  }
+
+  private async renderOrderStatusMessage(companyId: number, order: BotOrder) {
+    const template = await this.orderStatusTemplateRepository.findOne({
+      where: { company_id: companyId, status: order.status },
+    });
+    const raw = template?.template ?? this.defaultStatusTemplates[order.status];
+    return raw
+      .replace(/\{orderId\}/g, String(order.id))
+      .replace(/\{status\}/g, order.status)
+      .replace(/\{total\}/g, String(order.total_amount))
+      .replace(/\{customerName\}/g, order.customer_name || 'customer')
+      .replace(/\{invoiceUrl\}/g, order.invoice_url || '');
+  }
+
+  private async sendWhatsappStatusMessage(phone: string | undefined, message: string) {
+    const phoneNumberId = this.getEnvValue('WHATSAPP_PHONE_NUMBER_ID');
+    const accessToken = this.getEnvValue('WHATSAPP_ACCESS_TOKEN');
+    if (!phone || !phoneNumberId || !accessToken) {
+      return false;
+    }
+
+    // Check if the message contains a PDF link
+    const pdfMatch = message.match(/https?:\/\/[^\s<>"]+\.pdf/i);
+    const hasPdf = !!pdfMatch;
+    const pdfUrl = hasPdf ? pdfMatch[0] : null;
+
+    try {
+      let payload: any;
+      if (hasPdf && pdfUrl) {
+        // Send as document if PDF found
+        const cleanMessage = message.replace(pdfUrl, '').trim();
+        payload = {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'document',
+          document: {
+            link: pdfUrl,
+            filename: `invoice_${pdfUrl.split('/').pop() || 'order'}.pdf`,
+            caption: cleanMessage || undefined,
+          },
+        };
+      } else {
+        // Fallback to text
+        payload = {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'text',
+          text: { body: message },
+        };
+      }
+
+      const response = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to send order status WhatsApp message:', error);
+      return false;
+    }
+  }
+
+  async sendOrderInvoice(user: AuthenticatedUser, id: number) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id, company_id: user.company_id },
+      relations: ['channelUser', 'items'],
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+
+    const company = await this.companyRepository.findOne({
+      where: { id: user.company_id },
+    });
+
+    const invoiceUrl = this.writeInvoicePdf(order, company);
+    order.invoice_url = invoiceUrl;
+    const saved = await this.orderRepository.save(order);
+
+    const message = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}\n${invoiceUrl}`;
+    const sent = await this.sendWhatsappStatusMessage(
+      saved.channelUser?.external_user_id,
+      message,
+    );
+
+    await this.orderStatusHistoryRepository.save(
+      this.orderStatusHistoryRepository.create({
+        order_id: saved.id,
+        status: saved.status,
+        message: sent ? 'Invoice sent to customer.' : 'Invoice generated, but WhatsApp send failed.',
+      }),
+    );
+
+    return {
+      order: saved,
+      invoice_url: invoiceUrl,
+      sent,
+      message: sent
+        ? 'Invoice sent to customer.'
+        : 'Invoice generated, but WhatsApp send failed. Check WhatsApp credentials and public bot URL.',
+    };
+  }
+
+  private writeInvoicePdf(order: BotOrder, company: Company | null) {
+    const invoiceDir = this.getInvoiceDirectory();
+    mkdirSync(invoiceDir, { recursive: true });
+
+    const filename = `invoice-order-${order.id}.pdf`;
+    const filePath = join(invoiceDir, filename);
+    const lines = this.buildInvoiceLines(order, company);
+    writeFileSync(filePath, this.buildSimplePdf(lines));
+
+    const publicBaseUrl = this.getBotPublicBaseUrl();
+    return `${publicBaseUrl}/external/static/invoices/${filename}`;
+  }
+
+  private getInvoiceDirectory() {
+    return resolve(
+      this.getEnvValue('BOT_INVOICE_DIR') ??
+        join(process.cwd(), '..', 'bot', 'app', 'static', 'invoices'),
+    );
+  }
+
+  private getBotPublicBaseUrl() {
+    return (
+      this.getEnvValue('BOT_PUBLIC_BASE_URL') ??
+      this.getEnvValue('BOT_PUBLIC_URL') ??
+      this.getEnvValue('BOT_BASE_URL') ??
+      'http://localhost:5005'
+    ).replace(/\/+$/, '');
+  }
+
+  private getEnvValue(key: string) {
+    const direct = process.env[key]?.trim();
+    if (direct) {
+      return direct;
+    }
+
+    const botEnvPath = resolve(process.cwd(), '..', 'bot', '.env');
+    if (!existsSync(botEnvPath)) {
+      return undefined;
+    }
+
+    const content = readFileSync(botEnvPath, 'utf8');
+    const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, 'm'));
+    if (!match) {
+      return undefined;
+    }
+
+    return match[1].trim().replace(/^['"]|['"]$/g, '');
+  }
+
+  private buildInvoiceLines(order: BotOrder, company: Company | null) {
+    const companyName = company?.name?.trim() || 'Invoice';
+    const companyDetails = [
+      company?.address?.trim(),
+      company?.phone?.trim() ? `Phone: ${company.phone.trim()}` : '',
+      company?.email?.trim() ? `Email: ${company.email.trim()}` : '',
+    ].filter((detail): detail is string => Boolean(detail));
+
+    const lines = [
+      companyName,
+      ...companyDetails,
+      '============================================================',
+      `INVOICE #${order.id}`,
+      `Date: ${this.formatDate(order.created_at)}`,
+      `Status: ${order.status}`,
+      '',
+      'BILL TO',
+      `Name    : ${order.customer_name || '-'}`,
+      `Phone   : ${order.customer_phone || order.channelUser?.external_user_id || '-'}`,
+      `Address : ${order.address || '-'}`,
+      '',
+      'ITEMS',
+      '------------------------------------------------------------',
+      'Description                         Qty    Unit       Amount',
+      '------------------------------------------------------------',
+    ];
+
+    for (const item of order.items ?? []) {
+      const variant = item.variant_text ? ` (${item.variant_text})` : '';
+      const description = `${item.product_name}${variant}`;
+      lines.push(
+        `${description.padEnd(34).slice(0, 34)} ${String(item.quantity).padStart(3)}  ${this.formatMoney(item.unit_price).padStart(9)}  ${this.formatMoney(item.total_price).padStart(10)}`,
+      );
+    }
+
+    lines.push(
+      '------------------------------------------------------------',
+      `${'TOTAL'.padEnd(49)}${this.formatMoney(order.total_amount).padStart(10)}`,
+      '============================================================',
+      '',
+      'Thank you for your order.',
+    );
+    return lines;
+  }
+
+  private formatMoney(value: unknown) {
+    const amount = Number(value || 0);
+    return `Rs ${amount.toLocaleString(undefined, {
+      minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  private formatDate(value: Date | string | undefined) {
+    return value ? new Date(value).toLocaleString() : new Date().toLocaleString();
+  }
+
+  private buildSimplePdf(lines: string[]) {
+    const sanitizedLines = lines.flatMap((line) => {
+      const chunks = line.match(/.{1,86}/g) ?? [''];
+      return chunks.map((chunk) =>
+        chunk
+          .replace(/\\/g, '\\\\')
+          .replace(/\(/g, '\\(')
+          .replace(/\)/g, '\\)'),
+      );
+    });
+
+    const contentStream = [
+      'BT',
+      '/F1 12 Tf',
+      '50 780 Td',
+      ...sanitizedLines.flatMap((line, index) =>
+        index === 0 ? [`(${line}) Tj`] : ['0 -16 Td', `(${line}) Tj`],
+      ),
+      'ET',
+    ].join('\n');
+
+    const objects = [
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj',
+      '4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj',
+      `5 0 obj << /Length ${Buffer.byteLength(contentStream, 'utf8')} >> stream\n${contentStream}\nendstream endobj`,
+    ];
+
+    let pdf = '%PDF-1.4\n';
+    const offsets: number[] = [0];
+    objects.forEach((object) => {
+      offsets.push(Buffer.byteLength(pdf, 'utf8'));
+      pdf += `${object}\n`;
+    });
+
+    const xrefPosition = Buffer.byteLength(pdf, 'utf8');
+    pdf += `xref\n0 ${objects.length + 1}\n`;
+    pdf += '0000000000 65535 f \n';
+    offsets.slice(1).forEach((offset) => {
+      pdf += `${offset.toString().padStart(10, '0')} 00000 n \n`;
+    });
+    pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPosition}\n%%EOF`;
+
+    return Buffer.from(pdf, 'utf8');
   }
 }
