@@ -11,10 +11,15 @@ import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
 import { BotMessage } from './entities/bot-message.entity';
+import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
+import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
+import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 
 @Injectable()
@@ -32,7 +37,22 @@ export class BotAdminService {
     private readonly trainingRepository: Repository<BotTrainingData>,
     @InjectRepository(BotFlag)
     private readonly flagRepository: Repository<BotFlag>,
+    @InjectRepository(BotOrder)
+    private readonly orderRepository: Repository<BotOrder>,
+    @InjectRepository(BotOrderStatusHistory)
+    private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
+    @InjectRepository(BotOrderStatusTemplate)
+    private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
   ) {}
+
+  private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
+    Pending: 'Your order #{orderId} is pending.',
+    Confirmed: 'Your order #{orderId} has been confirmed.',
+    Processing: 'Your order #{orderId} is being processed.',
+    Shipped: 'Your order #{orderId} has been shipped.',
+    Delivered: 'Your order #{orderId} has been delivered.',
+    Cancelled: 'Your order #{orderId} has been cancelled.',
+  };
 
   async getStats(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
@@ -299,5 +319,139 @@ export class BotAdminService {
     builder.where('training.company_id = :companyId', { companyId: user.company_id });
 
     return builder.getMany();
+  }
+
+  async getOrders(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    return this.orderRepository.find({
+      where: { company_id: user.company_id },
+      relations: ['channelUser', 'items', 'statusHistory'],
+      order: { id: 'DESC' },
+      take: 100,
+    });
+  }
+
+  async updateOrderStatus(
+    user: AuthenticatedUser,
+    id: number,
+    payload: UpdateOrderStatusDto,
+  ) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id, company_id: user.company_id },
+      relations: ['channelUser', 'items'],
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+
+    order.status = payload.status;
+    const saved = await this.orderRepository.save(order);
+    const message = await this.renderOrderStatusMessage(user.company_id, saved);
+    await this.orderStatusHistoryRepository.save(
+      this.orderStatusHistoryRepository.create({
+        order_id: saved.id,
+        status: saved.status,
+        message,
+      }),
+    );
+    await this.sendWhatsappStatusMessage(saved.channelUser?.external_user_id, message);
+    return { order: saved, message };
+  }
+
+  async getStatusTemplates(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    const existing = await this.orderStatusTemplateRepository.find({
+      where: { company_id: user.company_id },
+      order: { status: 'ASC' },
+    });
+    const map = new Map(existing.map((item) => [item.status, item]));
+    return Object.entries(this.defaultStatusTemplates).map(([status, template]) => ({
+      status,
+      template: map.get(status as BotOrderStatus)?.template ?? template,
+    }));
+  }
+
+  async updateStatusTemplate(
+    user: AuthenticatedUser,
+    payload: UpdateStatusTemplateDto,
+  ) {
+    await this.assertAdminAccess(user);
+    let template = await this.orderStatusTemplateRepository.findOne({
+      where: { company_id: user.company_id, status: payload.status },
+    });
+    if (!template) {
+      template = this.orderStatusTemplateRepository.create({
+        company_id: user.company_id,
+        status: payload.status,
+      });
+    }
+    template.template = payload.template.trim();
+    return this.orderStatusTemplateRepository.save(template);
+  }
+
+  private async renderOrderStatusMessage(companyId: number, order: BotOrder) {
+    const template = await this.orderStatusTemplateRepository.findOne({
+      where: { company_id: companyId, status: order.status },
+    });
+    const raw = template?.template ?? this.defaultStatusTemplates[order.status];
+    return raw
+      .replace(/\{orderId\}/g, String(order.id))
+      .replace(/\{status\}/g, order.status)
+      .replace(/\{total\}/g, String(order.total_amount))
+      .replace(/\{customerName\}/g, order.customer_name || 'customer')
+      .replace(/\{invoiceUrl\}/g, order.invoice_url || '');
+  }
+
+  private async sendWhatsappStatusMessage(phone: string | undefined, message: string) {
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+    if (!phone || !phoneNumberId || !accessToken) {
+      return false;
+    }
+
+    // Check if the message contains a PDF link
+    const pdfMatch = message.match(/https?:\/\/[^\s<>"]+\.pdf/i);
+    const hasPdf = !!pdfMatch;
+    const pdfUrl = hasPdf ? pdfMatch[0] : null;
+
+    try {
+      let payload: any;
+      if (hasPdf && pdfUrl) {
+        // Send as document if PDF found
+        const cleanMessage = message.replace(pdfUrl, '').trim();
+        payload = {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'document',
+          document: {
+            link: pdfUrl,
+            filename: `invoice_${pdfUrl.split('/').pop() || 'order'}.pdf`,
+            caption: cleanMessage || undefined,
+          },
+        };
+      } else {
+        // Fallback to text
+        payload = {
+          messaging_product: 'whatsapp',
+          to: phone,
+          type: 'text',
+          text: { body: message },
+        };
+      }
+
+      const response = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to send order status WhatsApp message:', error);
+      return false;
+    }
   }
 }

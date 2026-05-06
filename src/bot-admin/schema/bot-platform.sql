@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS bot_channel_user (
   external_user_id VARCHAR(255) NOT NULL,
   display_name VARCHAR(255) NOT NULL DEFAULT '',
   language VARCHAR(30) NOT NULL DEFAULT 'English',
+  language_locked TINYINT(1) NOT NULL DEFAULT 0,
+  session_state TEXT NULL,
   bot_enabled TINYINT(1) NOT NULL DEFAULT 1,
   manual_mode TINYINT(1) NOT NULL DEFAULT 0,
   last_seen_at TIMESTAMP NULL DEFAULT NULL,
@@ -65,4 +67,52 @@ CREATE TABLE IF NOT EXISTS bot_flag (
   resolved TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bot_order (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  company_id INT NOT NULL,
+  bot_channel_user_id INT NOT NULL,
+  customer_name VARCHAR(255) NOT NULL DEFAULT '',
+  customer_phone VARCHAR(50) NOT NULL DEFAULT '',
+  address TEXT NULL,
+  status ENUM('Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled') NOT NULL DEFAULT 'Pending',
+  total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  invoice_url TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_bot_order_company_id (company_id),
+  KEY idx_bot_order_channel_user_id (bot_channel_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS bot_order_item (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id INT NOT NULL,
+  product_id INT NULL,
+  product_name VARCHAR(255) NOT NULL,
+  variant_text VARCHAR(255) NULL,
+  quantity INT NOT NULL DEFAULT 1,
+  unit_price DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  total_price DECIMAL(12, 2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_bot_order_item_order_id (order_id)
+);
+
+CREATE TABLE IF NOT EXISTS bot_order_status_history (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id INT NOT NULL,
+  status ENUM('Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled') NOT NULL,
+  message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_bot_order_status_history_order_id (order_id)
+);
+
+CREATE TABLE IF NOT EXISTS bot_order_status_template (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  company_id INT NOT NULL,
+  status ENUM('Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled') NOT NULL,
+  template TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_bot_order_status_template_company_status (company_id, status)
 );

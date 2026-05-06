@@ -19,6 +19,8 @@ import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -102,5 +104,32 @@ export class BotAdminController {
   @Get('train/history')
   getTrainingHistory(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getTrainingHistory(user);
+  }
+
+  @Get('orders')
+  getOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getOrders(user);
+  }
+
+  @Post('orders/:id/status')
+  updateOrderStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() payload: UpdateOrderStatusDto,
+  ) {
+    return this.botAdminService.updateOrderStatus(user, Number(id), payload);
+  }
+
+  @Get('order-status-templates')
+  getStatusTemplates(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getStatusTemplates(user);
+  }
+
+  @Post('order-status-templates')
+  updateStatusTemplate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() payload: UpdateStatusTemplateDto,
+  ) {
+    return this.botAdminService.updateStatusTemplate(user, payload);
   }
 }
