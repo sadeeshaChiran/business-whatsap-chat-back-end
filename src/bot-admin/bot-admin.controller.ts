@@ -120,6 +120,14 @@ export class BotAdminController {
     return this.botAdminService.updateOrderStatus(user, Number(id), payload);
   }
 
+  @Post('orders/:id/send-invoice')
+  sendOrderInvoice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.botAdminService.sendOrderInvoice(user, Number(id));
+  }
+
   @Get('order-status-templates')
   getStatusTemplates(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getStatusTemplates(user);
