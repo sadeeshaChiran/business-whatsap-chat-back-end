@@ -645,11 +645,13 @@ export class BotAdminService {
     ];
 
     for (const item of order.items ?? []) {
-      const variant = item.variant_text ? ` (${item.variant_text})` : '';
-      const description = `${item.product_name}${variant}`;
+      const description = item.product_name;
       lines.push(
         `${description.padEnd(34).slice(0, 34)} ${String(item.quantity).padStart(3)}  ${this.formatMoney(item.unit_price).padStart(9)}  ${this.formatMoney(item.total_price).padStart(10)}`,
       );
+      if (item.variant_text) {
+        lines.push(`  ${item.variant_text}`);
+      }
     }
 
     lines.push(
