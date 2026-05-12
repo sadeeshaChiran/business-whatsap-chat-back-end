@@ -664,7 +664,9 @@ export class BotAdminService {
 
   private formatMoney(value: unknown) {
     const amount = Number(value || 0);
-    return `Rs ${amount.toLocaleString(undefined, {
+    const symbol = this.getEnvValue('BOT_ORDER_CURRENCY_SYMBOL') ?? 'Rs';
+    const separator = symbol.length === 1 ? '' : ' ';
+    return `${symbol}${separator}${amount.toLocaleString(undefined, {
       minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
       maximumFractionDigits: 2,
     })}`;
