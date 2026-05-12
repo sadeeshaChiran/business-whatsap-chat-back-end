@@ -15,6 +15,7 @@ import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
+import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
@@ -22,6 +23,7 @@ import { BotMessage } from './entities/bot-message.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
 import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
+import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 
 @Injectable()
@@ -41,6 +43,8 @@ export class BotAdminService {
     private readonly flagRepository: Repository<BotFlag>,
     @InjectRepository(BotOrder)
     private readonly orderRepository: Repository<BotOrder>,
+    @InjectRepository(BotOrderItem)
+    private readonly orderItemRepository: Repository<BotOrderItem>,
     @InjectRepository(BotOrderStatusHistory)
     private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
     @InjectRepository(BotOrderStatusTemplate)
@@ -331,6 +335,70 @@ export class BotAdminService {
       order: { id: 'DESC' },
       take: 100,
     });
+  }
+
+  async createOrder(user: AuthenticatedUser, payload: CreateBotOrderDto) {
+    await this.assertAdminAccess(user);
+
+    // Verify channel user exists and belongs to this company
+    const channelUser = await this.channelUserRepository.findOne({
+      where: { id: payload.bot_channel_user_id, company_id: user.company_id },
+    });
+
+    if (!channelUser) {
+      throw new NotFoundException('Channel user not found.');
+    }
+
+    // Create order
+    const order = this.orderRepository.create({
+      company_id: user.company_id,
+      bot_channel_user_id: payload.bot_channel_user_id,
+      customer_name: payload.customer_name,
+      customer_phone: payload.customer_phone,
+      address: payload.address || null,
+      status: 'Pending',
+      total_amount: 0,
+    });
+
+    const savedOrder = await this.orderRepository.save(order);
+
+    // Create order items and calculate total
+    let totalAmount = 0;
+    const items: BotOrderItem[] = [];
+
+    for (const itemPayload of payload.items) {
+      const totalPrice = itemPayload.quantity * itemPayload.unit_price;
+      totalAmount += totalPrice;
+
+      const item = this.orderItemRepository.create({
+        order_id: savedOrder.id,
+        product_name: itemPayload.product_name,
+        variant_text: itemPayload.variant_text || null,
+        quantity: itemPayload.quantity,
+        unit_price: itemPayload.unit_price,
+        total_price: totalPrice,
+      });
+
+      items.push(await this.orderItemRepository.save(item));
+    }
+
+    // Update order with total amount
+    savedOrder.total_amount = totalAmount;
+    await this.orderRepository.save(savedOrder);
+
+    // Create initial status history
+    await this.orderStatusHistoryRepository.save(
+      this.orderStatusHistoryRepository.create({
+        order_id: savedOrder.id,
+        status: 'Pending',
+        message: 'Order created and pending confirmation.',
+      }),
+    );
+
+    return {
+      order: { ...savedOrder, items },
+      message: 'Order created successfully.',
+    };
   }
 
   async updateOrderStatus(

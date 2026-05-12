@@ -21,6 +21,7 @@ import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
+import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -109,6 +110,14 @@ export class BotAdminController {
   @Get('orders')
   getOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getOrders(user);
+  }
+
+  @Post('orders')
+  createOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() payload: CreateBotOrderDto,
+  ) {
+    return this.botAdminService.createOrder(user, payload);
   }
 
   @Post('orders/:id/status')
