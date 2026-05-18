@@ -14,16 +14,17 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { ProductsModule } from './products/products.module';
 import { BotAdminModule } from './bot-admin/bot-admin.module';
+import { getEnvNumber, getEnvValue } from './common/env';
 
 @Module({
   imports: [
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: 'localhost',
-      port: 3306,
-      username: 'root',
-      password: '',
-      database: 'business_health_scanner_db',
+      host: getEnvValue('MYSQL_HOST', 'localhost'),
+      port: getEnvNumber('MYSQL_PORT', 3306),
+      username: getEnvValue('MYSQL_USER', 'root'),
+      password: getEnvValue('MYSQL_PASSWORD', '', { allowEmpty: true }),
+      database: getEnvValue('MYSQL_DATABASE', 'business_health_scanner_db'),
       autoLoadEntities: true,
       synchronize: true,
     }),

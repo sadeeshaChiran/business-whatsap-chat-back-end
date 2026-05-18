@@ -232,7 +232,7 @@ export class BotAdminService {
 
     // Call the Python bot's AI extraction endpoint for better Q&A generation
     try {
-      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -280,7 +280,7 @@ export class BotAdminService {
       : `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`;
     
     try {
-      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -592,6 +592,15 @@ export class BotAdminService {
     return (
       this.getEnvValue('BOT_PUBLIC_BASE_URL') ??
       this.getEnvValue('BOT_PUBLIC_URL') ??
+      this.getEnvValue('BOT_BASE_URL') ??
+      'http://localhost:5005'
+    ).replace(/\/+$/, '');
+  }
+
+  private getBotServiceBaseUrl() {
+    return (
+      this.getEnvValue('BOT_API_BASE_URL') ??
+      this.getEnvValue('BOT_INTERNAL_BASE_URL') ??
       this.getEnvValue('BOT_BASE_URL') ??
       'http://localhost:5005'
     ).replace(/\/+$/, '');

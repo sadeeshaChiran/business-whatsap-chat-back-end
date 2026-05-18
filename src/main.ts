@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { getEnvNumber } from './common/env';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -33,6 +34,6 @@ async function bootstrap() {
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup(`${globalPrefix}/swagger`, app, swaggerDocument);
   app.enableCors();
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(getEnvNumber('PORT', 3000));
 }
 void bootstrap();
