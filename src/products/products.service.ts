@@ -12,6 +12,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductVariant } from './entities/product-variant.entity';
 import { Product } from './entities/product.entity';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
+import { PRODUCT_DATA_SOURCE } from './product-database';
 
 type ImportVariant = {
   variant_name: string;
@@ -36,11 +37,11 @@ type ImportRow = {
 @Injectable()
 export class ProductsService {
   constructor(
-    @InjectRepository(Product)
+    @InjectRepository(Product, PRODUCT_DATA_SOURCE)
     private readonly productRepository: Repository<Product>,
-    @InjectRepository(ProductVariant)
+    @InjectRepository(ProductVariant, PRODUCT_DATA_SOURCE)
     private readonly productVariantRepository: Repository<ProductVariant>,
-    @InjectRepository(ProductCatergory)
+    @InjectRepository(ProductCatergory, PRODUCT_DATA_SOURCE)
     private readonly productCategoryRepository: Repository<ProductCatergory>,
   ) {}
 

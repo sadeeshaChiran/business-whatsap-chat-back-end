@@ -9,7 +9,6 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Company } from '../../company/entities/company.entity';
-
 @Entity()
 @Unique('UQ_users_email', ['email'])
 export class User {
@@ -28,6 +27,8 @@ export class User {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
+  @Column({ type: 'int', nullable: true })
+  company_id: number | null;
 
   @ManyToOne(() => Company, (company) => company.users, {
     nullable: true,

@@ -2,13 +2,17 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { SUPABASE_DATA_SOURCE } from '../common/supabase-database';
 import { Company } from '../company/entities/company.entity';
+import { SupabaseCompanyService } from '../supabase/supabase-company.service';
+import type { CompanyApiShape } from '../supabase/supabase-company.mapper';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
@@ -49,6 +53,8 @@ export class BotAdminService {
     private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
     @InjectRepository(BotOrderStatusTemplate)
     private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
+    @Optional()
+    private readonly supabaseCompanyService?: SupabaseCompanyService,
   ) {}
 
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
@@ -88,10 +94,19 @@ export class BotAdminService {
     };
   }
 
+  private async getCompanyForUser(user: AuthenticatedUser): Promise<CompanyApiShape | Company | null> {
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      try {
+        return await this.supabaseCompanyService.findById(user.company_id);
+      } catch {
+        return null;
+      }
+    }
+    return this.companyRepository.findOne({ where: { id: user.company_id } });
+  }
+
   private async assertAdminAccess(user: AuthenticatedUser) {
-    const company = await this.companyRepository.findOne({
-      where: { id: user.company_id },
-    });
+    const company = await this.getCompanyForUser(user);
 
     if (!company || company.admin_user_id !== user.id) {
       throw new ForbiddenException('Only the company admin can manage bot settings.');
@@ -536,9 +551,7 @@ export class BotAdminService {
       throw new NotFoundException('Order not found.');
     }
 
-    const company = await this.companyRepository.findOne({
-      where: { id: user.company_id },
-    });
+    const company = await this.getCompanyForUser(user);
 
     const invoiceUrl = this.writeInvoicePdf(order, company);
     order.invoice_url = invoiceUrl;
@@ -568,7 +581,7 @@ export class BotAdminService {
     };
   }
 
-  private writeInvoicePdf(order: BotOrder, company: Company | null) {
+  private writeInvoicePdf(order: BotOrder, company: CompanyApiShape | Company | null) {
     const invoiceDir = this.getInvoiceDirectory();
     mkdirSync(invoiceDir, { recursive: true });
 
@@ -626,7 +639,7 @@ export class BotAdminService {
     return match[1].trim().replace(/^['"]|['"]$/g, '');
   }
 
-  private buildInvoiceLines(order: BotOrder, company: Company | null) {
+  private buildInvoiceLines(order: BotOrder, company: CompanyApiShape | Company | null) {
     const companyName = company?.name?.trim() || 'Invoice';
     const companyDetails = [
       company?.address?.trim(),

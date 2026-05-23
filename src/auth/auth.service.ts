@@ -1,13 +1,16 @@
 import {
   ConflictException,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { SUPABASE_DATA_SOURCE } from '../common/supabase-database';
 import { Company } from '../company/entities/company.entity';
 import { Industry } from '../company/industry/entities/industry.entity';
+import { SupabaseCompanyService } from '../supabase/supabase-company.service';
 import { User } from '../users/entities/user.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -37,6 +40,8 @@ export class AuthService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @Optional()
+    private readonly supabaseCompanyService?: SupabaseCompanyService,
   ) {}
 
   private async getRegistrationIndustry(
@@ -70,6 +75,35 @@ export class AuthService {
       throw new ConflictException('User with this email already exists');
     }
 
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      const industry = await this.getRegistrationIndustry(
+        this.dataSource.manager,
+      );
+      const savedCompany = await this.supabaseCompanyService.createForRegistration(
+        registerDto.company.name,
+        industry.id,
+      );
+
+      const user = this.userRepository.create({
+        name: registerDto.name.trim(),
+        email,
+        password_hash: this.hashPassword(registerDto.password),
+        company_id: Number(savedCompany.id),
+      });
+      const savedUser = await this.userRepository.save(user);
+
+      savedCompany.admin_user_id = savedUser.id;
+      await this.supabaseCompanyService.save(savedCompany);
+
+      const persistedUser = await this.userRepository.findOne({
+        where: { id: savedUser.id },
+      });
+      if (!persistedUser) {
+        throw new UnauthorizedException('Unable to load registered user');
+      }
+      return this.buildAuthResponse(persistedUser, savedCompany.name);
+    }
+
     const persistedUser = await this.dataSource.transaction(async (manager) => {
       const industry = await this.getRegistrationIndustry(manager);
 
@@ -91,7 +125,7 @@ export class AuthService {
         name: registerDto.name.trim(),
         email,
         password_hash: this.hashPassword(registerDto.password),
-        company: savedCompany,
+        company_id: savedCompany.id,
       });
 
       const savedUser = await manager.getRepository(User).save(user);
@@ -101,9 +135,7 @@ export class AuthService {
 
       return manager.getRepository(User).findOne({
         where: { id: savedUser.id },
-        relations: {
-          company: true,
-        },
+        relations: { company: true },
       });
     });
 
@@ -111,16 +143,17 @@ export class AuthService {
       throw new UnauthorizedException('Unable to load registered user');
     }
 
-    return this.buildAuthResponse(persistedUser);
+    return this.buildAuthResponse(
+      persistedUser,
+      persistedUser.company?.name,
+    );
   }
 
   async login(loginDto: LoginDto) {
     const email = loginDto.email.trim().toLowerCase();
     const user = await this.userRepository.findOne({
       where: { email },
-      relations: {
-        company: true,
-      },
+      ...(SUPABASE_DATA_SOURCE ? {} : { relations: { company: true } }),
     });
 
     if (!user || !user.is_active) {
@@ -136,22 +169,34 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    return this.buildAuthResponse(user);
+    const companyName = await this.resolveCompanyName(user);
+    return this.buildAuthResponse(user, companyName);
   }
 
   async getProfile(userId: number) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
-      relations: {
-        company: true,
-      },
+      ...(SUPABASE_DATA_SOURCE ? {} : { relations: { company: true } }),
     });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    return this.serializeUser(user);
+    const companyName = await this.resolveCompanyName(user);
+    return this.serializeUser(user, companyName);
+  }
+
+  private async resolveCompanyName(user: User): Promise<string | undefined> {
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService && user.company_id) {
+      try {
+        const company = await this.supabaseCompanyService.findById(user.company_id);
+        return company.name;
+      } catch {
+        return undefined;
+      }
+    }
+    return user.company?.name;
   }
 
   verifyToken(token: string): AuthenticatedUser {
@@ -178,10 +223,7 @@ export class AuthService {
     }
 
     const currentTimestamp = Math.floor(Date.now() / 1000);
-    if (
-      !payload.sub ||
-      payload.exp <= currentTimestamp
-    ) {
+    if (!payload.sub || payload.exp <= currentTimestamp) {
       throw new UnauthorizedException('Token has expired or is invalid');
     }
 
@@ -193,25 +235,24 @@ export class AuthService {
     };
   }
 
-
-  private buildAuthResponse(user: User) {
+  private buildAuthResponse(user: User, companyName?: string) {
     const accessToken = this.generateToken(user);
 
     return {
       access_token: accessToken,
       token_type: 'Bearer',
       expires_in: this.jwtTtlSeconds,
-      user: this.serializeUser(user),
+      user: this.serializeUser(user, companyName),
     };
   }
 
-  private serializeUser(user: User) {
+  private serializeUser(user: User, companyName?: string) {
     return {
       id: user.id,
       name: user.name,
       email: user.email,
-      company_id: user.company?.id ?? 0,
-      company_name: user.company?.name,
+      company_id: user.company_id ?? user.company?.id ?? 0,
+      company_name: companyName ?? user.company?.name,
       is_active: user.is_active,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -224,7 +265,7 @@ export class AuthService {
       sub: user.id,
       name: user.name,
       email: user.email,
-      company_id: user.company?.id ?? 0,
+      company_id: user.company_id ?? user.company?.id ?? 0,
       iat: currentTimestamp,
       exp: currentTimestamp + this.jwtTtlSeconds,
     };

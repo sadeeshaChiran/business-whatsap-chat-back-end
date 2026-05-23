@@ -8,7 +8,6 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../company/entities/company.entity';
 import { User } from '../../users/entities/user.entity';
 import { BotConversation } from './bot-conversation.entity';
 import { BotFlag } from './bot-flag.entity';
@@ -50,10 +49,6 @@ export class BotChannelUser {
 
   @Column({ type: 'timestamp', nullable: true })
   last_seen_at: Date | null;
-
-  @ManyToOne(() => Company, { nullable: false, onDelete: 'RESTRICT', onUpdate: 'CASCADE' })
-  @JoinColumn({ name: 'company_id' })
-  company: Company;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'RESTRICT', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'app_user_id' })

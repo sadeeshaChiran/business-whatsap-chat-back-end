@@ -1,5 +1,4 @@
 import { Column, CreateDateColumn, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
-import { Product } from '../../products/entities/product.entity';
 import { BotOrder } from './bot-order.entity';
 
 @Entity('bot_order_item')
@@ -31,10 +30,6 @@ export class BotOrderItem {
   @ManyToOne(() => BotOrder, (order) => order.items, { nullable: false, onDelete: 'CASCADE', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'order_id' })
   order: BotOrder;
-
-  @ManyToOne(() => Product, { nullable: true, onUpdate: 'CASCADE' })
-  @JoinColumn({ name: 'product_id' })
-  product: Product | null;
 
   @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
   created_at: Date;

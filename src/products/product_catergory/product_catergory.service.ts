@@ -2,22 +2,28 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
+import { SupabaseCompanyService } from '../../supabase/supabase-company.service';
 import { Company } from '../../company/entities/company.entity';
+import { SUPABASE_DATA_SOURCE } from '../../common/supabase-database';
 import { CreateProductCatergoryDto } from './dto/create-product_catergory.dto';
 import { UpdateProductCatergoryDto } from './dto/update-product_catergory.dto';
+import { PRODUCT_DATA_SOURCE } from '../product-database';
 import { ProductCatergory } from './entities/product_catergory.entity';
 
 @Injectable()
 export class ProductCatergoryService {
   constructor(
-    @InjectRepository(ProductCatergory)
+    @InjectRepository(ProductCatergory, PRODUCT_DATA_SOURCE)
     private readonly productCategoryRepository: Repository<ProductCatergory>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @Optional()
+    private readonly supabaseCompanyService?: SupabaseCompanyService,
   ) {}
 
   private async ensureUniqueName(
@@ -47,9 +53,10 @@ export class ProductCatergoryService {
   }
 
   private async ensureCompanyExists(companyId: number) {
-    const exists = await this.companyRepository.exist({
-      where: { id: companyId },
-    });
+    const exists =
+      SUPABASE_DATA_SOURCE && this.supabaseCompanyService
+        ? await this.supabaseCompanyService.exists(companyId)
+        : await this.companyRepository.exist({ where: { id: companyId } });
 
     if (!exists) {
       throw new NotFoundException(

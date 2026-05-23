@@ -6,9 +6,10 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { PRODUCT_DATA_SOURCE } from '../product-database';
 import { Product } from './product.entity';
 
-@Entity()
+@Entity(PRODUCT_DATA_SOURCE ? { database: 'supabase' } : {})
 export class ProductVariant {
   @PrimaryGeneratedColumn()
   id: number;

@@ -2,10 +2,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { SUPABASE_DATA_SOURCE } from '../common/supabase-database';
+import { SupabaseCompanyService } from '../supabase/supabase-company.service';
+import { mapSupabaseCompanyToApi } from '../supabase/supabase-company.mapper';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
@@ -18,6 +22,8 @@ export class CompanyService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(Industry)
     private readonly industryRepository: Repository<Industry>,
+    @Optional()
+    private readonly supabaseCompanyService?: SupabaseCompanyService,
   ) {}
 
   private async getIndustryOrFail(id: number): Promise<Industry> {
@@ -30,12 +36,17 @@ export class CompanyService {
     return industry;
   }
 
-  private async findOwnedCompany(id: number) {
+  private async loadIndustry(industryId: number | null): Promise<Industry | null> {
+    if (!industryId) {
+      return null;
+    }
+    return this.industryRepository.findOne({ where: { id: industryId } });
+  }
+
+  private async findOwnedCompanyMysql(id: number) {
     const company = await this.companyRepository.findOne({
       where: { id },
-      relations: {
-        industry: true,
-      },
+      relations: { industry: true },
     });
 
     if (!company) {
@@ -52,11 +63,17 @@ export class CompanyService {
   }
 
   async findCurrent(user: AuthenticatedUser) {
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      const industry = await this.loadIndustry(
+        (await this.supabaseCompanyService.findEntityById(user.company_id))
+          .industry_id,
+      );
+      return this.supabaseCompanyService.findById(user.company_id, industry);
+    }
+
     return this.companyRepository.findOne({
       where: { id: user.company_id },
-      relations: {
-        industry: true,
-      },
+      relations: { industry: true },
     });
   }
 
@@ -65,7 +82,13 @@ export class CompanyService {
       throw new NotFoundException('Company not found');
     }
 
-    return this.findOwnedCompany(id);
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      const entity = await this.supabaseCompanyService.findEntityById(id);
+      const industry = await this.loadIndustry(entity.industry_id);
+      return mapSupabaseCompanyToApi(entity, industry);
+    }
+
+    return this.findOwnedCompanyMysql(id);
   }
 
   async update(
@@ -77,7 +100,45 @@ export class CompanyService {
       throw new NotFoundException('Company not found');
     }
 
-    const company = await this.findOwnedCompany(id);
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      const company = await this.supabaseCompanyService.findEntityById(id);
+
+      if (updateCompanyDto.industry_id !== undefined) {
+        await this.getIndustryOrFail(updateCompanyDto.industry_id);
+        company.industry_id = updateCompanyDto.industry_id;
+      }
+
+      if (updateCompanyDto.name !== undefined) {
+        company.name = updateCompanyDto.name.trim();
+      }
+      if (updateCompanyDto.plan !== undefined) {
+        company.plan = updateCompanyDto.plan.trim();
+      }
+      if (updateCompanyDto.email !== undefined) {
+        company.email = updateCompanyDto.email.trim().toLowerCase();
+      }
+      if (updateCompanyDto.phone !== undefined) {
+        company.phone = updateCompanyDto.phone.trim();
+      }
+      if (updateCompanyDto.address !== undefined) {
+        company.address = updateCompanyDto.address.trim();
+      }
+      if (updateCompanyDto.is_email_nofications !== undefined) {
+        company.is_email_nofications = updateCompanyDto.is_email_nofications;
+      }
+      if (updateCompanyDto.is_weekly_report !== undefined) {
+        company.is_weekly_report = updateCompanyDto.is_weekly_report;
+      }
+      if (updateCompanyDto.is_monthly_report !== undefined) {
+        company.is_monthly_report = updateCompanyDto.is_monthly_report;
+      }
+
+      const saved = await this.supabaseCompanyService.save(company);
+      const industry = await this.loadIndustry(saved.industry_id);
+      return mapSupabaseCompanyToApi(saved, industry);
+    }
+
+    const company = await this.findOwnedCompanyMysql(id);
 
     if (updateCompanyDto.industry_id !== undefined) {
       company.industry = await this.getIndustryOrFail(updateCompanyDto.industry_id);
@@ -112,9 +173,14 @@ export class CompanyService {
       throw new NotFoundException('Company not found');
     }
 
-    const company = await this.findOwnedCompany(id);
-    await this.companyRepository.remove(company);
+    if (SUPABASE_DATA_SOURCE && this.supabaseCompanyService) {
+      const company = await this.supabaseCompanyService.findEntityById(id);
+      await this.supabaseCompanyService.remove(company);
+      return { id };
+    }
 
+    const company = await this.findOwnedCompanyMysql(id);
+    await this.companyRepository.remove(company);
     return { id };
   }
 }

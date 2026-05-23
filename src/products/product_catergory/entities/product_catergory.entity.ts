@@ -2,17 +2,15 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  JoinColumn,
-  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../../company/entities/company.entity';
+import { PRODUCT_DATA_SOURCE } from '../../product-database';
 import { Product } from '../../entities/product.entity';
 
-@Entity()
+@Entity(PRODUCT_DATA_SOURCE ? { database: 'supabase' } : {})
 @Unique('UQ_product_category_company_name', ['company_id', 'name'])
 export class ProductCatergory {
   @PrimaryGeneratedColumn()
@@ -29,14 +27,6 @@ export class ProductCatergory {
 
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
-
-  @ManyToOne(() => Company, {
-    nullable: true,
-    onDelete: 'RESTRICT',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'company_id' })
-  company: Company | null;
 
   @OneToMany(() => Product, (product) => product.category)
   products: Product[];
