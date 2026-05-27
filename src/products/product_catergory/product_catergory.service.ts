@@ -34,7 +34,7 @@ export class ProductCatergoryService {
             .where('category.company_id = :companyId', { companyId })
             .orWhere('category.is_common = true');
         }),
-      )
+      );
 
     if (excludeId) {
       qb.andWhere('category.id != :excludeId', { excludeId });
@@ -47,10 +47,7 @@ export class ProductCatergoryService {
   }
 
   private async ensureCompanyExists(companyId: number) {
-    const exists = await this.companyRepository.exist({
-      where: { id: companyId },
-    });
-
+    const exists = await this.companyRepository.exist({ where: { id: companyId } });
     if (!exists) {
       throw new NotFoundException(
         'Company not found for the current login. Please log out and log in again.',
@@ -76,7 +73,6 @@ export class ProductCatergoryService {
     });
 
     const savedCategory = await this.productCategoryRepository.save(category);
-
     return this.findOne(savedCategory.id, user);
   }
 
@@ -143,14 +139,12 @@ export class ProductCatergoryService {
     });
 
     const savedCategory = await this.productCategoryRepository.save(category);
-
     return this.findOne(savedCategory.id, user);
   }
 
   async remove(id: number, user: AuthenticatedUser) {
     const category = await this.findOne(id, user);
     await this.productCategoryRepository.remove(category);
-
     return { id };
   }
 }

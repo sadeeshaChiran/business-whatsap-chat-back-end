@@ -17,7 +17,7 @@ export class BotConversation {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   bot_channel_user_id: number;
 
   @Column({ type: 'enum', enum: ['open', 'manual', 'closed'], default: 'open' })

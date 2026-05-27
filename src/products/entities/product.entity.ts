@@ -8,8 +8,6 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../company/entities/company.entity';
-import { User } from '../../users/entities/user.entity';
 import { ProductCatergory } from '../product_catergory/entities/product_catergory.entity';
 import { ProductVariant } from './product-variant.entity';
 
@@ -42,13 +40,13 @@ export class Product {
   @Column({ type: 'varchar', length: 50, default: 'In Stock' })
   status: string;
 
-  @Column()
+  @Column({ type: 'int' })
   category_id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   created_by: number;
 
   @Column({ type: 'boolean', default: false })
@@ -57,7 +55,11 @@ export class Product {
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 
-  @Column({ type: 'longblob', nullable: true, select: false })
+  @Column({
+    type: 'bytea',
+    nullable: true,
+    select: false,
+  })
   vector_embedding: Buffer | null;
 
   @ManyToOne(() => ProductCatergory, (category) => category.products, {
@@ -67,22 +69,6 @@ export class Product {
   })
   @JoinColumn({ name: 'category_id' })
   category: ProductCatergory;
-
-  @ManyToOne(() => Company, {
-    nullable: false,
-    onDelete: 'RESTRICT',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'company_id' })
-  company: Company;
-
-  @ManyToOne(() => User, {
-    nullable: false,
-    onDelete: 'RESTRICT',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'created_by' })
-  creator: User;
 
   @OneToMany(() => ProductVariant, (variant) => variant.product, {
     cascade: true,

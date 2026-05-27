@@ -15,19 +15,16 @@ export class BotFlag {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   conversation_id: number;
 
-  @Column({ name: 'bot_channel_user_id' })
+  @Column({ name: 'bot_channel_user_id', type: 'int' })
   bot_channel_user_id: number;
 
-  @Column({
-    type: 'enum',
-    enum: ['anger', 'confusion', 'repeated_failure', 'manual_handoff'],
-  })
+  @Column({ type: 'varchar', length: 50 })
   flag_type: 'anger' | 'confusion' | 'repeated_failure' | 'manual_handoff';
 
-  @Column({ type: 'enum', enum: ['low', 'medium', 'high'] })
+  @Column({ type: 'varchar', length: 20 })
   severity: 'low' | 'medium' | 'high';
 
   @Column({ type: 'text' })

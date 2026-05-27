@@ -2,15 +2,12 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  JoinColumn,
-  ManyToOne,
   PrimaryGeneratedColumn,
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../company/entities/company.entity';
 
-@Entity()
+@Entity('app_user')
 @Unique('UQ_users_email', ['email'])
 export class User {
   @PrimaryGeneratedColumn()
@@ -28,18 +25,12 @@ export class User {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
+  @Column({ type: 'bigint', nullable: true })
+  company_id: number | null;
 
-  @ManyToOne(() => Company, (company) => company.users, {
-    nullable: true,
-    onDelete: 'SET NULL',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'company_id' })
-  company: Company | null;
-
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
 }

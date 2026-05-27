@@ -12,7 +12,6 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductVariant } from './entities/product-variant.entity';
 import { Product } from './entities/product.entity';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
-
 type ImportVariant = {
   variant_name: string;
   variant_value: string;
@@ -53,7 +52,7 @@ export class ProductsService {
       .filter((variant) => variant.variant_name && variant.variant_value);
   }
 
-  private async findOwnedProduct(id: number, companyId: number) {
+  private async findProductEntity(id: number, companyId: number) {
     const product = await this.productRepository.findOne({
       where: { id, company_id: companyId, is_deleted: false },
       relations: ['category', 'variants'],
@@ -64,6 +63,41 @@ export class ProductsService {
     }
 
     return product;
+  }
+
+  private async findOwnedProduct(id: number, companyId: number) {
+    return this.toProductResponse(
+      await this.findProductEntity(id, companyId),
+    );
+  }
+
+  private toProductResponse(product: Product): Product {
+    const variantRow = product.variants?.[0];
+    const flatVariants = variantRow?.variants ?? [];
+
+    return {
+      ...product,
+      variants: flatVariants as unknown as Product['variants'],
+    };
+  }
+
+  private async saveProductVariants(
+    product: Product,
+    variants: ImportVariant[],
+    hasVariants: boolean,
+  ) {
+    await this.productVariantRepository.delete({ product_id: product.id });
+
+    const normalizedVariants = this.normalizeVariants(variants);
+    if (hasVariants && normalizedVariants.length) {
+      await this.productVariantRepository.save(
+        this.productVariantRepository.create({
+          product_id: product.id,
+          product,
+          variants: normalizedVariants,
+        }),
+      );
+    }
   }
 
   private async findCategoryForCompany(id: number, companyId: number) {
@@ -112,15 +146,6 @@ export class ProductsService {
     return category;
   }
 
-  private buildVariantEntities(product: Product, variants: ImportVariant[]) {
-    return this.normalizeVariants(variants).map((variant) =>
-      this.productVariantRepository.create({
-        ...variant,
-        product,
-      }),
-    );
-  }
-
   async create(createProductDto: CreateProductDto, user: AuthenticatedUser) {
     const category = await this.findCategoryForCompany(
       createProductDto.category_id,
@@ -150,13 +175,11 @@ export class ProductsService {
 
     const savedProduct = await this.productRepository.save(product);
 
-    if (savedProduct.has_variants && normalizedVariants.length) {
-      savedProduct.variants = await this.productVariantRepository.save(
-        this.buildVariantEntities(savedProduct, normalizedVariants),
-      );
-    } else {
-      savedProduct.variants = [];
-    }
+    await this.saveProductVariants(
+      savedProduct,
+      normalizedVariants,
+      savedProduct.has_variants,
+    );
 
     return this.findOwnedProduct(savedProduct.id, user.company_id);
   }
@@ -168,11 +191,13 @@ export class ProductsService {
       ...(categoryId ? { category_id: categoryId } : {}),
     };
 
-    return this.productRepository.find({
+    const products = await this.productRepository.find({
       where,
       relations: ['category', 'variants'],
       order: { id: 'DESC' },
     });
+
+    return products.map((product) => this.toProductResponse(product));
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
@@ -184,7 +209,7 @@ export class ProductsService {
     updateProductDto: UpdateProductDto,
     user: AuthenticatedUser,
   ) {
-    const product = await this.findOwnedProduct(id, user.company_id);
+    const product = await this.findProductEntity(id, user.company_id);
 
     if (updateProductDto.category_id !== undefined) {
       product.category = await this.findCategoryForCompany(
@@ -230,22 +255,16 @@ export class ProductsService {
     const savedProduct = await this.productRepository.save(product);
 
     if (updateProductDto.variants !== undefined || updateProductDto.has_variants !== undefined) {
-      await this.productVariantRepository.delete({ product_id: savedProduct.id });
-
-      if (hasVariants && normalizedVariants.length) {
-        await this.productVariantRepository.save(
-          this.buildVariantEntities(savedProduct, normalizedVariants),
-        );
-      }
+      await this.saveProductVariants(savedProduct, normalizedVariants, hasVariants);
     }
 
     return this.findOwnedProduct(savedProduct.id, user.company_id);
   }
 
   async remove(id: number, user: AuthenticatedUser) {
-    const product = await this.findOwnedProduct(id, user.company_id);
-    await this.productVariantRepository.delete({ product_id: product.id });
-    await this.productRepository.remove(product);
+    const product = await this.findProductEntity(id, user.company_id);
+    product.is_deleted = true;
+    await this.productRepository.save(product);
 
     return { id };
   }
@@ -446,9 +465,7 @@ export class ProductsService {
       );
 
       if (row.hasVariants && row.variants.length) {
-        await this.productVariantRepository.save(
-          this.buildVariantEntities(product, row.variants),
-        );
+        await this.saveProductVariants(product, row.variants, row.hasVariants);
       }
 
       createdProducts.push(await this.findOwnedProduct(product.id, user.company_id));

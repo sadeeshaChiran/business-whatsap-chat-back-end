@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Company } from '../company/entities/company.entity';
 import { Industry } from '../company/industry/entities/industry.entity';
 import { User } from '../users/entities/user.entity';
@@ -18,7 +18,6 @@ interface JwtPayload {
   name: string;
   email: string;
   company_id: number;
-
   iat: number;
   exp: number;
 }
@@ -26,148 +25,122 @@ interface JwtPayload {
 @Injectable()
 export class AuthService {
   private readonly jwtSecret =
-    process.env.JWT_SECRET ?? 'business-health-scanner-secret';
+    process.env.JWT_SECRET?.trim() || 'change-me';
+  private readonly jwtSecrets: string[];
   private readonly jwtTtlSeconds = Number(
     process.env.JWT_TTL_SECONDS ?? 60 * 60 * 24 * 7,
   );
 
   constructor(
-    private readonly dataSource: DataSource,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
-  ) {}
+    @InjectRepository(Industry)
+    private readonly industryRepository: Repository<Industry>,
+  ) {
+    const legacySecret = process.env.JWT_SECRET_LEGACY?.trim();
+    this.jwtSecrets = [
+      this.jwtSecret,
+      legacySecret,
+      'business-health-scanner-secret',
+    ].filter((secret, index, secrets): secret is string => {
+      return Boolean(secret) && secrets.indexOf(secret) === index;
+    });
+  }
 
-  private async getRegistrationIndustry(
-    manager: EntityManager,
-  ): Promise<Industry> {
-    const industryRepository = manager.getRepository(Industry);
-    const existingIndustry = await industryRepository.find({
+  private async getRegistrationIndustry(): Promise<Industry> {
+    const existing = await this.industryRepository.find({
       order: { id: 'ASC' },
       take: 1,
     });
-
-    if (existingIndustry.length > 0) {
-      return existingIndustry[0];
+    if (existing.length > 0) {
+      return existing[0];
     }
-
-    const industry = industryRepository.create({
-      name: 'General',
-      is_active: true,
-    });
-
-    return industryRepository.save(industry);
+    return this.industryRepository.save(
+      this.industryRepository.create({ name: 'General', is_active: true }),
+    );
   }
 
   async register(registerDto: RegisterDto) {
     const email = registerDto.email.trim().toLowerCase();
-    const existingUser = await this.userRepository.findOne({
-      where: { email },
-    });
-
+    const existingUser = await this.userRepository.findOne({ where: { email } });
     if (existingUser) {
       throw new ConflictException('User with this email already exists');
     }
 
-    const persistedUser = await this.dataSource.transaction(async (manager) => {
-      const industry = await this.getRegistrationIndustry(manager);
-
-      const company = manager.getRepository(Company).create({
+    const industry = await this.getRegistrationIndustry();
+    const savedCompany = await this.companyRepository.save(
+      this.companyRepository.create({
         name: registerDto.company.name.trim(),
+        status: 'ACTIVE',
         plan: '',
         email: '',
         phone: '',
         address: '',
+        industry_id: industry.id,
         is_email_nofications: true,
         is_weekly_report: true,
         is_monthly_report: true,
-        industry,
-      });
+      }),
+    );
 
-      const savedCompany = await manager.getRepository(Company).save(company);
-
-      const user = manager.getRepository(User).create({
+    const user = await this.userRepository.save(
+      this.userRepository.create({
         name: registerDto.name.trim(),
         email,
         password_hash: this.hashPassword(registerDto.password),
-        company: savedCompany,
-      });
+        company_id: Number(savedCompany.id),
+      }),
+    );
 
-      const savedUser = await manager.getRepository(User).save(user);
+    savedCompany.admin_user_id = user.id;
+    await this.companyRepository.save(savedCompany);
 
-      savedCompany.admin_user_id = savedUser.id;
-      await manager.getRepository(Company).save(savedCompany);
-
-      return manager.getRepository(User).findOne({
-        where: { id: savedUser.id },
-        relations: {
-          company: true,
-        },
-      });
-    });
-
-    if (!persistedUser) {
-      throw new UnauthorizedException('Unable to load registered user');
-    }
-
-    return this.buildAuthResponse(persistedUser);
+    return this.buildAuthResponse(user, savedCompany.name);
   }
 
   async login(loginDto: LoginDto) {
     const email = loginDto.email.trim().toLowerCase();
-    const user = await this.userRepository.findOne({
-      where: { email },
-      relations: {
-        company: true,
-      },
-    });
-
+    const user = await this.userRepository.findOne({ where: { email } });
     if (!user || !user.is_active) {
       throw new UnauthorizedException('Invalid email or password');
     }
-
-    const isPasswordValid = this.verifyPassword(
-      loginDto.password,
-      user.password_hash,
-    );
-
-    if (!isPasswordValid) {
+    if (!this.verifyPassword(loginDto.password, user.password_hash)) {
       throw new UnauthorizedException('Invalid email or password');
     }
-
-    return this.buildAuthResponse(user);
+    const companyName = await this.resolveCompanyName(user);
+    return this.buildAuthResponse(user, companyName);
   }
 
   async getProfile(userId: number) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: {
-        company: true,
-      },
-    });
-
+    const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
+    const companyName = await this.resolveCompanyName(user);
+    return this.serializeUser(user, companyName);
+  }
 
-    return this.serializeUser(user);
+  private async resolveCompanyName(user: User): Promise<string | undefined> {
+    if (!user.company_id) {
+      return undefined;
+    }
+    const company = await this.companyRepository.findOne({
+      where: { id: user.company_id },
+    });
+    return company?.name;
   }
 
   verifyToken(token: string): AuthenticatedUser {
     const [encodedHeader, encodedPayload, signature] = token.split('.');
-
     if (!encodedHeader || !encodedPayload || !signature) {
       throw new UnauthorizedException('Invalid token');
     }
-
     const signedContent = `${encodedHeader}.${encodedPayload}`;
-    const expectedSignature = this.signContent(signedContent);
-
-    if (!this.safeCompare(signature, expectedSignature)) {
+    if (!this.isValidSignature(signedContent, signature)) {
       throw new UnauthorizedException('Invalid token signature');
     }
-
     let payload: JwtPayload;
     try {
       payload = JSON.parse(
@@ -176,15 +149,10 @@ export class AuthService {
     } catch {
       throw new UnauthorizedException('Invalid token payload');
     }
-
     const currentTimestamp = Math.floor(Date.now() / 1000);
-    if (
-      !payload.sub ||
-      payload.exp <= currentTimestamp
-    ) {
+    if (!payload.sub || payload.exp <= currentTimestamp) {
       throw new UnauthorizedException('Token has expired or is invalid');
     }
-
     return {
       id: payload.sub,
       name: payload.name,
@@ -193,25 +161,22 @@ export class AuthService {
     };
   }
 
-
-  private buildAuthResponse(user: User) {
-    const accessToken = this.generateToken(user);
-
+  private buildAuthResponse(user: User, companyName?: string) {
     return {
-      access_token: accessToken,
+      access_token: this.generateToken(user),
       token_type: 'Bearer',
       expires_in: this.jwtTtlSeconds,
-      user: this.serializeUser(user),
+      user: this.serializeUser(user, companyName),
     };
   }
 
-  private serializeUser(user: User) {
+  private serializeUser(user: User, companyName?: string) {
     return {
-      id: user.id,
+      id: Number(user.id),
       name: user.name,
       email: user.email,
-      company_id: user.company?.id ?? 0,
-      company_name: user.company?.name,
+      company_id: user.company_id != null ? Number(user.company_id) : 0,
+      company_name: companyName,
       is_active: user.is_active,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -224,11 +189,10 @@ export class AuthService {
       sub: user.id,
       name: user.name,
       email: user.email,
-      company_id: user.company?.id ?? 0,
+      company_id: user.company_id ?? 0,
       iat: currentTimestamp,
       exp: currentTimestamp + this.jwtTtlSeconds,
     };
-
     const encodedHeader = Buffer.from(
       JSON.stringify({ alg: 'HS256', typ: 'JWT' }),
     ).toString('base64url');
@@ -236,25 +200,25 @@ export class AuthService {
       'base64url',
     );
     const signedContent = `${encodedHeader}.${encodedPayload}`;
-    const signature = this.signContent(signedContent);
-
-    return `${signedContent}.${signature}`;
+    return `${signedContent}.${this.signContent(signedContent)}`;
   }
 
-  private signContent(content: string): string {
-    return createHmac('sha256', this.jwtSecret)
-      .update(content)
-      .digest('base64url');
+  private signContent(content: string, secret = this.jwtSecret): string {
+    return createHmac('sha256', secret).update(content).digest('base64url');
+  }
+
+  private isValidSignature(content: string, signature: string): boolean {
+    return this.jwtSecrets.some((secret) =>
+      this.safeCompare(signature, this.signContent(content, secret)),
+    );
   }
 
   private safeCompare(value: string, expectedValue: string): boolean {
     const valueBuffer = Buffer.from(value);
     const expectedBuffer = Buffer.from(expectedValue);
-
     if (valueBuffer.length !== expectedBuffer.length) {
       return false;
     }
-
     return timingSafeEqual(valueBuffer, expectedBuffer);
   }
 
@@ -266,11 +230,9 @@ export class AuthService {
 
   private verifyPassword(password: string, storedValue: string): boolean {
     const [salt, storedHash] = storedValue.split(':');
-
     if (!salt || !storedHash) {
       return false;
     }
-
     const computedHash = scryptSync(password, salt, 64).toString('hex');
     return this.safeCompare(computedHash, storedHash);
   }

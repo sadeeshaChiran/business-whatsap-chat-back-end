@@ -15,6 +15,7 @@ import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
+import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
@@ -22,13 +23,17 @@ import { BotMessage } from './entities/bot-message.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
 import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
+import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
+import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 
 @Injectable()
 export class BotAdminService {
   constructor(
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @InjectRepository(SupabaseCustomer)
+    private readonly customerRepository: Repository<SupabaseCustomer>,
     @InjectRepository(BotChannelUser)
     private readonly channelUserRepository: Repository<BotChannelUser>,
     @InjectRepository(BotConversation)
@@ -41,6 +46,8 @@ export class BotAdminService {
     private readonly flagRepository: Repository<BotFlag>,
     @InjectRepository(BotOrder)
     private readonly orderRepository: Repository<BotOrder>,
+    @InjectRepository(BotOrderItem)
+    private readonly orderItemRepository: Repository<BotOrderItem>,
     @InjectRepository(BotOrderStatusHistory)
     private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
     @InjectRepository(BotOrderStatusTemplate)
@@ -84,14 +91,28 @@ export class BotAdminService {
     };
   }
 
-  private async assertAdminAccess(user: AuthenticatedUser) {
-    const company = await this.companyRepository.findOne({
-      where: { id: user.company_id },
-    });
+  private async getCompanyForUser(user: AuthenticatedUser): Promise<Company | null> {
+    return this.companyRepository.findOne({ where: { id: user.company_id } });
+  }
 
-    if (!company || company.admin_user_id !== user.id) {
+  private async assertCompanyAccess(user: AuthenticatedUser) {
+    const company = await this.getCompanyForUser(user);
+
+    if (!company) {
+      throw new ForbiddenException('Company not found for the current user.');
+    }
+  }
+
+  private async assertAdminAccess(user: AuthenticatedUser) {
+    const company = await this.getCompanyForUser(user);
+
+    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
       throw new ForbiddenException('Only the company admin can manage bot settings.');
     }
+  }
+
+  private normalizePhoneKey(phone: string): string {
+    return phone.replace(/\D/g, '');
   }
 
   async getUsers(user: AuthenticatedUser, query: BotUsersQueryDto) {
@@ -189,14 +210,85 @@ export class BotAdminService {
 
   async getConversations(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
-    const builder = this.conversationRepository
-      .createQueryBuilder('conversation')
-      .leftJoinAndSelect('conversation.channelUser', 'channelUser')
-      .orderBy('conversation.last_message_at', 'DESC');
+    const companyId = user.company_id;
 
-    builder.where('channelUser.company_id = :companyId', { companyId: user.company_id });
+    const [customers, channelUsers] = await Promise.all([
+      this.customerRepository.find({
+        where: { company_id: companyId },
+        order: { last_seen_at: 'DESC', id: 'DESC' },
+      }),
+      this.channelUserRepository.find({
+        where: { company_id: companyId },
+        relations: ['conversations'],
+      }),
+    ]);
 
-    return builder.getMany();
+    const channelUserByPhone = new Map<string, BotChannelUser>();
+    for (const channelUser of channelUsers) {
+      const phoneKey = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phoneKey) {
+        continue;
+      }
+      const existing = channelUserByPhone.get(phoneKey);
+      if (!existing) {
+        channelUserByPhone.set(phoneKey, channelUser);
+        continue;
+      }
+      const existingSeen = existing.last_seen_at
+        ? new Date(existing.last_seen_at).getTime()
+        : 0;
+      const nextSeen = channelUser.last_seen_at
+        ? new Date(channelUser.last_seen_at).getTime()
+        : 0;
+      if (nextSeen >= existingSeen) {
+        channelUserByPhone.set(phoneKey, channelUser);
+      }
+    }
+
+    return customers.map((customer) => {
+      const phoneKey = this.normalizePhoneKey(customer.customer_phone);
+      const channelUser = phoneKey ? channelUserByPhone.get(phoneKey) : undefined;
+      const latestConversation = channelUser
+        ? [...(channelUser.conversations ?? [])].sort((left, right) => {
+            const leftTime = left.last_message_at
+              ? new Date(left.last_message_at).getTime()
+              : 0;
+            const rightTime = right.last_message_at
+              ? new Date(right.last_message_at).getTime()
+              : 0;
+            return rightTime - leftTime;
+          })[0]
+        : undefined;
+
+      return {
+        customer: {
+          id: customer.id,
+          customer_phone: customer.customer_phone,
+          assigned_instance: customer.assigned_instance,
+          first_seen_at: customer.first_seen_at,
+          last_seen_at: customer.last_seen_at,
+        },
+        channelUser: channelUser
+          ? {
+              id: channelUser.id,
+              platform: channelUser.platform,
+              external_user_id: channelUser.external_user_id,
+              display_name: channelUser.display_name,
+              language: channelUser.language,
+              bot_enabled: channelUser.bot_enabled,
+              manual_mode: channelUser.manual_mode,
+              last_seen_at: channelUser.last_seen_at,
+            }
+          : null,
+        conversation: latestConversation
+          ? {
+              id: latestConversation.id,
+              status: latestConversation.status,
+              last_message_at: latestConversation.last_message_at,
+            }
+          : null,
+      };
+    });
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {
@@ -224,11 +316,11 @@ export class BotAdminService {
   }
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {
-    await this.assertAdminAccess(user);
+    await this.assertCompanyAccess(user);
 
     // Call the Python bot's AI extraction endpoint for better Q&A generation
     try {
-      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -266,7 +358,7 @@ export class BotAdminService {
     category?: string,
     content?: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertCompanyAccess(user);
 
     // Convert file to base64 with proper data URL prefix so the bot can detect the mime type
     const mimeType = file.mimetype || 'image/jpeg';
@@ -276,7 +368,7 @@ export class BotAdminService {
       : `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`;
     
     try {
-      const response = await fetch('http://localhost:5005/external/admin/training/upload-raw-content', {
+      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -312,15 +404,50 @@ export class BotAdminService {
   }
 
   async getTrainingHistory(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertCompanyAccess(user);
     const builder = this.trainingRepository
       .createQueryBuilder('training')
       .orderBy('training.created_at', 'DESC')
-      .take(10);
+      .take(100);
 
-    builder.where('training.company_id = :companyId', { companyId: user.company_id });
+    builder
+      .where('training.company_id = :companyId', { companyId: user.company_id })
+      .andWhere('training.is_active = true');
 
     return builder.getMany();
+  }
+
+  async deleteTraining(user: AuthenticatedUser, id: number) {
+    await this.assertCompanyAccess(user);
+    const item = await this.trainingRepository.findOne({
+      where: { id, company_id: user.company_id },
+    });
+    if (!item) {
+      throw new NotFoundException('Training item not found.');
+    }
+
+    item.is_active = false;
+    await this.trainingRepository.save(item);
+
+    try {
+      const response = await fetch(`${this.getBotServiceBaseUrl()}/bot/sync/training/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: user.company_id,
+          user_id: user.id,
+          training_id: id,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        console.error('Bot training vector delete failed:', response.status, body);
+      }
+    } catch (error) {
+      console.error('Failed to delete training vector from bot:', error);
+    }
+
+    return { id, removed: true };
   }
 
   async getOrders(user: AuthenticatedUser) {
@@ -331,6 +458,70 @@ export class BotAdminService {
       order: { id: 'DESC' },
       take: 100,
     });
+  }
+
+  async createOrder(user: AuthenticatedUser, payload: CreateBotOrderDto) {
+    await this.assertAdminAccess(user);
+
+    // Verify channel user exists and belongs to this company
+    const channelUser = await this.channelUserRepository.findOne({
+      where: { id: payload.bot_channel_user_id, company_id: user.company_id },
+    });
+
+    if (!channelUser) {
+      throw new NotFoundException('Channel user not found.');
+    }
+
+    // Create order
+    const order = this.orderRepository.create({
+      company_id: user.company_id,
+      bot_channel_user_id: payload.bot_channel_user_id,
+      customer_name: payload.customer_name,
+      customer_phone: payload.customer_phone,
+      address: payload.address || null,
+      status: 'Pending',
+      total_amount: 0,
+    });
+
+    const savedOrder = await this.orderRepository.save(order);
+
+    // Create order items and calculate total
+    let totalAmount = 0;
+    const items: BotOrderItem[] = [];
+
+    for (const itemPayload of payload.items) {
+      const totalPrice = itemPayload.quantity * itemPayload.unit_price;
+      totalAmount += totalPrice;
+
+      const item = this.orderItemRepository.create({
+        order_id: savedOrder.id,
+        product_name: itemPayload.product_name,
+        variant_text: itemPayload.variant_text || null,
+        quantity: itemPayload.quantity,
+        unit_price: itemPayload.unit_price,
+        total_price: totalPrice,
+      });
+
+      items.push(await this.orderItemRepository.save(item));
+    }
+
+    // Update order with total amount
+    savedOrder.total_amount = totalAmount;
+    await this.orderRepository.save(savedOrder);
+
+    // Create initial status history
+    await this.orderStatusHistoryRepository.save(
+      this.orderStatusHistoryRepository.create({
+        order_id: savedOrder.id,
+        status: 'Pending',
+        message: 'Order created and pending confirmation.',
+      }),
+    );
+
+    return {
+      order: { ...savedOrder, items },
+      message: 'Order created successfully.',
+    };
   }
 
   async updateOrderStatus(
@@ -468,9 +659,7 @@ export class BotAdminService {
       throw new NotFoundException('Order not found.');
     }
 
-    const company = await this.companyRepository.findOne({
-      where: { id: user.company_id },
-    });
+    const company = await this.getCompanyForUser(user);
 
     const invoiceUrl = this.writeInvoicePdf(order, company);
     order.invoice_url = invoiceUrl;
@@ -529,6 +718,15 @@ export class BotAdminService {
     ).replace(/\/+$/, '');
   }
 
+  private getBotServiceBaseUrl() {
+    return (
+      this.getEnvValue('BOT_API_BASE_URL') ??
+      this.getEnvValue('BOT_INTERNAL_BASE_URL') ??
+      this.getEnvValue('BOT_BASE_URL') ??
+      'http://localhost:5005'
+    ).replace(/\/+$/, '');
+  }
+
   private getEnvValue(key: string) {
     const direct = process.env[key]?.trim();
     if (direct) {
@@ -577,11 +775,13 @@ export class BotAdminService {
     ];
 
     for (const item of order.items ?? []) {
-      const variant = item.variant_text ? ` (${item.variant_text})` : '';
-      const description = `${item.product_name}${variant}`;
+      const description = item.product_name;
       lines.push(
         `${description.padEnd(34).slice(0, 34)} ${String(item.quantity).padStart(3)}  ${this.formatMoney(item.unit_price).padStart(9)}  ${this.formatMoney(item.total_price).padStart(10)}`,
       );
+      if (item.variant_text) {
+        lines.push(`  ${item.variant_text}`);
+      }
     }
 
     lines.push(
@@ -596,7 +796,9 @@ export class BotAdminService {
 
   private formatMoney(value: unknown) {
     const amount = Number(value || 0);
-    return `Rs ${amount.toLocaleString(undefined, {
+    const symbol = this.getEnvValue('BOT_ORDER_CURRENCY_SYMBOL') ?? 'Rs';
+    const separator = symbol.length === 1 ? '' : ' ';
+    return `${symbol}${separator}${amount.toLocaleString(undefined, {
       minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
       maximumFractionDigits: 2,
     })}`;

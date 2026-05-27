@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { DynamicModule, Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
+import { getSupabaseDatabaseUrl } from './common/supabase-database';
 import { AuthModule } from './auth/auth.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { IncomeModule } from './income/income.module';
@@ -14,19 +15,29 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { ProductsModule } from './products/products.module';
 import { BotAdminModule } from './bot-admin/bot-admin.module';
+import { CustomersModule } from './customers/customers.module';
+import { SupabaseModule } from './supabase/supabase.module';
+
+const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
+if (!supabaseDatabaseUrl) {
+  throw new Error('PRODUCT_DATABASE_URL (or SUPABASE_DATABASE_URL) is required');
+}
+
+const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
+  SupabaseModule,
+  CustomersModule,
+];
 
 @Module({
   imports: [
     TypeOrmModule.forRoot({
-      type: 'mysql',
-      host: 'localhost',
-      port: 3306,
-      username: 'root',
-      password: '',
-      database: 'business_health_scanner_db',
+      type: 'postgres',
+      url: supabaseDatabaseUrl,
       autoLoadEntities: true,
-      synchronize: true,
+      synchronize: false,
+      ssl: { rejectUnauthorized: false },
     }),
+    ...supabaseModules,
     AuthModule,
     ExpensesModule,
     IncomeModule,

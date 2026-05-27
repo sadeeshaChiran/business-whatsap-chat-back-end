@@ -7,7 +7,7 @@ export class BotOrderStatusTemplate {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
   @Column({ type: 'enum', enum: ['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'] })

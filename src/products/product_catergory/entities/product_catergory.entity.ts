@@ -2,14 +2,11 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  JoinColumn,
-  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../../company/entities/company.entity';
 import { Product } from '../../entities/product.entity';
 
 @Entity()
@@ -21,7 +18,7 @@ export class ProductCatergory {
   @Column({ type: 'varchar', length: 100 })
   name: string;
 
-  @Column()
+  @Column({ type: 'int', nullable: true })
   company_id: number | null;
 
   @Column({ type: 'boolean', default: false })
@@ -29,14 +26,6 @@ export class ProductCatergory {
 
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
-
-  @ManyToOne(() => Company, {
-    nullable: true,
-    onDelete: 'RESTRICT',
-    onUpdate: 'CASCADE',
-  })
-  @JoinColumn({ name: 'company_id' })
-  company: Company | null;
 
   @OneToMany(() => Product, (product) => product.category)
   products: Product[];

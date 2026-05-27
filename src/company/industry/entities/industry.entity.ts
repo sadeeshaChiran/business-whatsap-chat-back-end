@@ -2,11 +2,9 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Company } from '../../entities/company.entity';
 
 @Entity()
 export class Industry {
@@ -19,12 +17,9 @@ export class Industry {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
-
-  @OneToMany(() => Company, (company) => company.industry)
-  companies: Company[];
 }

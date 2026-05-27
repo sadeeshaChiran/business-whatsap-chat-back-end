@@ -21,7 +21,7 @@ export class Note {
   @Column({ type: 'text' })
   content: string;
 
-  @Column()
+  @Column({ type: 'int' })
   created_user_id: number;
 
   @Column({ type: 'boolean', default: false })
@@ -43,9 +43,9 @@ export class Note {
   @JoinColumn({ name: 'company_id' })
   company: Company;
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
 }
