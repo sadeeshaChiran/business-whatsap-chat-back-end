@@ -13,11 +13,13 @@ import { BotOrderStatusHistory } from './entities/bot-order-status-history.entit
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
 import { BotOrder } from './entities/bot-order.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
+import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Company,
+      SupabaseCustomer,
       BotChannelUser,
       BotConversation,
       BotMessage,

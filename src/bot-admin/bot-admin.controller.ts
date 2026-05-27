@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
+  ParseIntPipe,
   Post,
   Query,
   UploadedFile,
@@ -105,6 +107,14 @@ export class BotAdminController {
   @Get('train/history')
   getTrainingHistory(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getTrainingHistory(user);
+  }
+
+  @Delete('train/:id')
+  deleteTraining(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.deleteTraining(user, id);
   }
 
   @Get('orders')
