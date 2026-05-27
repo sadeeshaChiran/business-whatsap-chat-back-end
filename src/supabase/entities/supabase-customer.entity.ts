@@ -4,7 +4,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-@Entity({ name: 'customers', database: 'supabase' })
+@Entity({ name: 'customers' })
 export class SupabaseCustomer {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id: number;

@@ -33,10 +33,10 @@ export class IncomeCatergory {
   @OneToMany(() => Income, (income) => income.incomeCategory)
   income: Income[];
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
 
   @ManyToOne(() => Company, (company) => company.incomeCategories, {

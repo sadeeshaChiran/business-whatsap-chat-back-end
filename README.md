@@ -96,3 +96,10 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+
+
+
+python api/scripts/seed_sample_products.py --company-id 12 --created-by 5
+# Remove old seed rows for that company, then insert again
+python api/scripts/seed_sample_products.py --company-id 12 --reset

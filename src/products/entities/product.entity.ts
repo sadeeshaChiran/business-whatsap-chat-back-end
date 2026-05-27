@@ -8,11 +8,10 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { PRODUCT_DATA_SOURCE } from '../product-database';
 import { ProductCatergory } from '../product_catergory/entities/product_catergory.entity';
 import { ProductVariant } from './product-variant.entity';
 
-@Entity(PRODUCT_DATA_SOURCE ? { database: 'supabase' } : {})
+@Entity()
 export class Product {
   @PrimaryGeneratedColumn()
   id: number;
@@ -41,13 +40,13 @@ export class Product {
   @Column({ type: 'varchar', length: 50, default: 'In Stock' })
   status: string;
 
-  @Column()
+  @Column({ type: 'int' })
   category_id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   created_by: number;
 
   @Column({ type: 'boolean', default: false })
@@ -57,7 +56,7 @@ export class Product {
   is_deleted: boolean;
 
   @Column({
-    type: PRODUCT_DATA_SOURCE ? 'bytea' : 'longblob',
+    type: 'bytea',
     nullable: true,
     select: false,
   })

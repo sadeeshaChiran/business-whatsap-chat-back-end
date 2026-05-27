@@ -6,7 +6,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { SUPABASE_DATA_SOURCE } from '../common/supabase-database';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -14,7 +13,7 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 @Injectable()
 export class CustomersService {
   constructor(
-    @InjectRepository(SupabaseCustomer, SUPABASE_DATA_SOURCE)
+    @InjectRepository(SupabaseCustomer)
     private readonly customerRepository: Repository<SupabaseCustomer>,
   ) {}
 

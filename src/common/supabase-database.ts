@@ -7,8 +7,7 @@ export function getSupabaseDatabaseUrl(): string {
   );
 }
 
-/** Named TypeORM connection for Supabase Postgres; undefined = use MySQL fallbacks. */
+/** Legacy named connection; app uses a single default Postgres pool now. */
 export const SUPABASE_DATA_SOURCE = getSupabaseDatabaseUrl() ? 'supabase' : undefined;
 
-/** @deprecated Use SUPABASE_DATA_SOURCE */
 export const PRODUCT_DATA_SOURCE = SUPABASE_DATA_SOURCE;

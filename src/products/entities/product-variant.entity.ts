@@ -6,22 +6,23 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { PRODUCT_DATA_SOURCE } from '../product-database';
 import { Product } from './product.entity';
 
-@Entity(PRODUCT_DATA_SOURCE ? { database: 'supabase' } : {})
+export type ProductVariantOption = {
+  variant_name: string;
+  variant_value: string;
+};
+
+@Entity()
 export class ProductVariant {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   product_id: number;
 
-  @Column({ type: 'varchar', length: 100 })
-  variant_name: string;
-
-  @Column({ type: 'varchar', length: 100 })
-  variant_value: string;
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  variants: ProductVariantOption[];
 
   @ManyToOne(() => Product, (product) => product.variants, {
     nullable: false,
@@ -31,6 +32,6 @@ export class ProductVariant {
   @JoinColumn({ name: 'product_id' })
   product: Product;
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 }

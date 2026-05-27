@@ -16,10 +16,10 @@ export class Income {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
-  @Column({ type: 'datetime' })
+  @Column({ type: 'timestamp' })
   date: Date;
 
   @Column({ type: 'int' })
@@ -28,10 +28,10 @@ export class Income {
   @Column({ type: 'varchar', length: 255 })
   note: string;
 
-  @Column({ type: 'enum', enum: SourseType, default: SourseType.manual })
+  @Column({ type: 'varchar', length: 20, default: SourseType.manual })
   sourse: SourseType;
 
-  @Column()
+  @Column({ type: 'int' })
   created_user_id: number;
 
   @ManyToOne(() => IncomeCatergory, (category) => category.income, {
@@ -50,9 +50,9 @@ export class Income {
   @JoinColumn({ name: 'company_id' })
   company: Company;
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
 }

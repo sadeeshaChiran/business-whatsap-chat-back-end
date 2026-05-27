@@ -6,10 +6,10 @@ export class BotOrderItem {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   order_id: number;
 
-  @Column({ nullable: true })
+  @Column({ type: 'int', nullable: true })
   product_id: number | null;
 
   @Column({ type: 'varchar', length: 255 })

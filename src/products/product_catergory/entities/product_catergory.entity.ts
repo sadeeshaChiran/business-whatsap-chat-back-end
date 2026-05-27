@@ -7,10 +7,9 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { PRODUCT_DATA_SOURCE } from '../../product-database';
 import { Product } from '../../entities/product.entity';
 
-@Entity(PRODUCT_DATA_SOURCE ? { database: 'supabase' } : {})
+@Entity()
 @Unique('UQ_product_category_company_name', ['company_id', 'name'])
 export class ProductCatergory {
   @PrimaryGeneratedColumn()
@@ -19,7 +18,7 @@ export class ProductCatergory {
   @Column({ type: 'varchar', length: 100 })
   name: string;
 
-  @Column()
+  @Column({ type: 'int', nullable: true })
   company_id: number | null;
 
   @Column({ type: 'boolean', default: false })

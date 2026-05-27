@@ -25,10 +25,10 @@ export class BotOrder {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   bot_channel_user_id: number;
 
   @Column({ type: 'varchar', length: 255, default: '' })

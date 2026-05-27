@@ -38,9 +38,8 @@ CREATE INDEX IF NOT EXISTS idx_product_is_deleted ON product (is_deleted);
 
 CREATE TABLE IF NOT EXISTS product_variant (
   id SERIAL PRIMARY KEY,
-  product_id INTEGER NOT NULL REFERENCES product (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  variant_name VARCHAR(100) NOT NULL,
-  variant_value VARCHAR(100) NOT NULL,
+  product_id INTEGER NOT NULL UNIQUE REFERENCES product (id) ON DELETE CASCADE ON UPDATE CASCADE,
+  variants JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

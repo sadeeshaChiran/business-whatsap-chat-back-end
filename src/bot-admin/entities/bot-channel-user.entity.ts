@@ -17,7 +17,7 @@ export class BotChannelUser {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   company_id: number;
 
   @Column({ type: 'int', nullable: true })

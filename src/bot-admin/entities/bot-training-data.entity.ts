@@ -14,7 +14,7 @@ export class BotTrainingData {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ nullable: true })
+  @Column({ type: 'int', nullable: true })
   company_id: number | null;
 
   @Column({ type: 'varchar', length: 100, default: '' })
@@ -32,16 +32,16 @@ export class BotTrainingData {
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
-  @Column({ type: 'longblob', nullable: true, select: false })
+  @Column({ type: 'bytea', nullable: true, select: false })
   vector_embedding: Buffer | null;
 
   @ManyToOne(() => Company, { nullable: true, onDelete: 'SET NULL', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'company_id' })
   company: Company | null;
 
-  @CreateDateColumn({ type: 'timestamp', name: 'created_at' })
+  @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
+  @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
 }

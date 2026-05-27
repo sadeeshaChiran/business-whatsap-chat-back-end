@@ -14,7 +14,7 @@ export class BotMessage {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ type: 'int' })
   conversation_id: number;
 
   @Column({ type: 'enum', enum: ['inbound', 'outbound'] })
