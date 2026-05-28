@@ -26,6 +26,7 @@ import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
 import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
+import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 
 @Injectable()
 export class BotAdminService {
@@ -52,7 +53,28 @@ export class BotAdminService {
     private readonly orderStatusHistoryRepository: Repository<BotOrderStatusHistory>,
     @InjectRepository(BotOrderStatusTemplate)
     private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
+    @InjectRepository(WhatsappChannel)
+    private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
   ) {}
+
+  private getEvolutionConfig() {
+    // User may paste Evolution Manager URL (ends with /manager). API base is root.
+    const rawBase =
+      (process.env.EVOLUTION_API_BASE ?? process.env.EVOLUTION_BASE_URL ?? '').trim();
+    // Some deployments proxy Evolution API under `/manager` (same origin as Manager UI).
+    const base = rawBase.replace(/\/+$/, '');
+    const secureKey =
+      (process.env.EVOLUTION_API_KEY ?? process.env.EVOLUTION_SECURE_KEY ?? '').trim();
+    return { base, secureKey, enabled: Boolean(base && secureKey) };
+  }
+
+  private async resolveCompanyWhatsappChannel(companyId: number) {
+    return this.whatsappChannelRepository.findOne({
+      where: { company_id: companyId },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      order: { id: 'ASC' as any },
+    });
+  }
 
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
     Pending: 'Your order  is pending.',
@@ -548,7 +570,11 @@ export class BotAdminService {
         message,
       }),
     );
-    await this.sendWhatsappStatusMessage(saved.channelUser?.external_user_id, message);
+    await this.sendWhatsappStatusMessage(
+      user.company_id,
+      saved.channelUser?.external_user_id,
+      message,
+    );
     return { order: saved, message };
   }
 
@@ -596,10 +622,52 @@ export class BotAdminService {
       .replace(/\{invoiceUrl\}/g, order.invoice_url || '');
   }
 
-  private async sendWhatsappStatusMessage(phone: string | undefined, message: string) {
+  private async sendWhatsappStatusMessage(
+    companyId: number,
+    phone: string | undefined,
+    message: string,
+  ) {
+    const cleanedPhone = String(phone ?? '').replace(/\D/g, '');
+    if (!cleanedPhone) {
+      return false;
+    }
+
+    const evolution = this.getEvolutionConfig();
+    if (evolution.enabled) {
+      const channel = await this.resolveCompanyWhatsappChannel(companyId);
+      const instance = channel?.instance_name?.trim();
+      const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+
+      if (!instance || !apikey) {
+        return false;
+      }
+
+      try {
+        const response = await fetch(
+          `${evolution.base}/message/sendText/${encodeURIComponent(instance)}`,
+          {
+            method: 'POST',
+            headers: {
+              apikey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              number: cleanedPhone,
+              text: message,
+              delay: 1200,
+            }),
+          },
+        );
+        return response.ok;
+      } catch (error) {
+        console.error('Failed to send WhatsApp message via Evolution:', error);
+        return false;
+      }
+    }
+
     const phoneNumberId = this.getEnvValue('WHATSAPP_PHONE_NUMBER_ID');
     const accessToken = this.getEnvValue('WHATSAPP_ACCESS_TOKEN');
-    if (!phone || !phoneNumberId || !accessToken) {
+    if (!phoneNumberId || !accessToken) {
       return false;
     }
 
@@ -615,7 +683,7 @@ export class BotAdminService {
         const cleanMessage = message.replace(pdfUrl, '').trim();
         payload = {
           messaging_product: 'whatsapp',
-          to: phone,
+          to: cleanedPhone,
           type: 'document',
           document: {
             link: pdfUrl,
@@ -627,7 +695,7 @@ export class BotAdminService {
         // Fallback to text
         payload = {
           messaging_product: 'whatsapp',
-          to: phone,
+          to: cleanedPhone,
           type: 'text',
           text: { body: message },
         };
@@ -667,6 +735,7 @@ export class BotAdminService {
 
     const message = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}\n${invoiceUrl}`;
     const sent = await this.sendWhatsappStatusMessage(
+      user.company_id,
       saved.channelUser?.external_user_id,
       message,
     );

@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
-  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -30,9 +29,4 @@ export class CreateNoteColorTagsDto {
   @IsInt()
   @Min(1)
   company_id?: number;
-
-  @ApiProperty({ example: false, required: false })
-  @IsOptional()
-  @IsBoolean()
-  is_common?: boolean;
 }
