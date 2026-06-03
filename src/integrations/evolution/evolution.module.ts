@@ -11,6 +11,7 @@ import { EvolutionService } from './evolution.service';
   imports: [TypeOrmModule.forFeature([Company]), AuthModule, WhatsappModule, CompanyModule],
   controllers: [EvolutionController],
   providers: [EvolutionService],
+  exports: [EvolutionService],
 })
 export class EvolutionModule {}
 

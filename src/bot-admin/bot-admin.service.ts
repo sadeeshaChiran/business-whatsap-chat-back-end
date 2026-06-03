@@ -28,6 +28,7 @@ import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { EvolutionService } from '../integrations/evolution/evolution.service';
 
 @Injectable()
 export class BotAdminService {
@@ -56,6 +57,7 @@ export class BotAdminService {
     private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
+    private readonly evolutionService: EvolutionService,
   ) {}
 
   private getEvolutionConfig() {
@@ -268,7 +270,7 @@ export class BotAdminService {
       }
     }
 
-    return customers.map((customer) => {
+    const rows = customers.map((customer) => {
       const phoneKey = this.normalizePhoneKey(customer.customer_phone);
       const channelUser = phoneKey ? channelUserByPhone.get(phoneKey) : undefined;
       const latestConversation = channelUser
@@ -310,8 +312,223 @@ export class BotAdminService {
               last_message_at: latestConversation.last_message_at,
             }
           : null,
+        evolution_remote_jid: null as string | null,
+        last_message_preview: null as string | null,
       };
     });
+
+    return this.mergeEvolutionInboxChats(user.company_id, rows);
+  }
+
+  /** Load chats from Evolution API (same source as Manager → Chat). */
+  private async mergeEvolutionInboxChats(
+    companyId: number,
+    rows: Array<{
+      customer: {
+        id: number;
+        customer_phone: string;
+        assigned_instance: string | null;
+        first_seen_at: Date | string;
+        last_seen_at: Date | string;
+      };
+      channelUser: Record<string, unknown> | null;
+      conversation: {
+        id: number;
+        status: string;
+        last_message_at: Date | string | null;
+      } | null;
+      evolution_remote_jid: string | null;
+      last_message_preview: string | null;
+    }>,
+  ) {
+    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const instance = channel?.instance_name?.trim();
+    if (!instance) {
+      return rows;
+    }
+
+    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
+    if (!apikey) {
+      return rows;
+    }
+
+    try {
+      const chats = await this.evolutionService.findChats(instance, apikey);
+      const byPhone = new Map<string, number>();
+      for (let index = 0; index < rows.length; index += 1) {
+        const phone = this.normalizePhoneKey(rows[index].customer.customer_phone);
+        if (phone) {
+          byPhone.set(phone, index);
+        }
+      }
+
+      for (const chat of chats) {
+        const phone = chat.phone;
+        if (!phone) {
+          continue;
+        }
+        const existingIndex = byPhone.get(phone);
+        if (existingIndex != null) {
+          const row = rows[existingIndex];
+          row.evolution_remote_jid = chat.remote_jid;
+          row.last_message_preview = chat.last_message_preview || row.last_message_preview;
+          if (!row.conversation && chat.last_message_at) {
+            row.conversation = {
+              id: 0,
+              status: 'open',
+              last_message_at: chat.last_message_at,
+            };
+          }
+          if (row.channelUser && chat.display_name) {
+            row.channelUser.display_name = chat.display_name;
+          }
+          continue;
+        }
+
+        byPhone.set(phone, rows.length);
+        rows.push({
+          customer: {
+            id: 0,
+            customer_phone: phone,
+            assigned_instance: instance,
+            first_seen_at: chat.last_message_at ?? new Date().toISOString(),
+            last_seen_at: chat.last_message_at ?? new Date().toISOString(),
+          },
+          channelUser: {
+            id: 0,
+            platform: 'whatsapp',
+            external_user_id: phone,
+            display_name: chat.display_name,
+            language: 'English',
+            bot_enabled: true,
+            manual_mode: false,
+            last_seen_at: chat.last_message_at,
+          },
+          conversation: {
+            id: 0,
+            status: 'open',
+            last_message_at: chat.last_message_at,
+          },
+          evolution_remote_jid: chat.remote_jid,
+          last_message_preview: chat.last_message_preview,
+        });
+      }
+    } catch (error) {
+      console.error('Evolution findChats failed:', error);
+    }
+
+    return rows;
+  }
+
+  async getEvolutionInboxMessages(
+    user: AuthenticatedUser,
+    remoteJid: string,
+  ) {
+    await this.assertAdminAccess(user);
+    const jid = remoteJid.trim();
+    if (!jid) {
+      throw new BadRequestException('remoteJid is required.');
+    }
+
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const instance = channel?.instance_name?.trim();
+    if (!instance) {
+      throw new BadRequestException('WhatsApp instance is not configured.');
+    }
+
+    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
+    if (!apikey) {
+      throw new BadRequestException('WhatsApp instance API key is missing.');
+    }
+
+    const messages = await this.evolutionService.findMessages(
+      instance,
+      jid,
+      apikey,
+    );
+
+    return {
+      remote_jid: jid,
+      messages: messages.map((message, index) => ({
+        id: index + 1,
+        direction: message.direction,
+        message_type: message.message_type,
+        platform: 'whatsapp',
+        content: message.content,
+        transcript: null,
+        created_at: message.created_at,
+      })),
+    };
+  }
+
+  async sendEvolutionInboxMessage(
+    user: AuthenticatedUser,
+    remoteJid: string,
+    text: string,
+  ) {
+    await this.assertAdminAccess(user);
+    const trimmed = text.trim();
+    const jid = remoteJid.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message text is required.');
+    }
+    if (!jid) {
+      throw new BadRequestException('remoteJid is required.');
+    }
+
+    const phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
+    if (!phone) {
+      throw new BadRequestException('Invalid WhatsApp JID.');
+    }
+
+    const evolution = this.getEvolutionConfig();
+    if (!evolution.enabled) {
+      throw new BadRequestException(
+        'Evolution API is not configured for sending WhatsApp messages.',
+      );
+    }
+
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const instance = channel?.instance_name?.trim();
+    const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+
+    if (!instance || !apikey) {
+      throw new BadRequestException(
+        'WhatsApp instance is not configured for this company.',
+      );
+    }
+
+    try {
+      const response = await fetch(
+        `${evolution.base}/message/sendText/${encodeURIComponent(instance)}`,
+        {
+          method: 'POST',
+          headers: {
+            apikey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            number: phone,
+            text: trimmed,
+            delay: 1200,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new BadRequestException(
+          body || 'Failed to send WhatsApp message via Evolution.',
+        );
+      }
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new BadRequestException('Failed to send WhatsApp message via Evolution.');
+    }
+
+    return { remote_jid: jid, sent: true, text: trimmed };
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {

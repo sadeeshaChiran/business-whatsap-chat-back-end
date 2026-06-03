@@ -1,5 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
+  parseEvolutionFindChats,
+  parseEvolutionFindMessages,
+  type EvolutionInboxChat,
+  type EvolutionInboxMessage,
+} from './evolution-inbox.util';
+import {
   parseEvolutionQrResponse,
   type EvolutionQrPayload,
 } from './evolution-qr.util';
@@ -7,6 +13,21 @@ import {
 type EvolutionConfig = {
   baseUrl: string;
   apiKey: string;
+};
+
+export type EvolutionInstanceSettingsOverrides = {
+  readMessages?: boolean;
+  alwaysOnline?: boolean;
+  groupsIgnore?: boolean;
+};
+
+export type EvolutionInstanceSettings = {
+  rejectCall: boolean;
+  groupsIgnore: boolean;
+  alwaysOnline: boolean;
+  readMessages: boolean;
+  readStatus: boolean;
+  syncFullHistory: boolean;
 };
 
 @Injectable()
@@ -83,20 +104,232 @@ export class EvolutionService {
     return json as T;
   }
 
+  private getWebhookUrl(): string | null {
+    const url = (process.env.EVOLUTION_WEBHOOK_URL ?? '').trim();
+    return url || null;
+  }
+
+  private getWebhookEvents(): string[] {
+    const raw = (process.env.EVOLUTION_WEBHOOK_EVENTS ?? 'MESSAGES_UPSERT').trim();
+    const events = raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return events.length > 0 ? events : ['MESSAGES_UPSERT'];
+  }
+
+  private webhookByEventsEnabled(): boolean {
+    return (
+      (process.env.EVOLUTION_WEBHOOK_BY_EVENTS ?? 'true').trim().toLowerCase() !==
+      'false'
+    );
+  }
+
+  private webhookBase64Enabled(): boolean {
+    return (
+      (process.env.EVOLUTION_WEBHOOK_BASE64 ?? 'false').trim().toLowerCase() ===
+      'true'
+    );
+  }
+
+  /** Payload for POST /instance/create `webhook` field (Evolution v2). */
+  private buildCreateInstanceWebhook() {
+    const url = this.getWebhookUrl();
+    if (!url) {
+      return undefined;
+    }
+    return {
+      url,
+      byEvents: this.webhookByEventsEnabled(),
+      base64: this.webhookBase64Enabled(),
+      events: this.getWebhookEvents(),
+    };
+  }
+
+  /** Payload for POST /webhook/set/{instance} (Evolution v2). */
+  private buildSetWebhookBody() {
+    const url = this.getWebhookUrl();
+    if (!url) {
+      return null;
+    }
+    return {
+      enabled: true,
+      url,
+      webhookByEvents: this.webhookByEventsEnabled(),
+      webhookBase64: this.webhookBase64Enabled(),
+      events: this.getWebhookEvents(),
+    };
+  }
+
+  isWebhookAutoConfigureEnabled(): boolean {
+    return Boolean(this.getWebhookUrl());
+  }
+
+  /**
+   * Enables instance webhook using EVOLUTION_WEBHOOK_URL and EVOLUTION_WEBHOOK_EVENTS.
+   * No-op when EVOLUTION_WEBHOOK_URL is unset.
+   */
+  async configureInstanceWebhook(
+    instanceName: string,
+    overrideApiKey?: string,
+  ): Promise<unknown | null> {
+    const body = this.buildSetWebhookBody();
+    if (!body) {
+      return null;
+    }
+    return this.request<unknown>(
+      `/webhook/set/${encodeURIComponent(instanceName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      overrideApiKey,
+    );
+  }
+
+  /** Env flag: true unless explicitly false/0/no/off. */
+  private envFlagEnabled(envName: string, defaultEnabled = true): boolean {
+    const raw = process.env[envName]?.trim().toLowerCase();
+    if (!raw) {
+      return defaultEnabled;
+    }
+    if (['false', '0', 'no', 'off'].includes(raw)) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on'].includes(raw)) {
+      return true;
+    }
+    return defaultEnabled;
+  }
+
+  getInstanceSettingsDefaults(): Pick<
+    EvolutionInstanceSettings,
+    'readMessages' | 'alwaysOnline' | 'groupsIgnore'
+  > {
+    return {
+      readMessages: this.envFlagEnabled('EVOLUTION_READ_MESSAGES', true),
+      alwaysOnline: this.envFlagEnabled('EVOLUTION_ALWAYS_ONLINE', true),
+      groupsIgnore: this.envFlagEnabled('EVOLUTION_GROUPS_IGNORE', true),
+    };
+  }
+
+  /** Same toggles as Evolution Manager → instance settings. Env defaults; request can override. */
+  buildInstanceSettingsBody(
+    overrides?: EvolutionInstanceSettingsOverrides,
+  ): EvolutionInstanceSettings {
+    const defaults = this.getInstanceSettingsDefaults();
+    return {
+      rejectCall: false,
+      groupsIgnore: overrides?.groupsIgnore ?? defaults.groupsIgnore,
+      alwaysOnline: overrides?.alwaysOnline ?? defaults.alwaysOnline,
+      readMessages: overrides?.readMessages ?? defaults.readMessages,
+      readStatus: false,
+      syncFullHistory: false,
+    };
+  }
+
+  /**
+   * Apply read-messages / always-online after create or when connected.
+   * Evolution v2: POST /settings/set/{instance}
+   */
+  async applyInstanceSettings(
+    instanceName: string,
+    overrideApiKey?: string,
+    settingsOverrides?: EvolutionInstanceSettingsOverrides,
+  ): Promise<unknown> {
+    const settings = this.buildInstanceSettingsBody(settingsOverrides);
+    try {
+      return await this.request<unknown>(
+        `/settings/set/${encodeURIComponent(instanceName)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settings),
+        },
+        overrideApiKey,
+      );
+    } catch {
+      return await this.request<unknown>(
+        `/settings/set/${encodeURIComponent(instanceName)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reject_call: settings.rejectCall,
+            groups_ignore: settings.groupsIgnore,
+            always_online: settings.alwaysOnline,
+            read_messages: settings.readMessages,
+            read_status: settings.readStatus,
+            sync_full_history: settings.syncFullHistory,
+          }),
+        },
+        overrideApiKey,
+      );
+    }
+  }
+
+  async findChats(instanceName: string, overrideApiKey?: string) {
+    const raw = await this.request<unknown>(
+      `/chat/findChats/${encodeURIComponent(instanceName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      },
+      overrideApiKey,
+    );
+    return parseEvolutionFindChats(raw);
+  }
+
+  async findMessages(
+    instanceName: string,
+    remoteJid: string,
+    overrideApiKey?: string,
+    limit = 80,
+  ): Promise<EvolutionInboxMessage[]> {
+    const raw = await this.request<unknown>(
+      `/chat/findMessages/${encodeURIComponent(instanceName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          where: { key: { remoteJid } },
+          page: 1,
+          offset: limit,
+        }),
+      },
+      overrideApiKey,
+    );
+    return parseEvolutionFindMessages(raw, remoteJid);
+  }
+
   async createInstance(
     instanceName: string,
     phoneDigits?: string,
     overrideApiKey?: string,
+    settingsOverrides?: EvolutionInstanceSettingsOverrides,
   ) {
     const integration =
       (process.env.EVOLUTION_INTEGRATION ?? 'WHATSAPP-BAILEYS').trim();
+    const settings = this.buildInstanceSettingsBody(settingsOverrides);
     const body: Record<string, unknown> = {
       instanceName,
       integration,
       qrcode: true,
+      readMessages: settings.readMessages,
+      alwaysOnline: settings.alwaysOnline,
+      groupsIgnore: settings.groupsIgnore,
+      read_messages: settings.readMessages,
+      always_online: settings.alwaysOnline,
+      groups_ignore: settings.groupsIgnore,
     };
     if (phoneDigits) {
       body.number = phoneDigits;
+    }
+    const webhook = this.buildCreateInstanceWebhook();
+    if (webhook) {
+      body.webhook = webhook;
     }
     return this.request<any>(
       '/instance/create',
