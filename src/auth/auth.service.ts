@@ -157,7 +157,8 @@ export class AuthService {
       id: payload.sub,
       name: payload.name,
       email: payload.email,
-      company_id: payload.company_id ?? 0,
+      company_id:
+        payload.company_id != null ? Number(payload.company_id) : 0,
     };
   }
 
@@ -189,7 +190,8 @@ export class AuthService {
       sub: user.id,
       name: user.name,
       email: user.email,
-      company_id: user.company_id ?? 0,
+      // Postgres BIGINT can deserialize as string; normalize for route guards.
+      company_id: user.company_id != null ? Number(user.company_id) : 0,
       iat: currentTimestamp,
       exp: currentTimestamp + this.jwtTtlSeconds,
     };

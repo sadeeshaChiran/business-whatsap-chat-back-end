@@ -11,6 +11,7 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { WhatsappChannelService } from '../whatsapp/whatsapp-channel.service';
 
 @Injectable()
 export class CompanyService {
@@ -21,6 +22,7 @@ export class CompanyService {
     private readonly industryRepository: Repository<Industry>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelsRepository: Repository<WhatsappChannel>,
+    private readonly whatsappChannelService: WhatsappChannelService,
   ) {}
 
   private async getIndustryOrFail(id: number): Promise<Industry> {
@@ -46,39 +48,10 @@ export class CompanyService {
     if (!Object.keys(patch).length) {
       return;
     }
-
-    const existing = await this.whatsappChannelsRepository.findOne({
-      where: { company_id: companyId },
-      order: { id: 'ASC' },
-    });
-
-    if (existing) {
-      await this.whatsappChannelsRepository.save({
-        ...existing,
-        ...patch,
-        company_name: companyName,
-      });
-      return;
-    }
-
-    const instanceName = patch.instance_name?.trim();
-    const hasEvaluationKey = patch.evaluation_whatsapp_key !== undefined;
-
-    if (!instanceName && !hasEvaluationKey) {
-      return;
-    }
-
-    await this.whatsappChannelsRepository.save(
-      this.whatsappChannelsRepository.create({
-        company_id: companyId,
-        company_name: companyName,
-        instance_name: instanceName || `company-${companyId}`,
-        evaluation_whatsapp_key: patch.evaluation_whatsapp_key ?? null,
-        role_type: 'general',
-        status: 'DISCONNECTED',
-        weight: 1,
-        created_at: new Date(),
-      }),
+    await this.whatsappChannelService.upsertForCompany(
+      companyId,
+      companyName,
+      patch,
     );
   }
 
@@ -105,6 +78,7 @@ export class CompanyService {
       industry,
       whatsapp_instance_name: channel?.instance_name ?? null,
       whatsapp_evaluation_key: channel?.evaluation_whatsapp_key ?? null,
+      whatsapp_status: channel?.status ?? null,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };

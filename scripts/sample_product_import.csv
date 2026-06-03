@@ -1,0 +1,4 @@
+name,description,sku,price,secondary_price_1,secondary_price_2,quantity,status,category,has variants,variant_name_1,variant_value_1,variant_name_2,variant_value_2,variant_name_3,variant_value_3
+"Baby Onesie","Soft cotton onesie","ONESIE-001",1800,1700,0,25,"In Stock","Clothing",yes,"Size","S","Size","M","Color","White"
+"Baby Onesie","Soft cotton onesie","ONESIE-001",1800,1700,0,25,"In Stock","Clothing",yes,"Size","L","Color","Black","",""
+"Baby Wipes Pack","80 sheets wipes","WIPES-80",650,0,0,100,"In Stock","Care",no,"","","","","",""

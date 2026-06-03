@@ -19,10 +19,7 @@ export class NoteColorTagsService {
 
   private async findOwnedNoteColorTags(id: number, companyId: number) {
     const noteColorTags = await this.noteColorTagsRepository.findOne({
-      where: [
-        { id, company: { id: companyId } },
-        { id, is_common: true },
-      ],
+      where: { id, company: { id: companyId } },
       relations: ['company'],
     });
 
@@ -35,7 +32,7 @@ export class NoteColorTagsService {
 
   async create(createNoteColorTagsDto: CreateNoteColorTagsDto, user: AuthenticatedUser) {
     if (
-      !createNoteColorTagsDto.is_common &&
+      createNoteColorTagsDto.company_id !== undefined &&
       createNoteColorTagsDto.company_id !== user.company_id
     ) {
       throw new ForbiddenException(
@@ -47,10 +44,7 @@ export class NoteColorTagsService {
       color_code: createNoteColorTagsDto.color_code.trim(),
       meaning: createNoteColorTagsDto.meaning.trim(),
       name: createNoteColorTagsDto.name?.trim() || null,
-      is_common: createNoteColorTagsDto.is_common ?? false,
-      company: createNoteColorTagsDto.is_common
-        ? null
-        : { id: createNoteColorTagsDto.company_id },
+      company: { id: user.company_id },
     });
 
     return this.noteColorTagsRepository.save(noteColorTags);
@@ -61,7 +55,7 @@ export class NoteColorTagsService {
     user: AuthenticatedUser,
   ) {
     const noteColorTags = createNoteColorTagsDtos.map((colorTag) => {
-      if (!colorTag.is_common && colorTag.company_id !== user.company_id) {
+      if (colorTag.company_id !== undefined && colorTag.company_id !== user.company_id) {
         throw new ForbiddenException(
           'You can only create color tags for your company',
         );
@@ -71,8 +65,7 @@ export class NoteColorTagsService {
         color_code: colorTag.color_code.trim(),
         meaning: colorTag.meaning.trim(),
         name: colorTag.name?.trim() || null,
-        is_common: colorTag.is_common ?? false,
-        company: colorTag.is_common ? null : { id: colorTag.company_id },
+        company: { id: user.company_id },
       });
     });
 
@@ -81,14 +74,14 @@ export class NoteColorTagsService {
 
   async findAll(user: AuthenticatedUser) {
     return this.noteColorTagsRepository.find({
-      where: [{ company: { id: user.company_id } }, { is_common: true }],
+      where: { company: { id: user.company_id } },
       order: { id: 'DESC' },
     });
   }
 
   async findColorCodesByCompany(user: AuthenticatedUser) {
     const noteColorTags = await this.noteColorTagsRepository.find({
-      where: [{ company: { id: user.company_id } }, { is_common: true }],
+      where: { company: { id: user.company_id } },
       order: { id: 'DESC' },
     });
 
@@ -120,14 +113,6 @@ export class NoteColorTagsService {
     if (updateNoteColorTagsDto.name !== undefined) {
       noteColorTags.name = updateNoteColorTagsDto.name.trim() || null;
     }
-    
-    if (updateNoteColorTagsDto.is_common !== undefined) {
-        noteColorTags.is_common = updateNoteColorTagsDto.is_common;
-        if (noteColorTags.is_common) {
-            noteColorTags.company = null;
-        }
-    }
-
     return this.noteColorTagsRepository.save(noteColorTags);
   }
 
