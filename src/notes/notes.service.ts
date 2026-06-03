@@ -35,10 +35,7 @@ export class NotesService {
 
   private async findOwnedColorTag(id: number, companyId: number) {
     const colorTag = await this.colorTagRepository.findOne({
-      where: [
-        { id, company: { id: companyId } },
-        { id, is_common: true },
-      ],
+      where: { id, company: { id: companyId } },
     });
 
     if (!colorTag) {

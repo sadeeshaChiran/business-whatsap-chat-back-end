@@ -7,6 +7,7 @@ import { IndustryModule } from './industry/industry.module';
 import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 
 @Module({
   controllers: [CompanyController],
@@ -15,7 +16,8 @@ import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
     TypeOrmModule.forFeature([Company, Industry, WhatsappChannel]),
     IndustryModule,
     AuthModule,
+    WhatsappModule,
   ],
-  exports: [TypeOrmModule],
+  exports: [CompanyService, TypeOrmModule],
 })
 export class CompanyModule {}
