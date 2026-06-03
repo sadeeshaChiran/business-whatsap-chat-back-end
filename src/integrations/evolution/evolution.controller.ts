@@ -106,7 +106,33 @@ export class EvolutionController {
 
   }
 
+  private settingsOverridesFromDto(body: CreateEvolutionInstanceDto) {
+    const overrides: {
+      readMessages?: boolean;
+      alwaysOnline?: boolean;
+      groupsIgnore?: boolean;
+    } = {};
+    if (typeof body.read_messages === 'boolean') {
+      overrides.readMessages = body.read_messages;
+    }
+    if (typeof body.always_online === 'boolean') {
+      overrides.alwaysOnline = body.always_online;
+    }
+    if (typeof body.groups_ignore === 'boolean') {
+      overrides.groupsIgnore = body.groups_ignore;
+    }
+    return Object.keys(overrides).length > 0 ? overrides : undefined;
+  }
 
+  @Get('instance/settings-defaults')
+  getInstanceSettingsDefaults() {
+    const defaults = this.evolutionService.getInstanceSettingsDefaults();
+    return {
+      read_messages: defaults.readMessages,
+      always_online: defaults.alwaysOnline,
+      groups_ignore: defaults.groupsIgnore,
+    };
+  }
 
   @Post('instance')
 
@@ -154,15 +180,55 @@ export class EvolutionController {
 
 
 
+    const settingsOverrides = this.settingsOverridesFromDto(body);
+
     const result = await this.evolutionService.createInstance(
 
       instanceName,
 
       phoneDigits,
 
+      undefined,
+
+      settingsOverrides,
+
     );
 
     const instanceToken = this.evolutionService.extractInstanceToken(result);
+
+    let webhookConfigured = false;
+    let webhookError: string | null = null;
+
+    if (this.evolutionService.isWebhookAutoConfigureEnabled()) {
+      try {
+        await this.evolutionService.configureInstanceWebhook(
+          instanceName,
+          instanceToken ?? undefined,
+        );
+        webhookConfigured = true;
+      } catch (error) {
+        webhookError =
+          error instanceof BadRequestException
+            ? String(error.message)
+            : 'Failed to configure Evolution webhook for this instance.';
+      }
+    }
+
+    let settingsApplied = false;
+    let settingsError: string | null = null;
+    try {
+      await this.evolutionService.applyInstanceSettings(
+        instanceName,
+        instanceToken ?? undefined,
+        settingsOverrides,
+      );
+      settingsApplied = true;
+    } catch (error) {
+      settingsError =
+        error instanceof BadRequestException
+          ? String(error.message)
+          : 'Failed to apply Evolution instance settings (read messages / always online).';
+    }
 
 
 
@@ -194,6 +260,13 @@ export class EvolutionController {
 
     );
 
+    const connect = await this.resolveConnectPayload(
+      instanceName,
+      instanceToken ?? undefined,
+      phoneDigits,
+      result,
+    );
+
 
 
     return {
@@ -204,12 +277,86 @@ export class EvolutionController {
 
       phone: phoneDigits,
 
-      result,
+      qr_image: connect.qr_image,
+
+      pairing_code: connect.pairing_code,
+
+      link_code: connect.link_code,
+
+      connection_state: connect.connection_state,
+
+      webhook_configured: webhookConfigured,
+
+      webhook_url: this.evolutionService.isWebhookAutoConfigureEnabled()
+        ? process.env.EVOLUTION_WEBHOOK_URL?.trim() ?? null
+        : null,
+
+      webhook_events:
+        process.env.EVOLUTION_WEBHOOK_EVENTS?.trim() || 'MESSAGES_UPSERT',
+
+      webhook_error: webhookError,
+
+      settings_applied: settingsApplied,
+
+      settings_error: settingsError,
+
+      read_messages: this.evolutionService.buildInstanceSettingsBody(settingsOverrides)
+        .readMessages,
+
+      always_online: this.evolutionService.buildInstanceSettingsBody(settingsOverrides)
+        .alwaysOnline,
+
+      groups_ignore: this.evolutionService.buildInstanceSettingsBody(settingsOverrides)
+        .groupsIgnore,
+
+      result: connect.result,
 
       company: savedCompany,
 
     };
 
+  }
+
+  /** QR and pairing code for the dashboard — same options as Get QR. */
+  private async resolveConnectPayload(
+    instanceName: string,
+    instanceApiKey: string | undefined,
+    phoneDigits: string,
+    createResult?: unknown,
+  ) {
+    const parsedCreate = this.evolutionService.parseQrPayload(createResult);
+    if (parsedCreate.qr_image || parsedCreate.pairing_code) {
+      return {
+        qr_image: parsedCreate.qr_image,
+        pairing_code: parsedCreate.pairing_code,
+        link_code: parsedCreate.link_code,
+        connection_state: null as string | null,
+        result: createResult ?? null,
+      };
+    }
+
+    try {
+      const fetched = await this.evolutionService.fetchQrForInstance(
+        instanceName,
+        instanceApiKey,
+        phoneDigits,
+      );
+      return {
+        qr_image: fetched.qr_image,
+        pairing_code: fetched.pairing_code,
+        link_code: fetched.link_code,
+        connection_state: fetched.connection_state,
+        result: fetched.last_raw,
+      };
+    } catch {
+      return {
+        qr_image: null,
+        pairing_code: null,
+        link_code: null,
+        connection_state: null,
+        result: createResult ?? null,
+      };
+    }
   }
 
 
@@ -362,6 +509,16 @@ export class EvolutionController {
 
     );
 
+    let settingsApplied = false;
+    if (status === 'CONNECTED') {
+      try {
+        await this.evolutionService.applyInstanceSettings(instanceName, apiKey);
+        settingsApplied = true;
+      } catch {
+        settingsApplied = false;
+      }
+    }
+
 
 
     const savedCompany = await this.companyService.findOne(
@@ -383,6 +540,8 @@ export class EvolutionController {
       whatsapp_status: status,
 
       connected: status === 'CONNECTED',
+
+      settings_applied: settingsApplied,
 
       company: savedCompany,
 

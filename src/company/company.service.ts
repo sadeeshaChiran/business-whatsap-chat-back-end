@@ -12,6 +12,7 @@ import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../whatsapp/whatsapp-channel.service';
+import { User } from '../users/entities/user.entity';
 
 @Injectable()
 export class CompanyService {
@@ -22,6 +23,8 @@ export class CompanyService {
     private readonly industryRepository: Repository<Industry>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelsRepository: Repository<WhatsappChannel>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly whatsappChannelService: WhatsappChannelService,
   ) {}
 
@@ -55,7 +58,30 @@ export class CompanyService {
     );
   }
 
-  private async toApiCompany(company: Company) {
+  private async resolveLoginEmail(user: AuthenticatedUser): Promise<string> {
+    const account = await this.userRepository.findOne({
+      where: { id: user.id },
+    });
+    return account?.email?.trim().toLowerCase() ?? '';
+  }
+
+  /** Business contact email only — never expose login email as contact. */
+  private resolveContactEmail(
+    company: Company,
+    loginEmail: string,
+  ): string {
+    const stored = (company.email ?? '').trim();
+    const login = loginEmail.trim().toLowerCase();
+    if (!stored) {
+      return '';
+    }
+    if (login && stored.toLowerCase() === login) {
+      return '';
+    }
+    return stored;
+  }
+
+  private async toApiCompany(company: Company, loginEmail?: string) {
     const [industry, channel] = await Promise.all([
       this.loadIndustry(company.industry_id),
       this.whatsappChannelsRepository.findOne({
@@ -63,13 +89,19 @@ export class CompanyService {
         order: { id: 'ASC' },
       }),
     ]);
+    const login = loginEmail ?? '';
+    const contactEmail = this.resolveContactEmail(company, login);
+    const businessAddress = (company.address ?? '').trim();
     return {
       id: Number(company.id),
       name: company.name,
       plan: company.plan ?? '',
-      email: company.email ?? '',
+      /** Business contact email — stored on companies.email, not app_user.email */
+      email: contactEmail,
+      contact_email: contactEmail,
+      login_email: login,
       phone: company.phone ?? '',
-      address: company.address ?? '',
+      address: businessAddress,
       admin_user_id:
         company.admin_user_id != null ? Number(company.admin_user_id) : null,
       is_email_nofications: company.is_email_nofications,
@@ -84,31 +116,56 @@ export class CompanyService {
     };
   }
 
+  private async reloadCompany(id: number): Promise<Company> {
+    const company = await this.companyRepository.findOne({ where: { id } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
+  }
+
   async create(_createCompanyDto: CreateCompanyDto, _user: AuthenticatedUser) {
     throw new ConflictException(
       'Authenticated users already belong to one company. Use update instead.',
     );
   }
 
+  private async clearContactEmailIfMatchesLogin(
+    company: Company,
+    loginEmail: string,
+  ): Promise<Company> {
+    const stored = (company.email ?? '').trim();
+    const login = loginEmail.trim().toLowerCase();
+    if (!stored || !login || stored.toLowerCase() !== login) {
+      return company;
+    }
+    company.email = '';
+    return this.companyRepository.save(company);
+  }
+
   async findCurrent(user: AuthenticatedUser) {
-    const company = await this.companyRepository.findOne({
+    let company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-    return this.toApiCompany(company);
+    const loginEmail = await this.resolveLoginEmail(user);
+    company = await this.clearContactEmailIfMatchesLogin(company, loginEmail);
+    return this.toApiCompany(company, loginEmail);
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
     if (id !== user.company_id) {
       throw new NotFoundException('Company not found');
     }
-    const company = await this.companyRepository.findOne({ where: { id } });
+    let company = await this.companyRepository.findOne({ where: { id } });
     if (!company) {
       throw new NotFoundException('Company not found');
     }
-    return this.toApiCompany(company);
+    const loginEmail = await this.resolveLoginEmail(user);
+    company = await this.clearContactEmailIfMatchesLogin(company, loginEmail);
+    return this.toApiCompany(company, loginEmail);
   }
 
   async update(
@@ -136,7 +193,12 @@ export class CompanyService {
       company.plan = updateCompanyDto.plan.trim();
     }
     if (updateCompanyDto.email !== undefined) {
-      company.email = updateCompanyDto.email.trim().toLowerCase();
+      const loginEmail = await this.resolveLoginEmail(user);
+      let nextEmail = updateCompanyDto.email.trim().toLowerCase();
+      if (loginEmail && nextEmail === loginEmail) {
+        nextEmail = '';
+      }
+      company.email = nextEmail;
     }
     if (updateCompanyDto.phone !== undefined) {
       company.phone = updateCompanyDto.phone.trim();
@@ -168,13 +230,15 @@ export class CompanyService {
       whatsappPatch.company_name = nextCompanyName;
     }
 
-    const saved = await this.companyRepository.save(company);
+    await this.companyRepository.save(company);
 
     if (Object.keys(whatsappPatch).length > 0) {
-      await this.upsertWhatsappChannel(Number(saved.id), nextCompanyName, whatsappPatch);
+      await this.upsertWhatsappChannel(Number(company.id), nextCompanyName, whatsappPatch);
     }
 
-    return this.toApiCompany(saved);
+    const refreshed = await this.reloadCompany(Number(company.id));
+    const loginEmail = await this.resolveLoginEmail(user);
+    return this.toApiCompany(refreshed, loginEmail);
   }
 
   async remove(id: number, user: AuthenticatedUser) {

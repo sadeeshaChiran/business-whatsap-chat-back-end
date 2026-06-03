@@ -68,6 +68,27 @@ export class BotAdminController {
     return this.botAdminService.getConversations(user);
   }
 
+  @Get('conversations/evolution/messages')
+  getEvolutionInboxMessages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('remoteJid') remoteJid: string,
+  ) {
+    return this.botAdminService.getEvolutionInboxMessages(user, remoteJid);
+  }
+
+  @Post('conversations/evolution/messages')
+  sendEvolutionInboxMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() payload: SendConversationMessageDto,
+    @Query('remoteJid') remoteJid: string,
+  ) {
+    return this.botAdminService.sendEvolutionInboxMessage(
+      user,
+      remoteJid,
+      payload.text,
+    );
+  }
+
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
