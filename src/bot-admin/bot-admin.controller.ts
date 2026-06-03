@@ -24,6 +24,7 @@ import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
+import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -73,6 +74,15 @@ export class BotAdminController {
     @Param('id') id: string,
   ) {
     return this.botAdminService.getConversation(user, Number(id));
+  }
+
+  @Post('conversations/:id/messages')
+  sendConversationMessage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: SendConversationMessageDto,
+  ) {
+    return this.botAdminService.sendConversationMessage(user, id, payload.text);
   }
 
   @Post('train')
