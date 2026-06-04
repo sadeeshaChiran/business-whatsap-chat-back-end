@@ -15,6 +15,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { ProductsModule } from './products/products.module';
 import { BotAdminModule } from './bot-admin/bot-admin.module';
+import { BotProxyModule } from './bot-proxy/bot-proxy.module';
 import { CustomersModule } from './customers/customers.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { EvolutionModule } from './integrations/evolution/evolution.module';
@@ -49,6 +50,7 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     ReportsModule,
     ProductsModule,
     BotAdminModule,
+    BotProxyModule,
     EvolutionModule,
   ],
   controllers: [AppController],
