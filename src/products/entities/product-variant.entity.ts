@@ -11,6 +11,10 @@ import { Product } from './product.entity';
 export type ProductVariantOption = {
   variant_name: string;
   variant_value: string;
+  price?: number;
+  secondary_price_1?: number;
+  secondary_price_2?: number;
+  image_url?: string;
 };
 
 @Entity()

@@ -15,6 +15,10 @@ import { ProductCatergory } from './product_catergory/entities/product_catergory
 type ImportVariant = {
   variant_name: string;
   variant_value: string;
+  price?: number;
+  secondary_price_1?: number;
+  secondary_price_2?: number;
+  image_url?: string;
 };
 
 type ImportRow = {
@@ -43,13 +47,54 @@ export class ProductsService {
     private readonly productCategoryRepository: Repository<ProductCatergory>,
   ) {}
 
+  private resolveProductImageUrl(
+    imageUrl: string | undefined | null,
+    hasVariants: boolean,
+  ): string | null {
+    if (hasVariants) {
+      return null;
+    }
+
+    const trimmed = (imageUrl ?? '').trim();
+    return trimmed || null;
+  }
+
   private normalizeVariants(variants?: ImportVariant[]) {
     return (variants ?? [])
-      .map((variant) => ({
-        variant_name: variant.variant_name.trim(),
-        variant_value: variant.variant_value.trim(),
-      }))
-      .filter((variant) => variant.variant_name && variant.variant_value);
+      .map((variant) => {
+        const normalized = {
+          variant_name: variant.variant_name.trim(),
+          variant_value: variant.variant_value.trim(),
+        };
+
+        if (!normalized.variant_name || !normalized.variant_value) {
+          return null;
+        }
+
+        const withPricing: ImportVariant = { ...normalized };
+
+        if (variant.price !== undefined && variant.price !== null) {
+          withPricing.price = Number(variant.price);
+        }
+        if (
+          variant.secondary_price_1 !== undefined &&
+          variant.secondary_price_1 !== null
+        ) {
+          withPricing.secondary_price_1 = Number(variant.secondary_price_1);
+        }
+        if (
+          variant.secondary_price_2 !== undefined &&
+          variant.secondary_price_2 !== null
+        ) {
+          withPricing.secondary_price_2 = Number(variant.secondary_price_2);
+        }
+        if (variant.image_url?.trim()) {
+          withPricing.image_url = variant.image_url.trim();
+        }
+
+        return withPricing;
+      })
+      .filter((variant): variant is ImportVariant => variant !== null);
   }
 
   private async findProductEntity(id: number, companyId: number) {
@@ -153,6 +198,8 @@ export class ProductsService {
     );
 
     const normalizedVariants = this.normalizeVariants(createProductDto.variants);
+    const hasVariants =
+      createProductDto.has_variants ?? normalizedVariants.length > 0;
 
     const product = this.productRepository.create({
       name: createProductDto.name.trim(),
@@ -168,7 +215,11 @@ export class ProductsService {
       category_id: category.id,
       company_id: user.company_id,
       created_by: user.id,
-      has_variants: createProductDto.has_variants ?? normalizedVariants.length > 0,
+      has_variants: hasVariants,
+      image_url: this.resolveProductImageUrl(
+        createProductDto.image_url,
+        hasVariants,
+      ),
       is_deleted: false,
       category,
     });
@@ -251,6 +302,18 @@ export class ProductsService {
         : product.has_variants);
 
     product.has_variants = hasVariants;
+
+    if (
+      updateProductDto.image_url !== undefined ||
+      updateProductDto.has_variants !== undefined
+    ) {
+      product.image_url = this.resolveProductImageUrl(
+        updateProductDto.image_url !== undefined
+          ? updateProductDto.image_url
+          : product.image_url,
+        hasVariants,
+      );
+    }
 
     const savedProduct = await this.productRepository.save(product);
 

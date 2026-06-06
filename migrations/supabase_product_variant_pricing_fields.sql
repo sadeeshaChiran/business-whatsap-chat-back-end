@@ -1,0 +1,25 @@
+-- Optional: documents variant JSONB fields for per-variant price/image.
+-- No ALTER TABLE required — product_variant.variants is already JSONB.
+--
+-- Each array item may include:
+--   variant_name, variant_value (required)
+--   price, secondary_price_1, secondary_price_2, image_url (optional)
+--
+-- Example:
+-- UPDATE product_variant
+-- SET variants = '[
+--   {
+--     "variant_name": "Size / Color",
+--     "variant_value": "M / Red",
+--     "price": 2500,
+--     "secondary_price_1": 2400,
+--     "secondary_price_2": 2300,
+--     "image_url": "https://cdn.example.com/m-red.jpg"
+--   }
+-- ]'::jsonb
+-- WHERE product_id = 1;
+
+-- Verify existing rows (read-only):
+-- SELECT product_id, jsonb_pretty(variants)
+-- FROM product_variant
+-- ORDER BY product_id;

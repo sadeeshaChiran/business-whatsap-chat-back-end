@@ -52,6 +52,9 @@ export class Product {
   @Column({ type: 'boolean', default: false })
   has_variants: boolean;
 
+  @Column({ type: 'text', nullable: true })
+  image_url: string | null;
+
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 

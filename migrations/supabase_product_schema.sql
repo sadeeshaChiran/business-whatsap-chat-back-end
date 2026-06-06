@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS product (
   company_id INTEGER NOT NULL,
   created_by INTEGER NOT NULL,
   has_variants BOOLEAN NOT NULL DEFAULT FALSE,
+  image_url TEXT,
   is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   vector_embedding BYTEA,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
