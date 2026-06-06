@@ -30,6 +30,35 @@ import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity'
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { EvolutionService } from '../integrations/evolution/evolution.service';
 
+type CompanyContactChannelUser = {
+  id: number;
+  platform: string;
+  external_user_id: string;
+  display_name: string;
+  language: string;
+  bot_enabled: boolean;
+  manual_mode: boolean;
+  last_seen_at: Date | string | null;
+};
+
+type CompanyContactRow = {
+  customer: {
+    id: number;
+    customer_phone: string;
+    assigned_instance: string | null;
+    first_seen_at: Date | string;
+    last_seen_at: Date | string;
+  };
+  channelUser: CompanyContactChannelUser | null;
+  conversation: {
+    id: number;
+    status: string;
+    last_message_at: Date | string | null;
+  } | null;
+  evolution_remote_jid: string | null;
+  last_message_preview: string | null;
+};
+
 @Injectable()
 export class BotAdminService {
   constructor(
@@ -140,47 +169,242 @@ export class BotAdminService {
     return phone.replace(/\D/g, '');
   }
 
+  private phoneKeysEquivalent(left: string, right: string): boolean {
+    const a = this.normalizePhoneKey(left);
+    const b = this.normalizePhoneKey(right);
+    if (!a || !b) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    const stripLeadingZeros = (value: string) => value.replace(/^0+/, '') || value;
+    const sa = stripLeadingZeros(a);
+    const sb = stripLeadingZeros(b);
+    if (sa === sb) {
+      return true;
+    }
+    if (sa.length >= 9 && sb.length >= 9) {
+      return sa.endsWith(sb) || sb.endsWith(sa);
+    }
+    return false;
+  }
+
+  private mapEvolutionMessagesToBotMessages(
+    messages: Array<{
+      direction: 'inbound' | 'outbound';
+      message_type: 'text' | 'image' | 'voice' | 'system';
+      content: string;
+      created_at: string;
+    }>,
+  ) {
+    return messages.map((message, index) => ({
+      id: index + 1,
+      direction: message.direction,
+      message_type: message.message_type,
+      platform: 'whatsapp',
+      content: message.content,
+      transcript: null,
+      created_at: message.created_at,
+    }));
+  }
+
+  private async fetchEvolutionMessagesForJid(
+    companyId: number,
+    remoteJid: string,
+    instance: string,
+    apikey: string,
+  ) {
+    const jid = remoteJid.trim();
+    let messages = await this.evolutionService.findMessages(instance, jid, apikey);
+    if (messages.length > 0) {
+      return { remoteJid: jid, messages };
+    }
+
+    const phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
+    if (!phone) {
+      return { remoteJid: jid, messages: [] };
+    }
+
+    try {
+      const chats = await this.evolutionService.findChats(instance, apikey);
+      const matchedChat = chats.find(
+        (item) =>
+          item.remote_jid === jid ||
+          this.phoneKeysEquivalent(item.phone, phone),
+      );
+      const resolvedJid =
+        matchedChat?.remote_jid ?? `${phone}@s.whatsapp.net`;
+      if (resolvedJid !== jid) {
+        messages = await this.evolutionService.findMessages(
+          instance,
+          resolvedJid,
+          apikey,
+        );
+      }
+      return { remoteJid: resolvedJid, messages };
+    } catch (error) {
+      console.error('Evolution fetch messages failed:', error);
+      return { remoteJid: jid, messages: [] };
+    }
+  }
+
+  private async loadEvolutionMessagesForPhone(companyId: number, phone: string) {
+    const normalized = this.normalizePhoneKey(phone);
+    if (!normalized) {
+      return [];
+    }
+
+    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const instance = channel?.instance_name?.trim();
+    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
+    if (!instance || !apikey) {
+      return [];
+    }
+
+    const { messages } = await this.fetchEvolutionMessagesForJid(
+      companyId,
+      `${normalized}@s.whatsapp.net`,
+      instance,
+      apikey,
+    );
+    return this.mapEvolutionMessagesToBotMessages(messages);
+  }
+
+  private dedupeConversationRows(rows: CompanyContactRow[]): CompanyContactRow[] {
+    const merged: CompanyContactRow[] = [];
+
+    for (const row of rows) {
+      const phone =
+        this.normalizePhoneKey(row.customer.customer_phone) ||
+        this.normalizePhoneKey(String(row.channelUser?.external_user_id ?? ''));
+      if (!phone) {
+        merged.push(row);
+        continue;
+      }
+
+      const existingIndex = merged.findIndex((item) => {
+        const itemPhone =
+          this.normalizePhoneKey(item.customer.customer_phone) ||
+          this.normalizePhoneKey(String(item.channelUser?.external_user_id ?? ''));
+        return this.phoneKeysEquivalent(itemPhone, phone);
+      });
+
+      if (existingIndex < 0) {
+        merged.push(row);
+        continue;
+      }
+
+      const existing = merged[existingIndex];
+      const existingTime = existing.conversation?.last_message_at
+        ? new Date(existing.conversation.last_message_at).getTime()
+        : 0;
+      const rowTime = row.conversation?.last_message_at
+        ? new Date(row.conversation.last_message_at).getTime()
+        : 0;
+      const latest = rowTime >= existingTime ? row : existing;
+      const other = latest === row ? existing : row;
+      const conversationId =
+        (existing.conversation?.id ?? 0) > 0
+          ? existing.conversation!.id
+          : (row.conversation?.id ?? 0) > 0
+            ? row.conversation!.id
+            : 0;
+
+      merged[existingIndex] = {
+        ...latest,
+        customer:
+          latest.customer.id > 0
+            ? latest.customer
+            : other.customer.id > 0
+              ? other.customer
+              : latest.customer,
+        channelUser: latest.channelUser?.id
+          ? latest.channelUser
+          : other.channelUser ?? latest.channelUser,
+        conversation:
+          conversationId > 0
+            ? {
+                id: conversationId,
+                status: latest.conversation?.status ?? other.conversation?.status ?? 'open',
+                last_message_at:
+                  latest.conversation?.last_message_at ??
+                  other.conversation?.last_message_at ??
+                  null,
+              }
+            : latest.conversation ?? other.conversation,
+        evolution_remote_jid:
+          latest.evolution_remote_jid ?? other.evolution_remote_jid ?? null,
+        last_message_preview:
+          latest.last_message_preview || other.last_message_preview || null,
+      };
+    }
+
+    return merged.sort((left, right) => {
+      const leftTime = left.conversation?.last_message_at
+        ? new Date(left.conversation.last_message_at).getTime()
+        : 0;
+      const rightTime = right.conversation?.last_message_at
+        ? new Date(right.conversation.last_message_at).getTime()
+        : 0;
+      return rightTime - leftTime;
+    });
+  }
+
   async getUsers(user: AuthenticatedUser, query: BotUsersQueryDto) {
     await this.assertAdminAccess(user);
     const page = query.page ?? 1;
-    const limit = query.limit ?? 20;
+    const limit = query.limit ?? 50;
     const offset = (page - 1) * limit;
 
-    const builder = this.channelUserRepository
-      .createQueryBuilder('channel_user')
-      .leftJoinAndSelect('channel_user.conversations', 'conversation')
-      .orderBy('channel_user.last_seen_at', 'DESC')
-      .addOrderBy('channel_user.id', 'DESC')
-      .skip(offset)
-      .take(limit);
-
-    builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
-
-    const [items, total] = await builder.getManyAndCount();
+    const rows = await this.buildCompanyContactRows(user.company_id);
+    const mapped = rows
+      .map((row) => this.mapContactRowToBotUser(row))
+      .sort((left, right) => {
+        const leftTime = left.last_seen_at ? new Date(left.last_seen_at).getTime() : 0;
+        const rightTime = right.last_seen_at ? new Date(right.last_seen_at).getTime() : 0;
+        return rightTime - leftTime;
+      });
 
     return {
-      items: items.map((item) => ({
-        id: item.id,
-        platform: item.platform,
-        external_user_id: item.external_user_id,
-        display_name: item.display_name,
-        language: item.language,
-        bot_enabled: item.bot_enabled,
-        manual_mode: item.manual_mode,
-        last_seen_at: item.last_seen_at,
-        latest_conversation_id:
-          [...(item.conversations ?? [])]
-            .sort((left, right) => {
-              const leftTime = left.last_message_at ? new Date(left.last_message_at).getTime() : 0;
-              const rightTime = right.last_message_at ? new Date(right.last_message_at).getTime() : 0;
-              return rightTime - leftTime;
-            })[0]?.id ?? null,
-      })),
+      items: mapped.slice(offset, offset + limit),
       pagination: {
         page,
         limit,
-        total,
+        total: mapped.length,
       },
+    };
+  }
+
+  private findChannelUserForPhone(
+    channelUsers: BotChannelUser[],
+    phone: string,
+  ): BotChannelUser | undefined {
+    return channelUsers.find((item) =>
+      this.phoneKeysEquivalent(item.external_user_id, phone),
+    );
+  }
+
+  private mapContactRowToBotUser(row: CompanyContactRow) {
+    const channelUser = row.channelUser;
+    const conversationId = row.conversation?.id ?? 0;
+    return {
+      id: channelUser?.id ?? 0,
+      customer_id: row.customer.id,
+      platform: channelUser?.platform ?? 'whatsapp',
+      external_user_id: channelUser?.external_user_id ?? row.customer.customer_phone,
+      display_name:
+        channelUser?.display_name?.trim() ||
+        row.customer.customer_phone,
+      language: channelUser?.language ?? 'English',
+      bot_enabled: channelUser?.bot_enabled ?? true,
+      manual_mode: channelUser?.manual_mode ?? false,
+      last_seen_at:
+        channelUser?.last_seen_at ??
+        row.customer.last_seen_at ??
+        null,
+      latest_conversation_id: conversationId > 0 ? conversationId : null,
+      evolution_remote_jid: row.evolution_remote_jid ?? null,
     };
   }
 
@@ -235,8 +459,10 @@ export class BotAdminService {
 
   async getConversations(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
-    const companyId = user.company_id;
+    return this.buildCompanyContactRows(user.company_id);
+  }
 
+  private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
     const [customers, channelUsers] = await Promise.all([
       this.customerRepository.find({
         where: { company_id: companyId },
@@ -248,42 +474,38 @@ export class BotAdminService {
       }),
     ]);
 
-    const channelUserByPhone = new Map<string, BotChannelUser>();
-    for (const channelUser of channelUsers) {
-      const phoneKey = this.normalizePhoneKey(channelUser.external_user_id);
-      if (!phoneKey) {
-        continue;
-      }
-      const existing = channelUserByPhone.get(phoneKey);
-      if (!existing) {
-        channelUserByPhone.set(phoneKey, channelUser);
-        continue;
-      }
-      const existingSeen = existing.last_seen_at
-        ? new Date(existing.last_seen_at).getTime()
-        : 0;
-      const nextSeen = channelUser.last_seen_at
-        ? new Date(channelUser.last_seen_at).getTime()
-        : 0;
-      if (nextSeen >= existingSeen) {
-        channelUserByPhone.set(phoneKey, channelUser);
-      }
-    }
+    const mapChannelUser = (channelUser: BotChannelUser): CompanyContactChannelUser => ({
+      id: channelUser.id,
+      platform: channelUser.platform,
+      external_user_id: channelUser.external_user_id,
+      display_name: channelUser.display_name,
+      language: channelUser.language,
+      bot_enabled: channelUser.bot_enabled,
+      manual_mode: channelUser.manual_mode,
+      last_seen_at: channelUser.last_seen_at,
+    });
 
-    const rows = customers.map((customer) => {
-      const phoneKey = this.normalizePhoneKey(customer.customer_phone);
-      const channelUser = phoneKey ? channelUserByPhone.get(phoneKey) : undefined;
-      const latestConversation = channelUser
-        ? [...(channelUser.conversations ?? [])].sort((left, right) => {
-            const leftTime = left.last_message_at
-              ? new Date(left.last_message_at).getTime()
-              : 0;
-            const rightTime = right.last_message_at
-              ? new Date(right.last_message_at).getTime()
-              : 0;
-            return rightTime - leftTime;
-          })[0]
-        : undefined;
+    const latestConversation = (channelUser: BotChannelUser | undefined) => {
+      if (!channelUser) {
+        return undefined;
+      }
+      return [...(channelUser.conversations ?? [])].sort((left, right) => {
+        const leftTime = left.last_message_at
+          ? new Date(left.last_message_at).getTime()
+          : 0;
+        const rightTime = right.last_message_at
+          ? new Date(right.last_message_at).getTime()
+          : 0;
+        return rightTime - leftTime;
+      })[0];
+    };
+
+    const rows: CompanyContactRow[] = customers.map((customer) => {
+      const channelUser = this.findChannelUserForPhone(
+        channelUsers,
+        customer.customer_phone,
+      );
+      const conversation = latestConversation(channelUser);
 
       return {
         customer: {
@@ -293,23 +515,12 @@ export class BotAdminService {
           first_seen_at: customer.first_seen_at,
           last_seen_at: customer.last_seen_at,
         },
-        channelUser: channelUser
+        channelUser: channelUser ? mapChannelUser(channelUser) : null,
+        conversation: conversation
           ? {
-              id: channelUser.id,
-              platform: channelUser.platform,
-              external_user_id: channelUser.external_user_id,
-              display_name: channelUser.display_name,
-              language: channelUser.language,
-              bot_enabled: channelUser.bot_enabled,
-              manual_mode: channelUser.manual_mode,
-              last_seen_at: channelUser.last_seen_at,
-            }
-          : null,
-        conversation: latestConversation
-          ? {
-              id: latestConversation.id,
-              status: latestConversation.status,
-              last_message_at: latestConversation.last_message_at,
+              id: conversation.id,
+              status: conversation.status,
+              last_message_at: conversation.last_message_at,
             }
           : null,
         evolution_remote_jid: null as string | null,
@@ -317,30 +528,49 @@ export class BotAdminService {
       };
     });
 
-    return this.mergeEvolutionInboxChats(user.company_id, rows);
+    for (const channelUser of channelUsers) {
+      const alreadyListed = rows.some(
+        (row) =>
+          row.channelUser?.id === channelUser.id ||
+          this.phoneKeysEquivalent(
+            row.customer.customer_phone,
+            channelUser.external_user_id,
+          ),
+      );
+      if (alreadyListed) {
+        continue;
+      }
+
+      const conversation = latestConversation(channelUser);
+      rows.push({
+        customer: {
+          id: 0,
+          customer_phone: channelUser.external_user_id,
+          assigned_instance: null,
+          first_seen_at: channelUser.created_at,
+          last_seen_at: channelUser.last_seen_at ?? channelUser.created_at,
+        },
+        channelUser: mapChannelUser(channelUser),
+        conversation: conversation
+          ? {
+              id: conversation.id,
+              status: conversation.status,
+              last_message_at: conversation.last_message_at,
+            }
+          : null,
+        evolution_remote_jid: null,
+        last_message_preview: null,
+      });
+    }
+
+    return this.mergeEvolutionInboxChats(companyId, rows);
   }
 
   /** Load chats from Evolution API (same source as Manager → Chat). */
   private async mergeEvolutionInboxChats(
     companyId: number,
-    rows: Array<{
-      customer: {
-        id: number;
-        customer_phone: string;
-        assigned_instance: string | null;
-        first_seen_at: Date | string;
-        last_seen_at: Date | string;
-      };
-      channelUser: Record<string, unknown> | null;
-      conversation: {
-        id: number;
-        status: string;
-        last_message_at: Date | string | null;
-      } | null;
-      evolution_remote_jid: string | null;
-      last_message_preview: string | null;
-    }>,
-  ) {
+    rows: CompanyContactRow[],
+  ): Promise<CompanyContactRow[]> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     const instance = channel?.instance_name?.trim();
     if (!instance) {
@@ -354,21 +584,16 @@ export class BotAdminService {
 
     try {
       const chats = await this.evolutionService.findChats(instance, apikey);
-      const byPhone = new Map<string, number>();
-      for (let index = 0; index < rows.length; index += 1) {
-        const phone = this.normalizePhoneKey(rows[index].customer.customer_phone);
-        if (phone) {
-          byPhone.set(phone, index);
-        }
-      }
 
       for (const chat of chats) {
         const phone = chat.phone;
         if (!phone) {
           continue;
         }
-        const existingIndex = byPhone.get(phone);
-        if (existingIndex != null) {
+        const existingIndex = rows.findIndex((item) =>
+          this.phoneKeysEquivalent(item.customer.customer_phone, phone),
+        );
+        if (existingIndex >= 0) {
           const row = rows[existingIndex];
           row.evolution_remote_jid = chat.remote_jid;
           row.last_message_preview = chat.last_message_preview || row.last_message_preview;
@@ -385,7 +610,6 @@ export class BotAdminService {
           continue;
         }
 
-        byPhone.set(phone, rows.length);
         rows.push({
           customer: {
             id: 0,
@@ -417,7 +641,7 @@ export class BotAdminService {
       console.error('Evolution findChats failed:', error);
     }
 
-    return rows;
+    return this.dedupeConversationRows(rows);
   }
 
   async getEvolutionInboxMessages(
@@ -441,23 +665,17 @@ export class BotAdminService {
       throw new BadRequestException('WhatsApp instance API key is missing.');
     }
 
-    const messages = await this.evolutionService.findMessages(
-      instance,
-      jid,
-      apikey,
-    );
+    const { remoteJid: resolvedJid, messages } =
+      await this.fetchEvolutionMessagesForJid(
+        user.company_id,
+        jid,
+        instance,
+        apikey,
+      );
 
     return {
-      remote_jid: jid,
-      messages: messages.map((message, index) => ({
-        id: index + 1,
-        direction: message.direction,
-        message_type: message.message_type,
-        platform: 'whatsapp',
-        content: message.content,
-        transcript: null,
-        created_at: message.created_at,
-      })),
+      remote_jid: resolvedJid,
+      messages: this.mapEvolutionMessagesToBotMessages(messages),
     };
   }
 
@@ -549,9 +767,14 @@ export class BotAdminService {
       order: { id: 'ASC' },
     });
 
+    const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
+    const evolutionMessages = phone
+      ? await this.loadEvolutionMessagesForPhone(user.company_id, phone)
+      : [];
+
     return {
       conversation,
-      messages,
+      messages: evolutionMessages.length > 0 ? evolutionMessages : messages,
     };
   }
 
