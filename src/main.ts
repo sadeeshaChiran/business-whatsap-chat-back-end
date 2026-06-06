@@ -5,10 +5,12 @@ import { config } from 'dotenv';
 import { resolve } from 'path';
 import { AppModule } from './app.module';
 import { getEnvNumber } from './common/env';
+import { runStartupMigrations } from './common/run-startup-migrations';
 
 config({ path: resolve(process.cwd(), '.env') });
 
 async function bootstrap() {
+  await runStartupMigrations();
   const app = await NestFactory.create(AppModule);
   const globalPrefix = 'v1/api';
   app.setGlobalPrefix(globalPrefix);

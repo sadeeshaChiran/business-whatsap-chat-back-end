@@ -76,6 +76,14 @@ export class CreateProductDto {
   @IsBoolean()
   has_variants?: boolean;
 
+  @ApiPropertyOptional({
+    example: 'https://cdn.example.com/product.jpg',
+    description: 'Main product image when has_variants is false',
+  })
+  @IsOptional()
+  @IsString()
+  image_url?: string;
+
   @ApiPropertyOptional({ type: [CreateProductVariantDto] })
   @IsOptional()
   @IsArray()

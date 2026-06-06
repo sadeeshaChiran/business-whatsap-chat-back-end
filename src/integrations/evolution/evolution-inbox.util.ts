@@ -218,7 +218,12 @@ export function parseEvolutionFindMessages(
       pickString(key, ['remoteJid', 'remote_jid']) ||
       pickString(record, ['remoteJid', 'remote_jid']) ||
       fallbackJid;
-    const fromMe = Boolean(key.fromMe ?? record.fromMe ?? record.from_me);
+    const fromMeRaw = key.fromMe ?? record.fromMe ?? record.from_me;
+    const fromMe =
+      fromMeRaw === true ||
+      fromMeRaw === 1 ||
+      fromMeRaw === 'true' ||
+      fromMeRaw === '1';
     const id =
       pickString(key, ['id']) ||
       pickString(record, ['id']) ||
@@ -230,6 +235,13 @@ export function parseEvolutionFindMessages(
       new Date().toISOString();
     const content = extractMessageText(record);
     const rawType = pickString(record, ['messageType', 'message_type']);
+    const isMedia =
+      rawType.toLowerCase().includes('image') ||
+      content.startsWith('http') ||
+      content.startsWith('[image');
+    if (!content.trim() && !isMedia) {
+      continue;
+    }
 
     messages.push({
       id,

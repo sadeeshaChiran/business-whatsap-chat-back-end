@@ -286,22 +286,43 @@ export class EvolutionService {
     instanceName: string,
     remoteJid: string,
     overrideApiKey?: string,
-    limit = 80,
+    limit = 150,
   ): Promise<EvolutionInboxMessage[]> {
+    const body = {
+      where: { key: { remoteJid } },
+      page: 1,
+      offset: limit,
+      limit,
+    };
     const raw = await this.request<unknown>(
       `/chat/findMessages/${encodeURIComponent(instanceName)}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+      overrideApiKey,
+    );
+    const parsed = parseEvolutionFindMessages(raw, remoteJid);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+
+    // Some Evolution builds expect only `limit` (no nested where shape).
+    const fallbackRaw = await this.request<unknown>(
+      `/chat/findMessages/${encodeURIComponent(instanceName)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          where: { key: { remoteJid } },
+          where: { remoteJid },
           page: 1,
-          offset: limit,
+          limit,
         }),
       },
       overrideApiKey,
     );
-    return parseEvolutionFindMessages(raw, remoteJid);
+    return parseEvolutionFindMessages(fallbackRaw, remoteJid);
   }
 
   async createInstance(
