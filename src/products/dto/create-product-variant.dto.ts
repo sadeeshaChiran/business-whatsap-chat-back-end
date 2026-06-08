@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -44,4 +45,17 @@ export class CreateProductVariantDto {
   @IsOptional()
   @IsString()
   image_url?: string;
+
+  @ApiPropertyOptional({ example: 10, minimum: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  quantity?: number;
+
+  @ApiPropertyOptional({ example: 'RED-M-01', maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  sku?: string;
 }
