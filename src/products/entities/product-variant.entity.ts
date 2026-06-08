@@ -14,6 +14,8 @@ export type ProductVariantOption = {
   price?: number;
   secondary_price_1?: number;
   secondary_price_2?: number;
+  quantity?: number;
+  sku?: string;
   image_url?: string;
 };
 

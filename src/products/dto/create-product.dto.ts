@@ -78,11 +78,26 @@ export class CreateProductDto {
 
   @ApiPropertyOptional({
     example: 'https://cdn.example.com/product.jpg',
-    description: 'Main product image when has_variants is false',
+    description: 'Cover image selected from the product gallery',
   })
   @IsOptional()
   @IsString()
   image_url?: string;
+
+  @ApiPropertyOptional({
+    example: ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.jpg'],
+    description: 'Common product gallery images',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  gallery?: string[];
+
+  @ApiProperty({ example: 0.35, minimum: 0, description: 'Weight in kg' })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  weight: number;
 
   @ApiPropertyOptional({ type: [CreateProductVariantDto] })
   @IsOptional()

@@ -55,6 +55,12 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   image_url: string | null;
 
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  gallery: string[];
+
+  @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
+  weight: number | null;
+
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 
