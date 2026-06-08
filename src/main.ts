@@ -6,12 +6,17 @@ import { resolve } from 'path';
 import { AppModule } from './app.module';
 import { getEnvNumber } from './common/env';
 import { runStartupMigrations } from './common/run-startup-migrations';
+import { json, urlencoded } from 'express';
 
 config({ path: resolve(process.cwd(), '.env') });
 
 async function bootstrap() {
   await runStartupMigrations();
   const app = await NestFactory.create(AppModule);
+
+  app.use(json({ limit: '100mb' }));
+  app.use(urlencoded({ extended: true, limit: '100mb' }));
+
   const globalPrefix = 'v1/api';
   app.setGlobalPrefix(globalPrefix);
   app.useGlobalPipes(
