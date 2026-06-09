@@ -29,6 +29,11 @@ import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { EvolutionService } from '../integrations/evolution/evolution.service';
+import {
+  resolvePhoneFromChatList,
+  resolveRelatedChatJids,
+  type EvolutionInboxMessage,
+} from '../integrations/evolution/evolution-inbox.util';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -190,8 +195,17 @@ export class BotAdminService {
     return false;
   }
 
+  private hashEvolutionMessageId(id: string): number {
+    let hash = 0;
+    for (let index = 0; index < id.length; index += 1) {
+      hash = (hash * 31 + id.charCodeAt(index)) % 900_000_000;
+    }
+    return Math.abs(hash);
+  }
+
   private mapEvolutionMessagesToBotMessages(
     messages: Array<{
+      id?: string;
       direction: 'inbound' | 'outbound';
       message_type: 'text' | 'image' | 'voice' | 'system';
       content: string;
@@ -199,7 +213,9 @@ export class BotAdminService {
     }>,
   ) {
     return messages.map((message, index) => ({
-      id: index + 1,
+      id: message.id
+        ? 1_000_000_000 + this.hashEvolutionMessageId(message.id)
+        : 1_000_000_000 + index,
       direction: message.direction,
       message_type: message.message_type,
       platform: 'whatsapp',
@@ -209,6 +225,140 @@ export class BotAdminService {
     }));
   }
 
+  private contactPhoneFromRow(row: CompanyContactRow): string {
+    return (
+      this.normalizePhoneKey(row.customer.customer_phone) ||
+      this.normalizePhoneKey(String(row.channelUser?.external_user_id ?? '')) ||
+      this.normalizePhoneKey(String(row.evolution_remote_jid ?? '').split('@')[0] ?? '')
+    );
+  }
+
+  private rowMatchesPhone(row: CompanyContactRow, phone: string): boolean {
+    if (!phone) {
+      return false;
+    }
+    if (this.phoneKeysEquivalent(row.customer.customer_phone, phone)) {
+      return true;
+    }
+    if (
+      row.channelUser &&
+      this.phoneKeysEquivalent(row.channelUser.external_user_id, phone)
+    ) {
+      return true;
+    }
+    if (row.evolution_remote_jid) {
+      const jidPhone = this.normalizePhoneKey(row.evolution_remote_jid.split('@')[0] ?? '');
+      if (jidPhone && this.phoneKeysEquivalent(jidPhone, phone)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private messageMergeKey(message: {
+    direction: string;
+    content: string;
+    created_at: string | Date;
+  }): string {
+    const timestamp = new Date(message.created_at).getTime();
+    const bucket = Number.isFinite(timestamp) ? Math.floor(timestamp / 30000) : 0;
+    return `${message.direction}|${message.content.trim().toLowerCase()}|${bucket}`;
+  }
+
+  private serializeBotMessage(message: BotMessage) {
+    return {
+      id: message.id,
+      direction: message.direction,
+      message_type: message.message_type,
+      platform: message.platform,
+      content: message.content,
+      transcript: message.transcript,
+      created_at: message.created_at,
+    };
+  }
+
+  private mergeConversationThreadMessages(
+    dbMessages: BotMessage[],
+    evolutionMessages: Array<{
+      direction: 'inbound' | 'outbound';
+      message_type: 'text' | 'image' | 'voice' | 'system';
+      content: string;
+      created_at: string;
+    }>,
+  ) {
+    const seen = new Set<string>();
+    const merged = [
+      ...dbMessages.map((message) => this.serializeBotMessage(message)),
+      ...this.mapEvolutionMessagesToBotMessages(evolutionMessages),
+    ].filter((message) => {
+      const key = this.messageMergeKey(message);
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+
+    return merged.sort(
+      (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+    );
+  }
+
+  private async findDbMessagesForPhone(companyId: number, phone: string) {
+    const normalized = this.normalizePhoneKey(phone);
+    if (!normalized) {
+      return [];
+    }
+
+    const channelUsers = await this.channelUserRepository.find({
+      where: { company_id: companyId },
+      relations: ['conversations'],
+    });
+    const channelUser = channelUsers.find((item) =>
+      this.phoneKeysEquivalent(item.external_user_id, normalized),
+    );
+    if (!channelUser?.conversations?.length) {
+      return [];
+    }
+
+    const conversation = [...channelUser.conversations].sort((left, right) => {
+      const leftTime = left.last_message_at
+        ? new Date(left.last_message_at).getTime()
+        : 0;
+      const rightTime = right.last_message_at
+        ? new Date(right.last_message_at).getTime()
+        : 0;
+      return rightTime - leftTime;
+    })[0];
+
+    if (!conversation) {
+      return [];
+    }
+
+    return this.messageRepository.find({
+      where: { conversation_id: conversation.id },
+      order: { id: 'ASC' },
+    });
+  }
+
+  private preferredEvolutionJid(
+    requestedJid: string,
+    relatedJids: string[],
+    phone: string,
+  ): string {
+    const phoneJid = relatedJids.find(
+      (item) => item.endsWith('@s.whatsapp.net') || item.endsWith('@c.us'),
+    );
+    if (phoneJid) {
+      return phoneJid;
+    }
+    if (phone) {
+      return `${phone}@s.whatsapp.net`;
+    }
+    return relatedJids[0] ?? requestedJid;
+  }
+
   private async fetchEvolutionMessagesForJid(
     companyId: number,
     remoteJid: string,
@@ -216,37 +366,48 @@ export class BotAdminService {
     apikey: string,
   ) {
     const jid = remoteJid.trim();
-    let messages = await this.evolutionService.findMessages(instance, jid, apikey);
-    if (messages.length > 0) {
-      return { remoteJid: jid, messages };
-    }
-
-    const phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
-    if (!phone) {
-      return { remoteJid: jid, messages: [] };
-    }
+    let chats: Awaited<ReturnType<EvolutionService['findChats']>> = [];
 
     try {
-      const chats = await this.evolutionService.findChats(instance, apikey);
-      const matchedChat = chats.find(
-        (item) =>
-          item.remote_jid === jid ||
-          this.phoneKeysEquivalent(item.phone, phone),
-      );
-      const resolvedJid =
-        matchedChat?.remote_jid ?? `${phone}@s.whatsapp.net`;
-      if (resolvedJid !== jid) {
-        messages = await this.evolutionService.findMessages(
+      chats = await this.evolutionService.findChats(instance, apikey);
+    } catch (error) {
+      console.error('Evolution findChats failed:', error);
+    }
+
+    const relatedJids = resolveRelatedChatJids(jid, chats);
+    if (!relatedJids.length) {
+      relatedJids.push(jid);
+    }
+
+    const byId = new Map<string, EvolutionInboxMessage>();
+    for (const relatedJid of relatedJids) {
+      try {
+        const batch = await this.evolutionService.findMessages(
           instance,
-          resolvedJid,
+          relatedJid,
           apikey,
         );
+        for (const message of batch) {
+          if (!byId.has(message.id)) {
+            byId.set(message.id, message);
+          }
+        }
+      } catch (error) {
+        console.error(`Evolution findMessages failed for ${relatedJid}:`, error);
       }
-      return { remoteJid: resolvedJid, messages };
-    } catch (error) {
-      console.error('Evolution fetch messages failed:', error);
-      return { remoteJid: jid, messages: [] };
     }
+
+    const messages = Array.from(byId.values()).sort(
+      (left, right) =>
+        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+    );
+    const phone = resolvePhoneFromChatList(jid, chats);
+
+    return {
+      remoteJid: this.preferredEvolutionJid(jid, relatedJids, phone),
+      phone,
+      messages,
+    };
   }
 
   private async loadEvolutionMessagesForPhone(companyId: number, phone: string) {
@@ -275,20 +436,13 @@ export class BotAdminService {
     const merged: CompanyContactRow[] = [];
 
     for (const row of rows) {
-      const phone =
-        this.normalizePhoneKey(row.customer.customer_phone) ||
-        this.normalizePhoneKey(String(row.channelUser?.external_user_id ?? ''));
+      const phone = this.contactPhoneFromRow(row);
       if (!phone) {
         merged.push(row);
         continue;
       }
 
-      const existingIndex = merged.findIndex((item) => {
-        const itemPhone =
-          this.normalizePhoneKey(item.customer.customer_phone) ||
-          this.normalizePhoneKey(String(item.channelUser?.external_user_id ?? ''));
-        return this.phoneKeysEquivalent(itemPhone, phone);
-      });
+      const existingIndex = merged.findIndex((item) => this.rowMatchesPhone(item, phone));
 
       if (existingIndex < 0) {
         merged.push(row);
@@ -590,12 +744,23 @@ export class BotAdminService {
         if (!phone) {
           continue;
         }
-        const existingIndex = rows.findIndex((item) =>
-          this.phoneKeysEquivalent(item.customer.customer_phone, phone),
+        const preferredJid =
+          chat.alternate_jid?.endsWith('@s.whatsapp.net') ||
+          chat.alternate_jid?.endsWith('@c.us')
+            ? chat.alternate_jid
+            : chat.remote_jid.endsWith('@s.whatsapp.net') ||
+                chat.remote_jid.endsWith('@c.us')
+              ? chat.remote_jid
+              : chat.alternate_jid ?? chat.remote_jid;
+        const existingIndex = rows.findIndex(
+          (item) =>
+            this.rowMatchesPhone(item, phone) ||
+            item.evolution_remote_jid === chat.remote_jid ||
+            (chat.alternate_jid && item.evolution_remote_jid === chat.alternate_jid),
         );
         if (existingIndex >= 0) {
           const row = rows[existingIndex];
-          row.evolution_remote_jid = chat.remote_jid;
+          row.evolution_remote_jid = preferredJid;
           row.last_message_preview = chat.last_message_preview || row.last_message_preview;
           if (!row.conversation && chat.last_message_at) {
             row.conversation = {
@@ -633,7 +798,7 @@ export class BotAdminService {
             status: 'open',
             last_message_at: chat.last_message_at,
           },
-          evolution_remote_jid: chat.remote_jid,
+          evolution_remote_jid: preferredJid,
           last_message_preview: chat.last_message_preview,
         });
       }
@@ -665,7 +830,7 @@ export class BotAdminService {
       throw new BadRequestException('WhatsApp instance API key is missing.');
     }
 
-    const { remoteJid: resolvedJid, messages } =
+    const { remoteJid: resolvedJid, phone, messages } =
       await this.fetchEvolutionMessagesForJid(
         user.company_id,
         jid,
@@ -673,9 +838,15 @@ export class BotAdminService {
         apikey,
       );
 
+    const resolvedPhone =
+      phone || this.normalizePhoneKey(resolvedJid.split('@')[0] ?? resolvedJid);
+    const dbMessages = resolvedPhone
+      ? await this.findDbMessagesForPhone(user.company_id, resolvedPhone)
+      : [];
+
     return {
       remote_jid: resolvedJid,
-      messages: this.mapEvolutionMessagesToBotMessages(messages),
+      messages: this.mergeConversationThreadMessages(dbMessages, messages),
     };
   }
 
@@ -694,11 +865,6 @@ export class BotAdminService {
       throw new BadRequestException('remoteJid is required.');
     }
 
-    const phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
-    if (!phone) {
-      throw new BadRequestException('Invalid WhatsApp JID.');
-    }
-
     const evolution = this.getEvolutionConfig();
     if (!evolution.enabled) {
       throw new BadRequestException(
@@ -714,6 +880,22 @@ export class BotAdminService {
       throw new BadRequestException(
         'WhatsApp instance is not configured for this company.',
       );
+    }
+
+    let phone = '';
+    if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
+      phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
+    }
+    if (!phone || jid.endsWith('@lid')) {
+      try {
+        const chats = await this.evolutionService.findChats(instance, apikey);
+        phone = resolvePhoneFromChatList(jid, chats);
+      } catch (error) {
+        console.error('Evolution findChats failed while sending:', error);
+      }
+    }
+    if (!phone) {
+      throw new BadRequestException('Invalid WhatsApp JID.');
     }
 
     try {
@@ -768,13 +950,24 @@ export class BotAdminService {
     });
 
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
-    const evolutionMessages = phone
-      ? await this.loadEvolutionMessagesForPhone(user.company_id, phone)
-      : [];
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const instance = channel?.instance_name?.trim();
+    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
+    const fetchedEvolution =
+      phone && instance && apikey
+        ? (
+            await this.fetchEvolutionMessagesForJid(
+              user.company_id,
+              `${phone}@s.whatsapp.net`,
+              instance,
+              apikey,
+            )
+          ).messages
+        : [];
 
     return {
       conversation,
-      messages: evolutionMessages.length > 0 ? evolutionMessages : messages,
+      messages: this.mergeConversationThreadMessages(messages, fetchedEvolution),
     };
   }
 

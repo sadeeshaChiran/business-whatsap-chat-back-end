@@ -1,5 +1,6 @@
 export type EvolutionInboxChat = {
   remote_jid: string;
+  alternate_jid: string | null;
   phone: string;
   display_name: string;
   last_message_preview: string;
@@ -35,6 +36,142 @@ function pickString(record: Record<string, unknown>, keys: string[]): string {
 function normalizePhoneFromJid(jid: string): string {
   const base = jid.split('@')[0] ?? jid;
   return base.replace(/\D/g, '');
+}
+
+function isPhoneJid(jid: string): boolean {
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us');
+}
+
+function pickAlternateJid(record: Record<string, unknown>, lastMessage?: Record<string, unknown> | null) {
+  const lastKey = asRecord(lastMessage?.key) ?? {};
+  const candidate =
+    pickString(record, [
+      'remoteJidAlt',
+      'remote_jid_alt',
+      'senderPn',
+      'sender_pn',
+      'previousRemoteJid',
+      'previous_remote_jid',
+      'jidAlt',
+    ]) ||
+    pickString(lastKey, [
+      'remoteJidAlt',
+      'remote_jid_alt',
+      'senderPn',
+      'sender_pn',
+      'previousRemoteJid',
+      'previous_remote_jid',
+    ]);
+  return candidate && candidate.includes('@') ? candidate : '';
+}
+
+function resolveChatPhone(remoteJid: string, alternateJid: string): string {
+  if (isPhoneJid(remoteJid)) {
+    return normalizePhoneFromJid(remoteJid);
+  }
+  if (alternateJid && isPhoneJid(alternateJid)) {
+    return normalizePhoneFromJid(alternateJid);
+  }
+  return normalizePhoneFromJid(remoteJid);
+}
+
+function phoneKeysEquivalent(left: string, right: string): boolean {
+  const a = left.replace(/\D/g, '');
+  const b = right.replace(/\D/g, '');
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+  const stripLeadingZeros = (value: string) => value.replace(/^0+/, '') || value;
+  const sa = stripLeadingZeros(a);
+  const sb = stripLeadingZeros(b);
+  if (sa === sb) {
+    return true;
+  }
+  if (sa.length >= 9 && sb.length >= 9) {
+    return sa.endsWith(sb) || sb.endsWith(sa);
+  }
+  return false;
+}
+
+export function resolveRelatedChatJids(
+  requestedJid: string,
+  chats: EvolutionInboxChat[],
+): string[] {
+  const normalized = requestedJid.trim();
+  const related = new Set<string>();
+  if (normalized) {
+    related.add(normalized);
+  }
+
+  const requestedPhone = isPhoneJid(normalized)
+    ? normalizePhoneFromJid(normalized)
+    : '';
+
+  for (const chat of chats) {
+    const candidates = [chat.remote_jid, chat.alternate_jid].filter(
+      (value): value is string => Boolean(value?.trim()),
+    );
+    const matchesJid = candidates.includes(normalized);
+    const matchesPhone =
+      Boolean(requestedPhone) &&
+      (phoneKeysEquivalent(chat.phone, requestedPhone) ||
+        candidates.some(
+          (value) =>
+            isPhoneJid(value) &&
+            phoneKeysEquivalent(normalizePhoneFromJid(value), requestedPhone),
+        ));
+
+    if (matchesJid || matchesPhone) {
+      candidates.forEach((value) => related.add(value));
+    }
+  }
+
+  if (!related.size && requestedPhone) {
+    related.add(`${requestedPhone}@s.whatsapp.net`);
+  }
+
+  return Array.from(related);
+}
+
+export function resolvePhoneFromChatList(
+  requestedJid: string,
+  chats: EvolutionInboxChat[],
+): string {
+  const normalized = requestedJid.trim();
+  if (isPhoneJid(normalized)) {
+    return normalizePhoneFromJid(normalized);
+  }
+
+  const related = resolveRelatedChatJids(normalized, chats);
+  for (const jid of related) {
+    if (isPhoneJid(jid)) {
+      return normalizePhoneFromJid(jid);
+    }
+  }
+
+  for (const chat of chats) {
+    if (
+      chat.remote_jid === normalized ||
+      chat.alternate_jid === normalized ||
+      related.includes(chat.remote_jid) ||
+      (chat.alternate_jid && related.includes(chat.alternate_jid))
+    ) {
+      if (chat.phone && isPhoneJid(`${chat.phone}@s.whatsapp.net`)) {
+        return chat.phone;
+      }
+      if (chat.phone && chat.phone.length >= 9 && !chat.remote_jid.endsWith('@lid')) {
+        return chat.phone;
+      }
+      if (chat.alternate_jid && isPhoneJid(chat.alternate_jid)) {
+        return normalizePhoneFromJid(chat.alternate_jid);
+      }
+    }
+  }
+
+  return normalizePhoneFromJid(normalized.split('@')[0] ?? normalized);
 }
 
 const NESTED_MESSAGE_PARTS = [
@@ -177,6 +314,7 @@ export function parseEvolutionFindChats(payload: unknown): EvolutionInboxChat[] 
     }
 
     const lastMessage = asRecord(record.lastMessage) ?? asRecord(record.last_message);
+    const alternateJid = pickAlternateJid(record, lastMessage);
     const preview = lastMessage ? extractMessageText(lastMessage) : '';
     const updatedAt =
       extractTimestamp(record.updatedAt) ??
@@ -185,12 +323,15 @@ export function parseEvolutionFindChats(payload: unknown): EvolutionInboxChat[] 
         ? extractTimestamp(lastMessage.messageTimestamp) ??
           extractTimestamp(lastMessage.message_timestamp)
         : null);
+    const phone = resolveChatPhone(remoteJid, alternateJid);
 
     chats.push({
       remote_jid: remoteJid,
-      phone: normalizePhoneFromJid(remoteJid),
+      alternate_jid: alternateJid || null,
+      phone,
       display_name:
         pickString(record, ['pushName', 'push_name', 'name', 'subject']) ||
+        phone ||
         normalizePhoneFromJid(remoteJid),
       last_message_preview: preview,
       last_message_at: updatedAt,
@@ -214,10 +355,17 @@ export function parseEvolutionFindMessages(
       continue;
     }
     const key = asRecord(record.key) ?? {};
-    const remoteJid =
+    const remoteJidRaw =
       pickString(key, ['remoteJid', 'remote_jid']) ||
       pickString(record, ['remoteJid', 'remote_jid']) ||
       fallbackJid;
+    const remoteJidAlt = pickAlternateJid(record, { key });
+    const remoteJid =
+      remoteJidRaw.endsWith('@lid') && remoteJidAlt && isPhoneJid(remoteJidAlt)
+        ? remoteJidAlt
+        : remoteJidRaw.endsWith('@lid') && remoteJidAlt
+          ? remoteJidAlt
+          : remoteJidRaw;
     const fromMeRaw = key.fromMe ?? record.fromMe ?? record.from_me;
     const fromMe =
       fromMeRaw === true ||
