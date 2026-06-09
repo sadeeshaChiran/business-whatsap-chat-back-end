@@ -126,7 +126,8 @@ export class BotAdminService {
     await this.assertAdminAccess(user);
     const company_id = user.company_id;
 
-    const [totalUsers, activeBots, totalConversations, pendingAlerts] = await Promise.all([
+    const [totalUsers, activeBots, totalConversations, pendingAlerts, totalOrders, pendingOrders] =
+      await Promise.all([
       this.channelUserRepository.count({ where: { company_id } }),
       this.channelUserRepository.count({ where: { company_id, bot_enabled: true } }),
       this.conversationRepository
@@ -140,6 +141,8 @@ export class BotAdminService {
         .where('channelUser.company_id = :company_id', { company_id })
         .andWhere('flag.resolved = false')
         .getCount(),
+      this.orderRepository.count({ where: { company_id } }),
+      this.orderRepository.count({ where: { company_id, status: 'Pending' } }),
     ]);
 
     return {
@@ -147,6 +150,8 @@ export class BotAdminService {
       activeBots,
       totalConversations,
       pendingAlerts,
+      totalOrders,
+      pendingOrders,
     };
   }
 
