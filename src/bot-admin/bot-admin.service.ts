@@ -218,18 +218,20 @@ export class BotAdminService {
       created_at: string;
     }>,
   ) {
-    return messages.map((message, index) => ({
-      id: message.id
-        ? 1_000_000_000 + this.hashEvolutionMessageId(message.id)
-        : 1_000_000_000 + index,
-      direction: message.direction,
-      message_type: message.message_type,
-      platform: 'whatsapp',
-      content: message.content,
-      media_url: message.media_url ?? null,
-      transcript: null,
-      created_at: message.created_at,
-    }));
+    return messages.map((message, index) =>
+      this.hydrateThreadMessage({
+        id: message.id
+          ? 1_000_000_000 + this.hashEvolutionMessageId(message.id)
+          : 1_000_000_000 + index,
+        direction: message.direction,
+        message_type: message.message_type,
+        platform: 'whatsapp',
+        content: message.content,
+        media_url: message.media_url ?? null,
+        transcript: null,
+        created_at: message.created_at,
+      }),
+    );
   }
 
   private contactPhoneFromRow(row: CompanyContactRow): string {
@@ -262,18 +264,75 @@ export class BotAdminService {
     return false;
   }
 
+  private static readonly THREAD_IMAGE_URL_RE = /https?:\/\/[^\s<>"']+/gi;
+
+  private isDisplayableImageUrl(value: string | null | undefined): boolean {
+    const trimmed = String(value ?? '').trim();
+    return (
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://') ||
+      trimmed.startsWith('data:image/')
+    );
+  }
+
+  private hydrateThreadMessage<
+    T extends {
+      id?: number;
+      direction: string;
+      message_type: string;
+      content: string;
+      media_url?: string | null;
+    },
+  >(message: T): T {
+    let mediaUrl = String(message.media_url ?? '').trim();
+    if (!this.isDisplayableImageUrl(mediaUrl)) {
+      const matches = String(message.content ?? '').match(
+        BotAdminService.THREAD_IMAGE_URL_RE,
+      );
+      const fromContent = matches?.find((url) => this.isDisplayableImageUrl(url))?.trim();
+      if (fromContent) {
+        mediaUrl = fromContent;
+      }
+    }
+    if (!mediaUrl) {
+      return message;
+    }
+    if (message.message_type !== 'image' && this.isDisplayableImageUrl(mediaUrl)) {
+      return { ...message, media_url: mediaUrl, message_type: 'image' };
+    }
+    if (!message.media_url) {
+      return { ...message, media_url: mediaUrl };
+    }
+    return message;
+  }
+
   private messageMergeKey(message: {
+    id?: number;
     direction: string;
+    message_type?: string;
     content: string;
+    media_url?: string | null;
     created_at: string | Date;
   }): string {
+    const mediaUrl = String(message.media_url ?? '').trim();
+    const messageType = String(message.message_type ?? 'text');
+    if (messageType === 'image' || mediaUrl) {
+      const id = Number(message.id);
+      if (Number.isFinite(id) && id > 0) {
+        return `img:${id}`;
+      }
+      const timestamp = new Date(message.created_at).getTime();
+      const bucket = Number.isFinite(timestamp) ? Math.floor(timestamp / 30000) : 0;
+      return `img:${message.direction}|${mediaUrl || message.content.trim().toLowerCase()}|${bucket}`;
+    }
+
     const timestamp = new Date(message.created_at).getTime();
     const bucket = Number.isFinite(timestamp) ? Math.floor(timestamp / 30000) : 0;
     return `${message.direction}|${message.content.trim().toLowerCase()}|${bucket}`;
   }
 
   private serializeBotMessage(message: BotMessage) {
-    return {
+    return this.hydrateThreadMessage({
       id: message.id,
       direction: message.direction,
       message_type: message.message_type,
@@ -282,7 +341,7 @@ export class BotAdminService {
       media_url: message.media_url,
       transcript: message.transcript,
       created_at: message.created_at,
-    };
+    });
   }
 
   private toDataImageUrl(base64: string, mimetype: string): string {
@@ -301,13 +360,14 @@ export class BotAdminService {
     instance: string,
     apikey: string,
     messages: EvolutionInboxMessage[],
+    phone = '',
   ): Promise<EvolutionInboxMessage[]> {
     const targets = messages
       .filter(
         (message) =>
           message.message_type === 'image' && !String(message.media_url ?? '').trim(),
       )
-      .slice(-12);
+      .slice(-24);
 
     if (!targets.length) {
       return messages;
@@ -315,19 +375,31 @@ export class BotAdminService {
 
     const enrichedById = new Map<string, string>();
     for (const message of targets) {
-      const media = await this.evolutionService.getBase64FromMediaMessage(
-        instance,
-        {
-          messageId: message.id,
-          remoteJid: message.remote_jid,
-          fromMe: message.direction === 'outbound',
-        },
-        apikey,
-      );
-      if (!media?.base64) {
-        continue;
+      const remoteJids = [message.remote_jid];
+      const normalizedPhone = this.normalizePhoneKey(phone);
+      if (message.remote_jid.endsWith('@lid') && normalizedPhone) {
+        remoteJids.push(`${normalizedPhone}@s.whatsapp.net`);
       }
-      const dataUrl = this.toDataImageUrl(media.base64, media.mimetype);
+
+      let dataUrl = '';
+      for (const remoteJid of remoteJids) {
+        const media = await this.evolutionService.getBase64FromMediaMessage(
+          instance,
+          {
+            messageId: message.id,
+            remoteJid,
+            fromMe: message.direction === 'outbound',
+          },
+          apikey,
+        );
+        if (!media?.base64) {
+          continue;
+        }
+        dataUrl = this.toDataImageUrl(media.base64, media.mimetype);
+        if (dataUrl) {
+          break;
+        }
+      }
       if (dataUrl) {
         enrichedById.set(message.id, dataUrl);
       }
@@ -369,10 +441,12 @@ export class BotAdminService {
       return true;
     });
 
-    return merged.sort(
-      (left, right) =>
-        new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
-    );
+    return merged
+      .map((message) => this.hydrateThreadMessage(message))
+      .sort(
+        (left, right) =>
+          new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
+      );
   }
 
   private async findDbMessagesForPhone(companyId: number, phone: string) {
@@ -471,8 +545,8 @@ export class BotAdminService {
       (left, right) =>
         new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
     );
-    messages = await this.enrichEvolutionImageMessages(instance, apikey, messages);
     const phone = resolvePhoneFromChatList(jid, chats);
+    messages = await this.enrichEvolutionImageMessages(instance, apikey, messages, phone);
 
     return {
       remoteJid: this.preferredEvolutionJid(jid, relatedJids, phone),
