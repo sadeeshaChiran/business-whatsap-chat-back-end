@@ -325,6 +325,52 @@ export class EvolutionService {
     return parseEvolutionFindMessages(fallbackRaw, remoteJid);
   }
 
+  async getBase64FromMediaMessage(
+    instanceName: string,
+    payload: { messageId: string; remoteJid: string; fromMe: boolean },
+    overrideApiKey?: string,
+  ): Promise<{ base64: string; mimetype: string } | null> {
+    const messageId = payload.messageId.trim();
+    const remoteJid = payload.remoteJid.trim();
+    if (!messageId || !remoteJid) {
+      return null;
+    }
+
+    try {
+      const raw = await this.request<Record<string, unknown>>(
+        `/chat/getBase64FromMediaMessage/${encodeURIComponent(instanceName)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: {
+              key: {
+                id: messageId,
+                remoteJid,
+                fromMe: payload.fromMe,
+              },
+            },
+            convertToMp4: false,
+          }),
+        },
+        overrideApiKey,
+      );
+      const nested = (raw?.data as Record<string, unknown> | undefined) ?? raw;
+      const base64 = String(
+        nested?.base64 ?? nested?.mediaBase64 ?? raw?.base64 ?? '',
+      ).trim();
+      if (!base64) {
+        return null;
+      }
+      const mimetype = String(
+        nested?.mimetype ?? nested?.mimeType ?? raw?.mimetype ?? 'image/jpeg',
+      ).trim();
+      return { base64, mimetype };
+    } catch {
+      return null;
+    }
+  }
+
   async createInstance(
     instanceName: string,
     phoneDigits?: string,

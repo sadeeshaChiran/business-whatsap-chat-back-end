@@ -214,6 +214,7 @@ export class BotAdminService {
       direction: 'inbound' | 'outbound';
       message_type: 'text' | 'image' | 'voice' | 'system';
       content: string;
+      media_url?: string | null;
       created_at: string;
     }>,
   ) {
@@ -225,6 +226,7 @@ export class BotAdminService {
       message_type: message.message_type,
       platform: 'whatsapp',
       content: message.content,
+      media_url: message.media_url ?? null,
       transcript: null,
       created_at: message.created_at,
     }));
@@ -277,9 +279,71 @@ export class BotAdminService {
       message_type: message.message_type,
       platform: message.platform,
       content: message.content,
+      media_url: message.media_url,
       transcript: message.transcript,
       created_at: message.created_at,
     };
+  }
+
+  private toDataImageUrl(base64: string, mimetype: string): string {
+    const trimmed = base64.trim();
+    if (!trimmed) {
+      return '';
+    }
+    if (trimmed.startsWith('data:')) {
+      return trimmed;
+    }
+    const cleaned = trimmed.includes(',') ? trimmed.split(',').pop() ?? trimmed : trimmed;
+    return `data:${mimetype || 'image/jpeg'};base64,${cleaned}`;
+  }
+
+  private async enrichEvolutionImageMessages(
+    instance: string,
+    apikey: string,
+    messages: EvolutionInboxMessage[],
+  ): Promise<EvolutionInboxMessage[]> {
+    const targets = messages
+      .filter(
+        (message) =>
+          message.message_type === 'image' && !String(message.media_url ?? '').trim(),
+      )
+      .slice(-12);
+
+    if (!targets.length) {
+      return messages;
+    }
+
+    const enrichedById = new Map<string, string>();
+    for (const message of targets) {
+      const media = await this.evolutionService.getBase64FromMediaMessage(
+        instance,
+        {
+          messageId: message.id,
+          remoteJid: message.remote_jid,
+          fromMe: message.direction === 'outbound',
+        },
+        apikey,
+      );
+      if (!media?.base64) {
+        continue;
+      }
+      const dataUrl = this.toDataImageUrl(media.base64, media.mimetype);
+      if (dataUrl) {
+        enrichedById.set(message.id, dataUrl);
+      }
+    }
+
+    if (!enrichedById.size) {
+      return messages;
+    }
+
+    return messages.map((message) => {
+      const mediaUrl = enrichedById.get(message.id);
+      if (!mediaUrl) {
+        return message;
+      }
+      return { ...message, media_url: mediaUrl };
+    });
   }
 
   private mergeConversationThreadMessages(
@@ -288,6 +352,7 @@ export class BotAdminService {
       direction: 'inbound' | 'outbound';
       message_type: 'text' | 'image' | 'voice' | 'system';
       content: string;
+      media_url?: string | null;
       created_at: string;
     }>,
   ) {
@@ -402,10 +467,11 @@ export class BotAdminService {
       }
     }
 
-    const messages = Array.from(byId.values()).sort(
+    let messages = Array.from(byId.values()).sort(
       (left, right) =>
         new Date(left.created_at).getTime() - new Date(right.created_at).getTime(),
     );
+    messages = await this.enrichEvolutionImageMessages(instance, apikey, messages);
     const phone = resolvePhoneFromChatList(jid, chats);
 
     return {
