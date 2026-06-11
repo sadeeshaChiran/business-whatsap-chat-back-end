@@ -567,17 +567,71 @@ export class BotAdminService {
     };
   }
 
+  private async ensureChannelUserForContact(
+    companyId: number,
+    phone: string,
+    displayName?: string,
+  ): Promise<BotChannelUser> {
+    const normalizedPhone = this.normalizePhoneKey(phone);
+    if (!normalizedPhone) {
+      throw new BadRequestException('A valid phone number is required.');
+    }
+
+    const companyUsers = await this.channelUserRepository.find({
+      where: { company_id: companyId, platform: 'whatsapp' },
+    });
+    const matched = this.findChannelUserForPhone(companyUsers, normalizedPhone);
+    if (matched) {
+      return matched;
+    }
+
+    const existing = await this.channelUserRepository.findOne({
+      where: { platform: 'whatsapp', external_user_id: normalizedPhone },
+    });
+    if (existing) {
+      if (existing.company_id !== companyId) {
+        existing.company_id = companyId;
+      }
+      if (displayName?.trim() && !existing.display_name?.trim()) {
+        existing.display_name = displayName.trim();
+      }
+      existing.last_seen_at = existing.last_seen_at ?? new Date();
+      return this.channelUserRepository.save(existing);
+    }
+
+    return this.channelUserRepository.save(
+      this.channelUserRepository.create({
+        company_id: companyId,
+        platform: 'whatsapp',
+        external_user_id: normalizedPhone,
+        display_name: displayName?.trim() || normalizedPhone,
+        bot_enabled: true,
+        manual_mode: false,
+        last_seen_at: new Date(),
+      }),
+    );
+  }
+
   async toggleUser(
     user: AuthenticatedUser,
     id: number,
     payload: ToggleBotUserDto,
   ) {
     await this.assertAdminAccess(user);
-    const where: any = { id, company_id: user.company_id };
+    let channelUser: BotChannelUser | null = null;
 
-    const channelUser = await this.channelUserRepository.findOne({
-      where,
-    });
+    if (id > 0) {
+      channelUser = await this.channelUserRepository.findOne({
+        where: { id, company_id: user.company_id },
+      });
+    }
+
+    if (!channelUser && payload.external_user_id?.trim()) {
+      channelUser = await this.ensureChannelUserForContact(
+        user.company_id,
+        payload.external_user_id,
+      );
+    }
 
     if (!channelUser) {
       throw new NotFoundException('Bot user not found.');
@@ -722,13 +776,14 @@ export class BotAdminService {
       });
     }
 
-    return this.mergeEvolutionInboxChats(companyId, rows);
+    return this.mergeEvolutionInboxChats(companyId, rows, channelUsers);
   }
 
   /** Load chats from Evolution API (same source as Manager → Chat). */
   private async mergeEvolutionInboxChats(
     companyId: number,
     rows: CompanyContactRow[],
+    channelUsers: BotChannelUser[],
   ): Promise<CompanyContactRow[]> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     const instance = channel?.instance_name?.trim();
@@ -780,6 +835,7 @@ export class BotAdminService {
           continue;
         }
 
+        const matchedChannelUser = this.findChannelUserForPhone(channelUsers, phone);
         rows.push({
           customer: {
             id: 0,
@@ -788,16 +844,22 @@ export class BotAdminService {
             first_seen_at: chat.last_message_at ?? new Date().toISOString(),
             last_seen_at: chat.last_message_at ?? new Date().toISOString(),
           },
-          channelUser: {
-            id: 0,
-            platform: 'whatsapp',
-            external_user_id: phone,
-            display_name: chat.display_name,
-            language: 'English',
-            bot_enabled: true,
-            manual_mode: false,
-            last_seen_at: chat.last_message_at,
-          },
+          channelUser: matchedChannelUser
+            ? {
+                id: matchedChannelUser.id,
+                platform: matchedChannelUser.platform,
+                external_user_id: matchedChannelUser.external_user_id,
+                display_name:
+                  chat.display_name?.trim() ||
+                  matchedChannelUser.display_name ||
+                  phone,
+                language: matchedChannelUser.language,
+                bot_enabled: matchedChannelUser.bot_enabled,
+                manual_mode: matchedChannelUser.manual_mode,
+                last_seen_at:
+                  matchedChannelUser.last_seen_at ?? chat.last_message_at,
+              }
+            : null,
           conversation: {
             id: 0,
             status: 'open',
