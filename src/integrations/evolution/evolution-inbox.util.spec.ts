@@ -50,6 +50,40 @@ describe('parseEvolutionFindMessages', () => {
     expect(result[1].content).toBe('Reply text');
     expect(result[1].direction).toBe('outbound');
   });
+
+  it('parses image messages with caption and media url', () => {
+    const result = parseEvolutionFindMessages(
+      {
+        messages: {
+          records: [
+            {
+              key: {
+                id: 'img-1',
+                fromMe: true,
+                remoteJid: '94757120896@s.whatsapp.net',
+              },
+              messageType: 'imageMessage',
+              message: {
+                imageMessage: {
+                  url: 'https://bot.metrocoding.com/external/product-image/1/2',
+                  caption: 'Baby Shoes (Size: 6)',
+                },
+              },
+              messageTimestamp: 1710000120,
+            },
+          ],
+        },
+      },
+      '94757120896@s.whatsapp.net',
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message_type).toBe('image');
+    expect(result[0].content).toBe('Baby Shoes (Size: 6)');
+    expect(result[0].media_url).toBe(
+      'https://bot.metrocoding.com/external/product-image/1/2',
+    );
+  });
 });
 
 describe('parseEvolutionFindChats', () => {

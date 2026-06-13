@@ -14,6 +14,7 @@ export type EvolutionInboxMessage = {
   direction: 'inbound' | 'outbound';
   message_type: 'text' | 'image' | 'voice' | 'system';
   content: string;
+  media_url: string | null;
   created_at: string;
 };
 
@@ -188,8 +189,61 @@ const NESTED_MESSAGE_PARTS = [
   'reactionMessage',
 ] as const;
 
+const MEDIA_MESSAGE_PARTS = [
+  'imageMessage',
+  'stickerMessage',
+  'videoMessage',
+  'documentMessage',
+] as const;
+
+function unwrapMessageContainer(message: Record<string, unknown>): Record<string, unknown> {
+  let nested = asRecord(message.message) ?? message;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const ephemeral = asRecord(nested.ephemeralMessage);
+    const viewOnce = asRecord(nested.viewOnceMessage);
+    const documentWithCaption = asRecord(nested.documentWithCaptionMessage);
+    const inner =
+      asRecord(ephemeral?.message) ??
+      asRecord(viewOnce?.message) ??
+      asRecord(documentWithCaption?.message);
+    if (!inner) {
+      break;
+    }
+    nested = inner;
+  }
+  return nested;
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function extractMessageMedia(
+  message: Record<string, unknown>,
+): { mediaUrl: string; caption: string; mediaKind: string } {
+  const nested = unwrapMessageContainer(message);
+  for (const part of MEDIA_MESSAGE_PARTS) {
+    const block = asRecord(nested[part]);
+    if (!block) {
+      continue;
+    }
+    const mediaUrl = pickString(block, [
+      'url',
+      'downloadUrl',
+      'mediaUrl',
+      'directPath',
+      'jpegThumbnail',
+    ]);
+    const caption = pickString(block, ['caption', 'text', 'title']);
+    if (mediaUrl || caption) {
+      return { mediaUrl, caption, mediaKind: part };
+    }
+  }
+  return { mediaUrl: '', caption: '', mediaKind: '' };
+}
+
 function extractMessageText(message: Record<string, unknown>): string {
-  const nested = asRecord(message.message) ?? message;
+  const nested = unwrapMessageContainer(message);
   const direct =
     pickString(nested, [
       'conversation',
@@ -231,9 +285,19 @@ function extractMessageText(message: Record<string, unknown>): string {
 function mapEvolutionMessageType(
   rawType: string,
   content: string,
+  mediaKind: string,
+  mediaUrl: string,
 ): EvolutionInboxMessage['message_type'] {
   const type = rawType.toLowerCase();
-  if (type.includes('image') || content.startsWith('http')) {
+  const kind = mediaKind.toLowerCase();
+  if (
+    type.includes('image') ||
+    type.includes('sticker') ||
+    kind.includes('image') ||
+    kind.includes('sticker') ||
+    isHttpUrl(mediaUrl) ||
+    isHttpUrl(content)
+  ) {
     return 'image';
   }
   if (type.includes('audio') || type.includes('ptt') || type === 'voicemessage') {
@@ -381,12 +445,24 @@ export function parseEvolutionFindMessages(
       extractTimestamp(record.message_timestamp) ??
       extractTimestamp(record.created_at) ??
       new Date().toISOString();
-    const content = extractMessageText(record);
+    const media = extractMessageMedia(record);
+    let content = media.caption || extractMessageText(record);
     const rawType = pickString(record, ['messageType', 'message_type']);
+    const mediaUrl = isHttpUrl(media.mediaUrl) ? media.mediaUrl : '';
+    const messageType = mapEvolutionMessageType(
+      rawType,
+      content,
+      media.mediaKind,
+      mediaUrl,
+    );
+    if (messageType === 'image' && !content.trim()) {
+      content = '[image]';
+    }
     const isMedia =
-      rawType.toLowerCase().includes('image') ||
-      content.startsWith('http') ||
-      content.startsWith('[image');
+      messageType === 'image' ||
+      messageType === 'voice' ||
+      content.startsWith('[image') ||
+      content === '[media]';
     if (!content.trim() && !isMedia) {
       continue;
     }
@@ -395,8 +471,9 @@ export function parseEvolutionFindMessages(
       id,
       remote_jid: remoteJid,
       direction: fromMe ? 'outbound' : 'inbound',
-      message_type: mapEvolutionMessageType(rawType, content),
+      message_type: messageType,
       content,
+      media_url: mediaUrl || null,
       created_at: createdAt,
     });
   }
