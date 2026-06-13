@@ -205,8 +205,6 @@ describe('ProductsService', () => {
             'category',
             'weight',
             'base_price',
-            'secondary_price_1',
-            'secondary_price_2',
             'quantity',
             'status',
             'has_variants',

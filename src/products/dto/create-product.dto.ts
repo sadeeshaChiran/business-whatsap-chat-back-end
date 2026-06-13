@@ -37,20 +37,6 @@ export class CreateProductDto {
   @Min(0)
   price: number;
 
-  @ApiPropertyOptional({ example: 1900, minimum: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  secondary_price_1?: number;
-
-  @ApiPropertyOptional({ example: 1800, minimum: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  secondary_price_2?: number;
-
   @ApiPropertyOptional({ example: 25, minimum: 0 })
   @IsOptional()
   @Type(() => Number)

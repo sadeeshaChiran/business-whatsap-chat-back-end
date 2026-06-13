@@ -84,6 +84,37 @@ describe('parseEvolutionFindMessages', () => {
       'https://bot.metrocoding.com/external/product-image/1/2',
     );
   });
+
+  it('drops WhatsApp CDN urls and normalizes image placeholder content', () => {
+    const result = parseEvolutionFindMessages(
+      {
+        messages: {
+          records: [
+            {
+              key: {
+                id: 'img-wa-1',
+                fromMe: true,
+                remoteJid: '94717467162@s.whatsapp.net',
+              },
+              messageType: 'imageMessage',
+              message: {
+                imageMessage: {
+                  url: 'https://mmg.whatsapp.net/o1/v/t24/f2/m234/example?ccb=9-4',
+                },
+              },
+              messageTimestamp: 1710000120,
+            },
+          ],
+        },
+      },
+      '94717467162@s.whatsapp.net',
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message_type).toBe('image');
+    expect(result[0].content).toBe('[image]');
+    expect(result[0].media_url).toBeNull();
+  });
 });
 
 describe('parseEvolutionFindChats', () => {

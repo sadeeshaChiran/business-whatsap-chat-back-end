@@ -30,6 +30,8 @@ import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity'
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { EvolutionService } from '../integrations/evolution/evolution.service';
 import {
+  isBrowserDisplayableImageUrl,
+  isWhatsAppHostedMediaUrl,
   resolvePhoneFromChatList,
   resolveRelatedChatJids,
   type EvolutionInboxMessage,
@@ -267,12 +269,21 @@ export class BotAdminService {
   private static readonly THREAD_IMAGE_URL_RE = /https?:\/\/[^\s<>"']+/gi;
 
   private isDisplayableImageUrl(value: string | null | undefined): boolean {
-    const trimmed = String(value ?? '').trim();
-    return (
-      trimmed.startsWith('http://') ||
-      trimmed.startsWith('https://') ||
-      trimmed.startsWith('data:image/')
-    );
+    return isBrowserDisplayableImageUrl(String(value ?? '').trim());
+  }
+
+  private needsEvolutionImageEnrichment(message: EvolutionInboxMessage): boolean {
+    if (message.message_type !== 'image') {
+      return false;
+    }
+    const mediaUrl = String(message.media_url ?? '').trim();
+    if (!mediaUrl) {
+      return true;
+    }
+    if (mediaUrl.startsWith('data:image/')) {
+      return false;
+    }
+    return isWhatsAppHostedMediaUrl(mediaUrl) || !isBrowserDisplayableImageUrl(mediaUrl);
   }
 
   private hydrateThreadMessage<
@@ -362,12 +373,7 @@ export class BotAdminService {
     messages: EvolutionInboxMessage[],
     phone = '',
   ): Promise<EvolutionInboxMessage[]> {
-    const targets = messages
-      .filter(
-        (message) =>
-          message.message_type === 'image' && !String(message.media_url ?? '').trim(),
-      )
-      .slice(-24);
+    const targets = messages.filter((message) => this.needsEvolutionImageEnrichment(message)).slice(-24);
 
     if (!targets.length) {
       return messages;

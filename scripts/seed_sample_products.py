@@ -41,8 +41,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "Noise-cancelling over-ear headphones with 30h battery life.",
             "category": "Electronics",
             "price": 79.99,
-            "secondary_price_1": 69.99,
-            "secondary_price_2": 0,
             "quantity": 45,
             "status": "In Stock",
             "has_variants": False,
@@ -54,8 +52,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "7-in-1 hub with HDMI, USB 3.0, and SD card reader.",
             "category": "Electronics",
             "price": 34.5,
-            "secondary_price_1": 0,
-            "secondary_price_2": 0,
             "quantity": 8,
             "status": "Low Stock",
             "has_variants": False,
@@ -67,8 +63,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "Soft unisex tee available in multiple colors and sizes.",
             "category": "Clothing",
             "price": 24.0,
-            "secondary_price_1": 0,
-            "secondary_price_2": 0,
             "quantity": 120,
             "status": "In Stock",
             "has_variants": True,
@@ -85,8 +79,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "Adjustable lumbar support and breathable mesh back.",
             "category": "Electronics",
             "price": 199.0,
-            "secondary_price_1": 179.0,
-            "secondary_price_2": 0,
             "quantity": 0,
             "status": "Out of Stock",
             "has_variants": False,
@@ -98,8 +90,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "One-hour session with a business health advisor.",
             "category": "Services",
             "price": 150.0,
-            "secondary_price_1": 0,
-            "secondary_price_2": 0,
             "quantity": 999,
             "status": "Service",
             "has_variants": False,
@@ -111,8 +101,6 @@ def sample_products(company_id: int) -> list[dict]:
             "description": "A5 weekly planner with goal-tracking sections.",
             "category": "Services",
             "price": 18.75,
-            "secondary_price_1": 0,
-            "secondary_price_2": 0,
             "quantity": 60,
             "status": "In Stock",
             "has_variants": True,
@@ -212,11 +200,11 @@ def insert_product(
     cur.execute(
         """
         INSERT INTO product (
-          name, description, sku, price, secondary_price_1, secondary_price_2,
+          name, description, sku, price,
           quantity, status, category_id, company_id, created_by,
           has_variants, is_deleted
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE)
         RETURNING id
         """,
         (
@@ -224,8 +212,6 @@ def insert_product(
             item["description"],
             item["sku"],
             item["price"],
-            item["secondary_price_1"],
-            item["secondary_price_2"],
             item["quantity"],
             item["status"],
             category_id,

@@ -1,4 +1,4 @@
-name,description,category,weight,base_price,secondary_price_1,secondary_price_2,quantity,status,has_variants,gallery_urls,cover_image_url,sku,variant_name,variant_value,variant_price,variant_quantity,variant_sku,variant_image_url
+name,description,category,weight,base_price,quantity,status,has_variants,gallery_urls,cover_image_url,sku,variant_name,variant_value,variant_price,variant_quantity,variant_sku,variant_image_url
 "Baby Wipes Pack","80 sheets wipes","Care",0.15,650,0,0,100,"In Stock",no,"https://example.com/wipes.jpg","https://example.com/wipes.jpg","WIPES-80","","","","","",""
 "Baby Onesie","Soft cotton onesie","Clothing",0.12,1800,1700,0,0,"In Stock",yes,"https://example.com/onesie-red.jpg;https://example.com/onesie-black.jpg","https://example.com/onesie-red.jpg","","Color / Size","Red / S",1800,10,"RED-S-01","https://example.com/onesie-red.jpg"
 "Baby Onesie","Soft cotton onesie","Clothing",0.12,1800,1700,0,0,"In Stock",yes,"https://example.com/onesie-red.jpg;https://example.com/onesie-black.jpg","https://example.com/onesie-red.jpg","","Color / Size","Red / M",1800,8,"RED-M-01","https://example.com/onesie-red.jpg"

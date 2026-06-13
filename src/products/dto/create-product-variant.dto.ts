@@ -27,20 +27,6 @@ export class CreateProductVariantDto {
   @Min(0)
   price?: number;
 
-  @ApiPropertyOptional({ example: 2400, minimum: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  secondary_price_1?: number;
-
-  @ApiPropertyOptional({ example: 2300, minimum: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  secondary_price_2?: number;
-
   @ApiPropertyOptional({ example: 'https://example.com/image.jpg' })
   @IsOptional()
   @IsString()

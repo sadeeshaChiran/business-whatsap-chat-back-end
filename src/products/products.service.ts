@@ -16,8 +16,6 @@ type ImportVariant = {
   variant_name: string;
   variant_value: string;
   price?: number;
-  secondary_price_1?: number;
-  secondary_price_2?: number;
   quantity?: number;
   sku?: string;
   image_url?: string;
@@ -29,8 +27,6 @@ type ImportLine = {
   description: string;
   sku: string;
   price: number;
-  secondaryPrice1: number;
-  secondaryPrice2: number;
   quantity: number;
   status: string;
   categoryName: string;
@@ -48,8 +44,6 @@ type ImportProductGroup = {
   description: string;
   sku: string;
   price: number;
-  secondaryPrice1: number;
-  secondaryPrice2: number;
   quantity: number;
   status: string;
   categoryName: string;
@@ -144,18 +138,6 @@ export class ProductsService {
 
         if (variant.price !== undefined && variant.price !== null) {
           withPricing.price = Number(variant.price);
-        }
-        if (
-          variant.secondary_price_1 !== undefined &&
-          variant.secondary_price_1 !== null
-        ) {
-          withPricing.secondary_price_1 = Number(variant.secondary_price_1);
-        }
-        if (
-          variant.secondary_price_2 !== undefined &&
-          variant.secondary_price_2 !== null
-        ) {
-          withPricing.secondary_price_2 = Number(variant.secondary_price_2);
         }
         if (variant.quantity !== undefined && variant.quantity !== null) {
           withPricing.quantity = Number(variant.quantity);
@@ -309,8 +291,6 @@ export class ProductsService {
       description: createProductDto.description?.trim() ?? '',
       sku: hasVariants ? '' : (createProductDto.sku?.trim() ?? ''),
       price: basePrice,
-      secondary_price_1: Number(createProductDto.secondary_price_1 ?? 0),
-      secondary_price_2: Number(createProductDto.secondary_price_2 ?? 0),
       quantity: productQuantity,
       ...(createProductDto.status !== undefined
         ? { status: createProductDto.status.trim() || 'In Stock' }
@@ -380,12 +360,6 @@ export class ProductsService {
     }
     if (updateProductDto.price !== undefined) {
       product.price = Number(updateProductDto.price);
-    }
-    if (updateProductDto.secondary_price_1 !== undefined) {
-      product.secondary_price_1 = Number(updateProductDto.secondary_price_1 ?? 0);
-    }
-    if (updateProductDto.secondary_price_2 !== undefined) {
-      product.secondary_price_2 = Number(updateProductDto.secondary_price_2 ?? 0);
     }
     if (updateProductDto.status !== undefined) {
       product.status = updateProductDto.status?.trim() || 'In Stock';
@@ -697,14 +671,6 @@ export class ProductsService {
       /base_price/,
     ]);
     const price = this.normalizePrice(priceRaw);
-    const secondaryPrice1Raw = this.getRowValue(row, [
-      /secondary price 1/,
-      /secondary_price_1/,
-    ]);
-    const secondaryPrice2Raw = this.getRowValue(row, [
-      /secondary price 2/,
-      /secondary_price_2/,
-    ]);
     const quantityRaw = this.getRowValue(row, [
       /^quantity$/,
       /stock/,
@@ -733,8 +699,6 @@ export class ProductsService {
         /main image/,
       ]) ?? '',
     ).trim();
-    const normalizedSecondaryPrice1 = this.normalizePrice(secondaryPrice1Raw);
-    const normalizedSecondaryPrice2 = this.normalizePrice(secondaryPrice2Raw);
     const parsedQuantity = Number(String(quantityRaw ?? '').trim() || 0);
     const status = String(statusRaw ?? '').trim() || 'In Stock';
     const variant = this.extractVariantCombinationFromRow(row);
@@ -751,12 +715,6 @@ export class ProductsService {
       description,
       sku,
       price,
-      secondaryPrice1: Number.isFinite(normalizedSecondaryPrice1)
-        ? normalizedSecondaryPrice1
-        : 0,
-      secondaryPrice2: Number.isFinite(normalizedSecondaryPrice2)
-        ? normalizedSecondaryPrice2
-        : 0,
       quantity: Number.isFinite(parsedQuantity) ? parsedQuantity : 0,
       status,
       categoryName,
@@ -798,8 +756,6 @@ export class ProductsService {
           description: line.description,
           sku: line.sku,
           price: line.price,
-          secondaryPrice1: line.secondaryPrice1,
-          secondaryPrice2: line.secondaryPrice2,
           quantity: line.quantity,
           status: line.status,
           categoryName: line.categoryName,
@@ -814,8 +770,6 @@ export class ProductsService {
         if (line.description) existing.description = line.description;
         if (line.sku) existing.sku = line.sku;
         if (Number.isFinite(line.price)) existing.price = line.price;
-        if (line.secondaryPrice1) existing.secondaryPrice1 = line.secondaryPrice1;
-        if (line.secondaryPrice2) existing.secondaryPrice2 = line.secondaryPrice2;
         if (line.quantity) existing.quantity = line.quantity;
         if (line.status) existing.status = line.status;
         if (line.hasVariants) existing.hasVariants = true;
@@ -949,8 +903,6 @@ export class ProductsService {
         description: group.description,
         sku: hasVariants ? '' : group.sku,
         price: group.price,
-        secondary_price_1: group.secondaryPrice1,
-        secondary_price_2: group.secondaryPrice2,
         quantity: productQuantity,
         status: group.status,
         category_id: category.id,
