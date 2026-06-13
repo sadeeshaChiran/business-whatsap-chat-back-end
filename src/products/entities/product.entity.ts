@@ -28,12 +28,6 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  secondary_price_1: number;
-
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-  secondary_price_2: number;
-
   @Column({ type: 'int', default: 0 })
   quantity: number;
 

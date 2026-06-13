@@ -3,7 +3,7 @@
 --
 -- Each array item may include:
 --   variant_name, variant_value (required)
---   price, secondary_price_1, secondary_price_2, image_url (optional)
+--   price, image_url (optional)
 --
 -- Example:
 -- UPDATE product_variant
@@ -12,8 +12,6 @@
 --     "variant_name": "Size / Color",
 --     "variant_value": "M / Red",
 --     "price": 2500,
---     "secondary_price_1": 2400,
---     "secondary_price_2": 2300,
 --     "image_url": "https://cdn.example.com/m-red.jpg"
 --   }
 -- ]'::jsonb

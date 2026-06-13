@@ -218,6 +218,44 @@ function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
 }
 
+export function isWhatsAppHostedMediaUrl(value: string): boolean {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const host = new URL(trimmed).hostname.toLowerCase();
+    return host === 'mmg.whatsapp.net' || host.endsWith('.whatsapp.net');
+  } catch {
+    return false;
+  }
+}
+
+export function isBrowserDisplayableImageUrl(value: string): boolean {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith('data:image/')) {
+    return true;
+  }
+  if (!isHttpUrl(trimmed)) {
+    return false;
+  }
+  return !isWhatsAppHostedMediaUrl(trimmed);
+}
+
+function isMediaTypePlaceholder(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (trimmed === '[image]' || trimmed === '[media]') {
+    return true;
+  }
+  return /^\[[a-zA-Z]+Message\]$/i.test(trimmed);
+}
+
 function extractMessageMedia(
   message: Record<string, unknown>,
 ): { mediaUrl: string; caption: string; mediaKind: string } {
@@ -448,14 +486,16 @@ export function parseEvolutionFindMessages(
     const media = extractMessageMedia(record);
     let content = media.caption || extractMessageText(record);
     const rawType = pickString(record, ['messageType', 'message_type']);
-    const mediaUrl = isHttpUrl(media.mediaUrl) ? media.mediaUrl : '';
+    const mediaUrl = isBrowserDisplayableImageUrl(media.mediaUrl)
+      ? media.mediaUrl
+      : '';
     const messageType = mapEvolutionMessageType(
       rawType,
       content,
       media.mediaKind,
       mediaUrl,
     );
-    if (messageType === 'image' && !content.trim()) {
+    if (messageType === 'image' && isMediaTypePlaceholder(content)) {
       content = '[image]';
     }
     const isMedia =

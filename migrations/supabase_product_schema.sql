@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS product (
   description TEXT NOT NULL DEFAULT '',
   sku VARCHAR(100) NOT NULL DEFAULT '',
   price DECIMAL(10, 2) NOT NULL,
-  secondary_price_1 DECIMAL(10, 2) NOT NULL DEFAULT 0,
-  secondary_price_2 DECIMAL(10, 2) NOT NULL DEFAULT 0,
   quantity INTEGER NOT NULL DEFAULT 0,
   status VARCHAR(50) NOT NULL DEFAULT 'In Stock',
   category_id INTEGER NOT NULL REFERENCES product_catergory (id) ON UPDATE CASCADE,
