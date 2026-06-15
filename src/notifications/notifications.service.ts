@@ -3,8 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { subDays } from 'date-fns';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
-import { BotFlag } from '../bot-admin/entities/bot-flag.entity';
 import { Expense } from '../expenses/entities/expense.entity';
 import { Income } from '../income/entities/income.entity';
 import { Note } from '../notes/entities/note.entity';
@@ -47,10 +45,6 @@ export class NotificationsService {
     private readonly incomeRepository: Repository<Income>,
     @InjectRepository(Note)
     private readonly noteRepository: Repository<Note>,
-    @InjectRepository(BotFlag)
-    private readonly botFlagRepository: Repository<BotFlag>,
-    @InjectRepository(BotChannelUser)
-    private readonly botChannelUserRepository: Repository<BotChannelUser>,
     private readonly reportsService: ReportsService,
   ) {}
 
@@ -122,7 +116,7 @@ export class NotificationsService {
   }
 
   private async buildNotificationFeed(user: AuthenticatedUser) {
-    const [incomes, expenses, notes, healthWeekly, healthMonthly, botFlags] =
+    const [incomes, expenses, notes, healthWeekly, healthMonthly] =
       await Promise.all([
         this.incomeRepository.find({
           where: { company_id: user.company_id },
@@ -154,16 +148,6 @@ export class NotificationsService {
           user,
           { period: 'monthly' } as ReportQueryDto,
         ),
-        this.botFlagRepository
-          .createQueryBuilder('flag')
-          .leftJoinAndSelect('flag.channelUser', 'channelUser')
-          .where('channelUser.company_id = :companyId', {
-            companyId: user.company_id,
-          })
-          .andWhere('flag.resolved = false')
-          .orderBy('flag.created_at', 'DESC')
-          .take(10)
-          .getMany(),
       ]);
 
     const now = new Date();
@@ -321,26 +305,6 @@ export class NotificationsService {
           relatedEntityType: reminder.relatedEntityType,
           relatedEntityId: reminder.relatedEntityId,
           createdAt: reminder.createdAt,
-        }),
-      );
-    }
-
-    for (const flag of botFlags.slice(0, 5)) {
-      const channelUser = flag.channelUser;
-      const title =
-        flag.severity === 'high' ? 'Bot Trouble Alert' : 'Bot Conversation Needs Review';
-      const userLabel =
-        channelUser?.display_name?.trim() ||
-        channelUser?.external_user_id ||
-        `Bot user ${flag.bot_channel_user_id}`;
-      notifications.push(
-        this.createNotification({
-          id: `bot-flag-${flag.id}`,
-          type: 'RISK',
-          title,
-          message: `${userLabel} triggered ${flag.flag_type}. ${flag.reason}`,
-          priority: flag.severity === 'high' ? 'HIGH' : 'MEDIUM',
-          createdAt: flag.created_at ?? new Date(),
         }),
       );
     }

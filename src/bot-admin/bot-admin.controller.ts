@@ -18,7 +18,6 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { BotAdminService } from './bot-admin.service';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
-import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -53,14 +52,6 @@ export class BotAdminController {
     @Body() payload: ToggleBotUserDto,
   ) {
     return this.botAdminService.toggleUser(user, Number(id), payload);
-  }
-
-  @Get('flags')
-  getFlags(
-    @CurrentUser() user: AuthenticatedUser,
-    @Query() query: BotFlagsQueryDto,
-  ) {
-    return this.botAdminService.getFlags(user, query);
   }
 
   @Get('conversations')
