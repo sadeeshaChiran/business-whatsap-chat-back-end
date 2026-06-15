@@ -11,7 +11,6 @@ import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Company } from '../company/entities/company.entity';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
-import { BotFlagsQueryDto } from './dto/bot-flags-query.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -19,7 +18,6 @@ import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
-import { BotFlag } from './entities/bot-flag.entity';
 import { BotMessage } from './entities/bot-message.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
@@ -81,8 +79,6 @@ export class BotAdminService {
     private readonly messageRepository: Repository<BotMessage>,
     @InjectRepository(BotTrainingData)
     private readonly trainingRepository: Repository<BotTrainingData>,
-    @InjectRepository(BotFlag)
-    private readonly flagRepository: Repository<BotFlag>,
     @InjectRepository(BotOrder)
     private readonly orderRepository: Repository<BotOrder>,
     @InjectRepository(BotOrderItem)
@@ -128,7 +124,7 @@ export class BotAdminService {
     await this.assertAdminAccess(user);
     const company_id = user.company_id;
 
-    const [totalUsers, activeBots, totalConversations, pendingAlerts, totalOrders, pendingOrders] =
+    const [totalUsers, activeBots, totalConversations, totalOrders, pendingOrders] =
       await Promise.all([
       this.channelUserRepository.count({ where: { company_id } }),
       this.channelUserRepository.count({ where: { company_id, bot_enabled: true } }),
@@ -136,12 +132,6 @@ export class BotAdminService {
         .createQueryBuilder('conversation')
         .leftJoin('conversation.channelUser', 'channelUser')
         .where('channelUser.company_id = :company_id', { company_id })
-        .getCount(),
-      this.flagRepository
-        .createQueryBuilder('flag')
-        .leftJoin('flag.channelUser', 'channelUser')
-        .where('channelUser.company_id = :company_id', { company_id })
-        .andWhere('flag.resolved = false')
         .getCount(),
       this.orderRepository.count({ where: { company_id } }),
       this.orderRepository.count({ where: { company_id, status: 'Pending' } }),
@@ -151,7 +141,6 @@ export class BotAdminService {
       totalUsers,
       activeBots,
       totalConversations,
-      pendingAlerts,
       totalOrders,
       pendingOrders,
     };
@@ -795,25 +784,6 @@ export class BotAdminService {
       bot_enabled: saved.bot_enabled,
       manual_mode: saved.manual_mode,
     };
-  }
-
-  async getFlags(user: AuthenticatedUser, query: BotFlagsQueryDto) {
-    await this.assertAdminAccess(user);
-    const unresolvedOnly = query.unresolved !== 'false';
-
-    const builder = this.flagRepository
-      .createQueryBuilder('flag')
-      .leftJoinAndSelect('flag.channelUser', 'channel_user')
-      .leftJoinAndSelect('flag.conversation', 'conversation')
-      .orderBy('flag.created_at', 'DESC');
-
-    builder.where('channel_user.company_id = :companyId', { companyId: user.company_id });
-
-    if (unresolvedOnly) {
-      builder.andWhere('flag.resolved = false');
-    }
-
-    return builder.getMany();
   }
 
   async getConversations(user: AuthenticatedUser) {
