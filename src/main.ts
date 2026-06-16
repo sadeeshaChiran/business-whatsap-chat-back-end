@@ -7,6 +7,7 @@ import { resolve } from 'path';
 import { AppModule } from './app.module';
 import { getEnvNumber } from './common/env';
 import { runStartupMigrations } from './common/run-startup-migrations';
+import { json, urlencoded } from 'express';
 
 config({ path: resolve(process.cwd(), '.env') });
 
