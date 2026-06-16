@@ -32,6 +32,14 @@ export class CreateProductVariantDto {
   @IsString()
   image_url?: string;
 
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'When true, this variant uses the product cover/gallery image instead of a custom variant image.',
+  })
+  @IsOptional()
+  use_default_image?: boolean;
+
   @ApiPropertyOptional({ example: 10, minimum: 0 })
   @IsOptional()
   @Type(() => Number)

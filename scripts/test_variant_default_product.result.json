@@ -1,0 +1,14 @@
+{
+  "product_id": 72,
+  "company_id": 15,
+  "variant_values": [
+    "Red",
+    "Blue"
+  ],
+  "shared_default_cover": true,
+  "vector_sync": {
+    "deleted": 0,
+    "products_total": 1,
+    "products_upserted": 1
+  }
+}
