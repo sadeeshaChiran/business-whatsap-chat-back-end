@@ -1,0 +1,15 @@
+{
+  "company_id": 13,
+  "product_id": 73,
+  "product_name": "Baby Shoes Test 1781631132",
+  "sku": "VD-13-1781631132",
+  "variants": ["Red", "Blue"],
+  "use_default_image": true,
+  "cover_kb": 58,
+  "vector_sync": {
+    "deleted": 2,
+    "products_total": 3,
+    "products_upserted": 3
+  },
+  "note": "Both variants share the product cover image (use_default_image: true)."
+}

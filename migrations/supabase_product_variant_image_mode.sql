@@ -1,0 +1,13 @@
+-- Product variant image mode (no DDL required)
+--
+-- Variant rows are stored in product_variant.variants JSONB array.
+-- Each object may now include:
+--   use_default_image: boolean
+--
+-- Semantics:
+--   use_default_image=true  -> use product.image_url / gallery cover for this variant
+--   image_url set           -> custom per-variant image (use_default_image=false)
+--   use_default_image=false and no image_url -> variant has no catalog image
+--
+-- Legacy rows without use_default_image:
+--   custom image_url if present, otherwise treated as use_default_image=true

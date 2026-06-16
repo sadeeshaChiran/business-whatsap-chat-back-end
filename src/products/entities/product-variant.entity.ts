@@ -15,6 +15,7 @@ export type ProductVariantOption = {
   quantity?: number;
   sku?: string;
   image_url?: string;
+  use_default_image?: boolean;
 };
 
 @Entity()

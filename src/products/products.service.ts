@@ -19,6 +19,7 @@ type ImportVariant = {
   quantity?: number;
   sku?: string;
   image_url?: string;
+  use_default_image?: boolean;
 };
 
 type ImportLine = {
@@ -147,6 +148,9 @@ export class ProductsService {
         }
         if (variant.image_url?.trim()) {
           withPricing.image_url = variant.image_url.trim();
+          withPricing.use_default_image = false;
+        } else if (variant.use_default_image !== undefined) {
+          withPricing.use_default_image = Boolean(variant.use_default_image);
         }
 
         return withPricing;
