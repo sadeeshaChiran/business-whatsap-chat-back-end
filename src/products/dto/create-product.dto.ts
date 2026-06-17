@@ -13,6 +13,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { CreateProductVariantDto } from './create-product-variant.dto';
+import { VariantImageMatchDto } from './variant-image-match.dto';
 
 export class CreateProductDto {
   @ApiProperty({ example: 'Premium T-Shirt', maxLength: 255 })
@@ -95,4 +96,10 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => CreateProductVariantDto)
   variants?: CreateProductVariantDto[];
+
+  @ApiPropertyOptional({ type: VariantImageMatchDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => VariantImageMatchDto)
+  variant_image_match?: VariantImageMatchDto | null;
 }

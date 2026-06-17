@@ -1,0 +1,17 @@
+{
+  "company_id": 13,
+  "product_id": 76,
+  "product_name": "Google Baby Shoes Color+Size 1781666686",
+  "mode": "color-size",
+  "match_dimensions": [
+    "Color",
+    "Size"
+  ],
+  "match_image_keys": [
+    "Red / S",
+    "Red / M",
+    "Blue / S",
+    "Blue / M"
+  ],
+  "variant_count": 4
+}

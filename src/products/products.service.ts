@@ -72,6 +72,29 @@ export class ProductsService {
       .filter(Boolean);
   }
 
+  private normalizeVariantImageMatch(
+    match?: { dimensions?: string[]; images?: Record<string, string> } | null,
+  ) {
+    if (!match) {
+      return null;
+    }
+    const dimensions = (match.dimensions ?? [])
+      .map((dimension) => dimension.trim())
+      .filter(Boolean);
+    const images: Record<string, string> = {};
+    for (const [key, value] of Object.entries(match.images ?? {})) {
+      const normalizedKey = key.trim();
+      const normalizedValue = String(value ?? '').trim();
+      if (normalizedKey && normalizedValue) {
+        images[normalizedKey] = normalizedValue;
+      }
+    }
+    if (!dimensions.length || !Object.keys(images).length) {
+      return null;
+    }
+    return { dimensions, images };
+  }
+
   private resolveCoverImage(
     coverImage: string | undefined | null,
     gallery: string[],
@@ -306,6 +329,9 @@ export class ProductsService {
       image_url: coverImage,
       gallery,
       weight: Number(createProductDto.weight),
+      variant_image_match: this.normalizeVariantImageMatch(
+        createProductDto.variant_image_match,
+      ),
       is_deleted: false,
       category,
     });
@@ -409,6 +435,12 @@ export class ProductsService {
     product.image_url = coverImage;
     if (updateProductDto.weight !== undefined) {
       product.weight = Number(updateProductDto.weight);
+    }
+
+    if (updateProductDto.variant_image_match !== undefined) {
+      product.variant_image_match = this.normalizeVariantImageMatch(
+        updateProductDto.variant_image_match,
+      );
     }
 
     if (updateProductDto.sku !== undefined) {

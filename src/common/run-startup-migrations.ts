@@ -7,6 +7,7 @@ const MIGRATION_FILES = [
   'supabase_product_image_url.sql',
   'supabase_product_gallery_weight.sql',
   'supabase_drop_secondary_prices.sql',
+  'supabase_product_variant_image_match.sql',
 ] as const;
 
 function migrationDir(): string | null {
