@@ -55,6 +55,12 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
   weight: number | null;
 
+  @Column({ type: 'jsonb', nullable: true })
+  variant_image_match: {
+    dimensions: string[];
+    images: Record<string, string>;
+  } | null;
+
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 

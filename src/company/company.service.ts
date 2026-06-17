@@ -12,6 +12,7 @@ import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../whatsapp/whatsapp-channel.service';
+import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity';
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -23,6 +24,8 @@ export class CompanyService {
     private readonly industryRepository: Repository<Industry>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelsRepository: Repository<WhatsappChannel>,
+    @InjectRepository(MetaPageConnection)
+    private readonly metaPageConnectionsRepository: Repository<MetaPageConnection>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly whatsappChannelService: WhatsappChannelService,
@@ -82,11 +85,15 @@ export class CompanyService {
   }
 
   private async toApiCompany(company: Company, loginEmail?: string) {
-    const [industry, channel] = await Promise.all([
+    const [industry, channel, metaConnection] = await Promise.all([
       this.loadIndustry(company.industry_id),
       this.whatsappChannelsRepository.findOne({
         where: { company_id: Number(company.id) },
         order: { id: 'ASC' },
+      }),
+      this.metaPageConnectionsRepository.findOne({
+        where: { company_id: Number(company.id), status: 'CONNECTED' },
+        order: { id: 'DESC' },
       }),
     ]);
     const login = loginEmail ?? '';
@@ -111,6 +118,11 @@ export class CompanyService {
       whatsapp_instance_name: channel?.instance_name ?? null,
       whatsapp_evaluation_key: channel?.evaluation_whatsapp_key ?? null,
       whatsapp_status: channel?.status ?? null,
+      facebook_page_id: metaConnection?.page_id ?? null,
+      facebook_page_name: metaConnection?.page_name ?? null,
+      facebook_connection_status: metaConnection?.status ?? null,
+      instagram_business_account_id:
+        metaConnection?.instagram_business_account_id ?? null,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };

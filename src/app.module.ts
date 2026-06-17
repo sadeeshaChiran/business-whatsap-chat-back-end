@@ -19,6 +19,7 @@ import { BotProxyModule } from './bot-proxy/bot-proxy.module';
 import { CustomersModule } from './customers/customers.module';
 import { SupabaseModule } from './supabase/supabase.module';
 import { EvolutionModule } from './integrations/evolution/evolution.module';
+import { MetaModule } from './integrations/meta/meta.module';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -52,6 +53,7 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     BotAdminModule,
     BotProxyModule,
     EvolutionModule,
+    MetaModule,
   ],
   controllers: [AppController],
   providers: [

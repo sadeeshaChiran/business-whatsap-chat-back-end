@@ -25,6 +25,11 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Integrations
+
+- **Meta Facebook Page + Instagram posts** (Settings connect, read posts/photos — not messaging): see [../docs/META_PAGE_SETUP.md](../docs/META_PAGE_SETUP.md)
+- **WhatsApp (Evolution API)**: see Evolution env vars in `.env.example`
+
 ## Project setup
 
 ```bash
