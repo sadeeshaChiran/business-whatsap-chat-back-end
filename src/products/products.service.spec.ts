@@ -136,16 +136,27 @@ describe('ProductsService', () => {
       ]);
     });
 
-    it('requires weight and gallery', () => {
+    it('requires weight but allows missing price and images', () => {
       expect(() =>
         normalizeImportRows([
           {
             name: 'No Media Product',
             category: 'Care',
-            price: '100',
           },
         ]),
       ).toThrow(BadRequestException);
+
+      const groups = normalizeImportRows([
+        {
+          name: 'No Media Product',
+          category: 'Care',
+          weight: '0.1',
+        },
+      ]);
+
+      expect(groups).toHaveLength(1);
+      expect(groups[0].price).toBe(0);
+      expect(groups[0].gallery).toEqual([]);
     });
 
     it('rejects variant image outside gallery', () => {
@@ -239,6 +250,48 @@ describe('ProductsService', () => {
       expect(
         groups.find((group) => group.name === 'Baby Onesie')?.variants,
       ).toHaveLength(4);
+    });
+  });
+
+  describe('variant price match', () => {
+    it('normalizes dimension price map', () => {
+      const normalizeVariantPriceMatch = (
+        match: {
+          dimensions?: string[];
+          prices?: Record<string, number>;
+        } | null,
+      ) =>
+        (
+          service as unknown as {
+            normalizeVariantPriceMatch: (
+              match: {
+                dimensions?: string[];
+                prices?: Record<string, number>;
+              } | null,
+            ) => { dimensions: string[]; prices: Record<string, number> } | null;
+          }
+        ).normalizeVariantPriceMatch(match);
+
+      expect(
+        normalizeVariantPriceMatch({
+          dimensions: [' Size ', 'Color'],
+          prices: { '12-24 Months': 1850, '': 100, Bad: Number.NaN },
+        }),
+      ).toEqual({
+        dimensions: ['Size', 'Color'],
+        prices: { '12-24 Months': 1850 },
+      });
+    });
+  });
+
+  describe('product sku', () => {
+    it('builds SKU from product id', () => {
+      const buildProductSku = (productId: number) =>
+        (service as unknown as { buildProductSku: (productId: number) => string }).buildProductSku(
+          productId,
+        );
+
+      expect(buildProductSku(42)).toBe('SKU-42');
     });
   });
 

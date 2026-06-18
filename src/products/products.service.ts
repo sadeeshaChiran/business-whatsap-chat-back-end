@@ -72,6 +72,51 @@ export class ProductsService {
       .filter(Boolean);
   }
 
+  private buildProductSku(productId: number): string {
+    return `SKU-${productId}`;
+  }
+
+  private slugifyVariantSkuPart(value: string): string {
+    return value
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 32);
+  }
+
+  private buildVariantSku(
+    productId: number,
+    variantValue: string,
+    index: number,
+  ): string {
+    const parts = variantValue
+      .split(' / ')
+      .map((part) => this.slugifyVariantSkuPart(part))
+      .filter(Boolean);
+    const suffix = parts.length ? parts.join('-') : `V${index + 1}`;
+    return `SKU-${productId}-${suffix}`;
+  }
+
+  private ensureVariantSkus(
+    productId: number,
+    variants: ImportVariant[],
+  ): ImportVariant[] {
+    return variants.map((variant, index) => ({
+      ...variant,
+      sku: this.buildVariantSku(productId, variant.variant_value, index),
+    }));
+  }
+
+  private async ensureProductSku(product: Product): Promise<Product> {
+    const nextSku = this.buildProductSku(product.id);
+    if (product.sku === nextSku) {
+      return product;
+    }
+    product.sku = nextSku;
+    return this.productRepository.save(product);
+  }
+
   private normalizeVariantImageMatch(
     match?: { dimensions?: string[]; images?: Record<string, string> } | null,
   ) {
@@ -95,6 +140,29 @@ export class ProductsService {
     return { dimensions, images };
   }
 
+  private normalizeVariantPriceMatch(
+    match?: { dimensions?: string[]; prices?: Record<string, number> } | null,
+  ) {
+    if (!match) {
+      return null;
+    }
+    const dimensions = (match.dimensions ?? [])
+      .map((dimension) => dimension.trim())
+      .filter(Boolean);
+    const prices: Record<string, number> = {};
+    for (const [key, value] of Object.entries(match.prices ?? {})) {
+      const normalizedKey = key.trim();
+      const normalizedValue = Number(value);
+      if (normalizedKey && Number.isFinite(normalizedValue) && normalizedValue >= 0) {
+        prices[normalizedKey] = normalizedValue;
+      }
+    }
+    if (!dimensions.length || !Object.keys(prices).length) {
+      return null;
+    }
+    return { dimensions, prices };
+  }
+
   private resolveCoverImage(
     coverImage: string | undefined | null,
     gallery: string[],
@@ -107,19 +175,7 @@ export class ProductsService {
     return gallery[0] ?? null;
   }
 
-  private validateProductMedia(
-    gallery: string[],
-    coverImage: string | null,
-    weight: number | undefined | null,
-  ) {
-    if (!gallery.length) {
-      throw new BadRequestException('Product images are required');
-    }
-
-    if (!coverImage) {
-      throw new BadRequestException('Cover image is required');
-    }
-
+  private validateProductWeight(weight: number | undefined | null) {
     if (weight === undefined || weight === null || Number(weight) < 0) {
       throw new BadRequestException('Product weight is required');
     }
@@ -223,7 +279,10 @@ export class ProductsService {
   ) {
     await this.productVariantRepository.delete({ product_id: product.id });
 
-    const normalizedVariants = this.normalizeVariants(variants);
+    const normalizedVariants = this.ensureVariantSkus(
+      product.id,
+      this.normalizeVariants(variants),
+    );
     if (hasVariants && normalizedVariants.length) {
       await this.productVariantRepository.save(
         this.productVariantRepository.create({
@@ -292,13 +351,9 @@ export class ProductsService {
       createProductDto.image_url,
       gallery,
     );
-    this.validateProductMedia(
-      gallery,
-      coverImage,
-      createProductDto.weight,
-    );
+    this.validateProductWeight(createProductDto.weight);
 
-    const basePrice = Number(createProductDto.price);
+    const basePrice = Number(createProductDto.price ?? 0);
     const normalizedVariants = this.normalizeVariants(
       createProductDto.variants,
       basePrice,
@@ -316,7 +371,7 @@ export class ProductsService {
     const product = this.productRepository.create({
       name: createProductDto.name.trim(),
       description: createProductDto.description?.trim() ?? '',
-      sku: hasVariants ? '' : (createProductDto.sku?.trim() ?? ''),
+      sku: '',
       price: basePrice,
       quantity: productQuantity,
       ...(createProductDto.status !== undefined
@@ -332,11 +387,16 @@ export class ProductsService {
       variant_image_match: this.normalizeVariantImageMatch(
         createProductDto.variant_image_match,
       ),
+      variant_price_match: this.normalizeVariantPriceMatch(
+        createProductDto.variant_price_match,
+      ),
       is_deleted: false,
       category,
     });
 
     const savedProduct = await this.productRepository.save(product);
+
+    await this.ensureProductSku(savedProduct);
 
     await this.saveProductVariants(
       savedProduct,
@@ -428,7 +488,9 @@ export class ProductsService {
       updateProductDto.image_url !== undefined ||
       updateProductDto.weight !== undefined
     ) {
-      this.validateProductMedia(gallery, coverImage, nextWeight);
+      if (updateProductDto.weight !== undefined) {
+        this.validateProductWeight(nextWeight);
+      }
     }
 
     product.gallery = gallery;
@@ -443,11 +505,13 @@ export class ProductsService {
       );
     }
 
-    if (updateProductDto.sku !== undefined) {
-      product.sku = hasVariants ? '' : (updateProductDto.sku?.trim() ?? '');
-    } else if (hasVariants) {
-      product.sku = '';
+    if (updateProductDto.variant_price_match !== undefined) {
+      product.variant_price_match = this.normalizeVariantPriceMatch(
+        updateProductDto.variant_price_match,
+      );
     }
+
+    product.sku = this.buildProductSku(product.id);
 
     if (hasVariants && updateProductDto.variants !== undefined) {
       product.quantity = normalizedVariants.reduce(
@@ -780,18 +844,13 @@ export class ProductsService {
       const existing = groups.get(key);
       const isVariantContinuation = !!existing && !!line.variant;
 
-      if (!Number.isFinite(line.price) && !isVariantContinuation) {
-        errors.push(`Row ${line.rowNumber}: Base price must be a valid number.`);
-        return;
-      }
-
       if (!existing) {
         groups.set(key, {
           rowNumbers: [line.rowNumber],
           name: line.name,
           description: line.description,
-          sku: line.sku,
-          price: line.price,
+          sku: '',
+          price: Number.isFinite(line.price) ? line.price : 0,
           quantity: line.quantity,
           status: line.status,
           categoryName: line.categoryName,
@@ -804,7 +863,6 @@ export class ProductsService {
       } else {
         existing.rowNumbers.push(line.rowNumber);
         if (line.description) existing.description = line.description;
-        if (line.sku) existing.sku = line.sku;
         if (Number.isFinite(line.price)) existing.price = line.price;
         if (line.quantity) existing.quantity = line.quantity;
         if (line.status) existing.status = line.status;
@@ -853,16 +911,6 @@ export class ProductsService {
           `Rows ${rowLabel}: Product weight is required for delivery calculations.`,
         );
       }
-      if (!Number.isFinite(group.price)) {
-        errors.push(`Rows ${rowLabel}: Base price must be a valid number.`);
-      }
-      if (!gallery.length) {
-        errors.push(`Rows ${rowLabel}: Product images are required (gallery_urls).`);
-      }
-      if (!coverImage) {
-        errors.push(`Rows ${rowLabel}: Cover image is required.`);
-      }
-
       if (group.hasVariants && !group.variants.length) {
         errors.push(
           `Rows ${rowLabel}: Has variants is enabled but no variant combinations were found.`,
@@ -871,7 +919,7 @@ export class ProductsService {
 
       group.variants.forEach((variant) => {
         const imageUrl = variant.image_url?.trim();
-        if (imageUrl && !gallery.includes(imageUrl)) {
+        if (imageUrl && gallery.length > 0 && !gallery.includes(imageUrl)) {
           errors.push(
             `Rows ${rowLabel}: Variant "${variant.variant_value}" image must be selected from gallery_urls.`,
           );
@@ -916,15 +964,16 @@ export class ProductsService {
       user.company_id,
     );
 
+    const basePrice = Number.isFinite(group.price) ? group.price : 0;
     const normalizedVariants = this.normalizeVariants(
       group.variants,
-      group.price,
+      basePrice,
     );
     const hasVariants = group.hasVariants && normalizedVariants.length > 0;
     const gallery = this.normalizeGallery(group.gallery);
     const coverImage = this.resolveCoverImage(group.coverImageUrl, gallery);
 
-    this.validateProductMedia(gallery, coverImage, group.weight);
+    this.validateProductWeight(group.weight);
 
     const productQuantity = hasVariants
       ? normalizedVariants.reduce(
@@ -937,8 +986,8 @@ export class ProductsService {
       this.productRepository.create({
         name: group.name,
         description: group.description,
-        sku: hasVariants ? '' : group.sku,
-        price: group.price,
+        sku: '',
+        price: basePrice,
         quantity: productQuantity,
         status: group.status,
         category_id: category.id,
@@ -952,6 +1001,8 @@ export class ProductsService {
         category,
       }),
     );
+
+    await this.ensureProductSku(product);
 
     if (hasVariants) {
       await this.saveProductVariants(product, normalizedVariants, hasVariants);

@@ -61,6 +61,12 @@ export class Product {
     images: Record<string, string>;
   } | null;
 
+  @Column({ type: 'jsonb', nullable: true })
+  variant_price_match: {
+    dimensions: string[];
+    prices: Record<string, number>;
+  } | null;
+
   @Column({ type: 'boolean', default: false })
   is_deleted: boolean;
 
