@@ -14,6 +14,7 @@ import {
 } from 'class-validator';
 import { CreateProductVariantDto } from './create-product-variant.dto';
 import { VariantImageMatchDto } from './variant-image-match.dto';
+import { VariantPriceMatchDto } from './variant-price-match.dto';
 
 export class CreateProductDto {
   @ApiProperty({ example: 'Premium T-Shirt', maxLength: 255 })
@@ -32,11 +33,12 @@ export class CreateProductDto {
   @MaxLength(100)
   sku?: string;
 
-  @ApiProperty({ example: 2000, minimum: 0 })
+  @ApiPropertyOptional({ example: 2000, minimum: 0 })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  price: number;
+  price?: number;
 
   @ApiPropertyOptional({ example: 25, minimum: 0 })
   @IsOptional()
@@ -102,4 +104,10 @@ export class CreateProductDto {
   @ValidateNested()
   @Type(() => VariantImageMatchDto)
   variant_image_match?: VariantImageMatchDto | null;
+
+  @ApiPropertyOptional({ type: VariantPriceMatchDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => VariantPriceMatchDto)
+  variant_price_match?: VariantPriceMatchDto | null;
 }
