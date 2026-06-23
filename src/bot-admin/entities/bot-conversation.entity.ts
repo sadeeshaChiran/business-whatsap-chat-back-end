@@ -36,6 +36,12 @@ export class BotConversation {
   @Column({ type: 'timestamptz', nullable: true })
   assigned_at: Date | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  timeout_at: Date | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  assignment_mode: 'sticky' | 'round_robin' | 'manual' | 'unassigned' | null;
+
   @Column({ type: 'timestamp', nullable: true })
   last_message_at: Date | null;
 

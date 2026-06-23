@@ -36,6 +36,7 @@ import {
 } from '../integrations/evolution/evolution-inbox.util';
 import { User } from '../users/entities/user.entity';
 import { PusherService } from '../common/pusher.service';
+import { AgentRoutingService } from '../agent-routing/agent-routing.service';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -95,6 +96,7 @@ export class BotAdminService {
     private readonly userRepository: Repository<User>,
     private readonly evolutionService: EvolutionService,
     private readonly pusherService: PusherService,
+    private readonly agentRoutingService: AgentRoutingService,
   ) {}
 
   private getEvolutionConfig() {
@@ -192,8 +194,17 @@ export class BotAdminService {
   async toggleOwnStatus(user: AuthenticatedUser) {
     const u = await this.userRepository.findOne({ where: { id: user.id } });
     if (!u) throw new NotFoundException('User not found.');
+    const wasActive = u.is_agent_active;
     u.is_agent_active = !u.is_agent_active;
     const saved = await this.userRepository.save(u);
+
+    if (wasActive && !saved.is_agent_active) {
+      await this.agentRoutingService.reroutePendingConversationsForAgent(
+        user.company_id,
+        saved.id,
+      );
+    }
+
     // Broadcast to company channel
     this.pusherService.trigger(
       `company-${user.company_id}`,
@@ -207,19 +218,87 @@ export class BotAdminService {
   async acceptConversation(user: AuthenticatedUser, conversationId: number) {
     const conv = await this.conversationRepository.findOne({
       where: { id: conversationId, assigned_agent_id: user.id },
+      relations: ['channelUser'],
     });
     if (!conv) throw new NotFoundException('Conversation not found or not assigned to you.');
     if (conv.status !== 'pending') {
       throw new BadRequestException('Conversation is not in pending state.');
     }
     conv.status = 'active';
+    conv.timeout_at = null;
     const saved = await this.conversationRepository.save(conv);
+
+    const phone = conv.channelUser?.external_user_id ?? '';
+    if (phone) {
+      await this.agentRoutingService.recordStickyAgent(
+        user.company_id,
+        phone,
+        user.id,
+      );
+    }
+
     this.pusherService.trigger(
       `company-${user.company_id}`,
       'conversation_updated',
       { conversation_id: saved.id, status: saved.status, agent_id: user.id },
     );
     return { id: saved.id, status: saved.status };
+  }
+
+  /** Agent rejects a pending conversation and routes it to the next available agent */
+  async rejectConversation(user: AuthenticatedUser, conversationId: number) {
+    const conv = await this.conversationRepository.findOne({
+      where: { id: conversationId, assigned_agent_id: user.id },
+      relations: ['channelUser'],
+    });
+    if (!conv) {
+      throw new NotFoundException('Conversation not found or not assigned to you.');
+    }
+    if (conv.status !== 'pending') {
+      throw new BadRequestException('Only pending conversations can be rejected.');
+    }
+
+    const phone = conv.channelUser?.external_user_id ?? '';
+    const result = await this.agentRoutingService.routeInboundConversation(
+      user.company_id,
+      conversationId,
+      phone,
+      user.id,
+    );
+
+    return {
+      id: conversationId,
+      status: result.agentId ? 'pending' : 'open',
+      assigned_agent_id: result.agentId,
+      assignment_mode: result.assignmentMode,
+      message: result.agentId
+        ? 'Conversation reassigned to the next available agent.'
+        : 'No other agents are online. Conversation returned to the open queue.',
+    };
+  }
+
+  async getUnassignedConversations(user: AuthenticatedUser) {
+    await this.assertAdminAccess(user);
+    return this.agentRoutingService.getUnassignedConversations(user.company_id);
+  }
+
+  async manualAssignConversation(
+    user: AuthenticatedUser,
+    conversationId: number,
+    agentId: number,
+  ) {
+    await this.assertAdminAccess(user);
+    await this.agentRoutingService.manualAssignConversation(
+      user.company_id,
+      conversationId,
+      agentId,
+    );
+    return {
+      id: conversationId,
+      status: 'pending',
+      assigned_agent_id: agentId,
+      assignment_mode: 'manual',
+    };
   }
 
   private normalizePhoneKey(phone: string): string {
@@ -1651,86 +1730,97 @@ export class BotAdminService {
       return false;
     }
 
-    const evolution = this.getEvolutionConfig();
-    if (evolution.enabled) {
-      const channel = await this.resolveCompanyWhatsappChannel(companyId);
-      const instance = channel?.instance_name?.trim();
-      const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    if (!channel) {
+      return false;
+    }
 
-      if (!instance || !apikey) {
+    if (channel.provider_type === 'meta') {
+      const phoneNumberId = channel.meta_phone_number_id?.trim();
+      const accessToken = channel.meta_access_token?.trim();
+      if (!phoneNumberId || !accessToken) {
         return false;
       }
 
+      const pdfMatch = message.match(/https?:\/\/[^\s<>"]+\.pdf/i);
+      const hasPdf = !!pdfMatch;
+      const pdfUrl = hasPdf ? pdfMatch[0] : null;
+      const graphVersion =
+        this.getEnvValue('META_GRAPH_API_VERSION') || 'v22.0';
+
       try {
+        let payload: Record<string, unknown>;
+        if (hasPdf && pdfUrl) {
+          const cleanMessage = message.replace(pdfUrl, '').trim();
+          payload = {
+            messaging_product: 'whatsapp',
+            to: cleanedPhone,
+            type: 'document',
+            document: {
+              link: pdfUrl,
+              filename: `invoice_${pdfUrl.split('/').pop() || 'order'}.pdf`,
+              caption: cleanMessage || undefined,
+            },
+          };
+        } else {
+          payload = {
+            messaging_product: 'whatsapp',
+            to: cleanedPhone,
+            type: 'text',
+            text: { body: message },
+          };
+        }
+
         const response = await fetch(
-          `${evolution.base}/message/sendText/${encodeURIComponent(instance)}`,
+          `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`,
           {
             method: 'POST',
             headers: {
-              apikey,
+              Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              number: cleanedPhone,
-              text: message,
-              delay: 1200,
-            }),
+            body: JSON.stringify(payload),
           },
         );
         return response.ok;
       } catch (error) {
-        console.error('Failed to send WhatsApp message via Evolution:', error);
+        console.error('Failed to send order status WhatsApp message via Meta:', error);
         return false;
       }
     }
 
-    const phoneNumberId = this.getEnvValue('WHATSAPP_PHONE_NUMBER_ID');
-    const accessToken = this.getEnvValue('WHATSAPP_ACCESS_TOKEN');
-    if (!phoneNumberId || !accessToken) {
+    const evolution = this.getEvolutionConfig();
+    const base = (
+      channel.evolution_api_base?.trim() ||
+      evolution.base ||
+      ''
+    ).replace(/\/+$/, '');
+    const instance = channel.instance_name?.trim();
+    const apikey = (channel.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+
+    if (!base || !instance || !apikey) {
       return false;
     }
 
-    // Check if the message contains a PDF link
-    const pdfMatch = message.match(/https?:\/\/[^\s<>"]+\.pdf/i);
-    const hasPdf = !!pdfMatch;
-    const pdfUrl = hasPdf ? pdfMatch[0] : null;
-
     try {
-      let payload: any;
-      if (hasPdf && pdfUrl) {
-        // Send as document if PDF found
-        const cleanMessage = message.replace(pdfUrl, '').trim();
-        payload = {
-          messaging_product: 'whatsapp',
-          to: cleanedPhone,
-          type: 'document',
-          document: {
-            link: pdfUrl,
-            filename: `invoice_${pdfUrl.split('/').pop() || 'order'}.pdf`,
-            caption: cleanMessage || undefined,
+      const response = await fetch(
+        `${base}/message/sendText/${encodeURIComponent(instance)}`,
+        {
+          method: 'POST',
+          headers: {
+            apikey,
+            'Content-Type': 'application/json',
           },
-        };
-      } else {
-        // Fallback to text
-        payload = {
-          messaging_product: 'whatsapp',
-          to: cleanedPhone,
-          type: 'text',
-          text: { body: message },
-        };
-      }
-
-      const response = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+          body: JSON.stringify({
+            number: cleanedPhone,
+            text: message,
+            delay: 1200,
+          }),
         },
-        body: JSON.stringify(payload),
-      });
+      );
       return response.ok;
     } catch (error) {
-      console.error('Failed to send order status WhatsApp message:', error);
+      console.error('Failed to send WhatsApp message via Evolution:', error);
       return false;
     }
   }

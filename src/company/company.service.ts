@@ -118,6 +118,11 @@ export class CompanyService {
       whatsapp_instance_name: channel?.instance_name ?? null,
       whatsapp_evaluation_key: channel?.evaluation_whatsapp_key ?? null,
       whatsapp_status: channel?.status ?? null,
+      whatsapp_provider_type: channel?.provider_type ?? 'evolution',
+      meta_phone_number_id: channel?.meta_phone_number_id ?? null,
+      meta_waba_id: channel?.meta_waba_id ?? null,
+      meta_verify_token: channel?.meta_verify_token ?? null,
+      evolution_api_base: channel?.evolution_api_base ?? null,
       facebook_page_id: metaConnection?.page_id ?? null,
       facebook_page_name: metaConnection?.page_name ?? null,
       facebook_connection_status: metaConnection?.status ?? null,
@@ -237,6 +242,35 @@ export class CompanyService {
     if (updateCompanyDto.whatsapp_evaluation_key !== undefined) {
       whatsappPatch.evaluation_whatsapp_key =
         updateCompanyDto.whatsapp_evaluation_key.trim() || null;
+    }
+    if (updateCompanyDto.whatsapp_provider_type !== undefined) {
+      whatsappPatch.provider_type = updateCompanyDto.whatsapp_provider_type;
+    }
+    if (updateCompanyDto.meta_phone_number_id !== undefined) {
+      whatsappPatch.meta_phone_number_id =
+        updateCompanyDto.meta_phone_number_id.trim() || null;
+    }
+    if (updateCompanyDto.meta_access_token !== undefined) {
+      whatsappPatch.meta_access_token =
+        updateCompanyDto.meta_access_token.trim() || null;
+    }
+    if (updateCompanyDto.meta_waba_id !== undefined) {
+      whatsappPatch.meta_waba_id = updateCompanyDto.meta_waba_id.trim() || null;
+    }
+    if (updateCompanyDto.meta_verify_token !== undefined) {
+      whatsappPatch.meta_verify_token =
+        updateCompanyDto.meta_verify_token.trim() || null;
+    }
+    if (updateCompanyDto.evolution_api_base !== undefined) {
+      whatsappPatch.evolution_api_base =
+        updateCompanyDto.evolution_api_base.trim() || null;
+    }
+    if (
+      updateCompanyDto.whatsapp_provider_type === 'meta' &&
+      updateCompanyDto.meta_phone_number_id?.trim() &&
+      updateCompanyDto.meta_access_token?.trim()
+    ) {
+      whatsappPatch.status = 'CONNECTED';
     }
     if (updateCompanyDto.name !== undefined) {
       whatsappPatch.company_name = nextCompanyName;

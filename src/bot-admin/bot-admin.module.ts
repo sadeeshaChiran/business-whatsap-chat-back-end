@@ -18,9 +18,11 @@ import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { EvolutionModule } from '../integrations/evolution/evolution.module';
+import { AgentRoutingModule } from '../agent-routing/agent-routing.module';
 
 @Module({
   imports: [
+    AgentRoutingModule,
     TypeOrmModule.forFeature([
       Company,
       SupabaseCustomer,

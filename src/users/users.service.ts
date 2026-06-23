@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { Company } from '../company/entities/company.entity';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
+import { AgentRoutingService } from '../agent-routing/agent-routing.service';
+import { PusherService } from '../common/pusher.service';
 import { randomBytes, scryptSync } from 'crypto';
 
 @Injectable()
@@ -15,6 +17,8 @@ export class UsersService {
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(BotConversation)
     private readonly conversationRepository: Repository<BotConversation>,
+    private readonly agentRoutingService: AgentRoutingService,
+    private readonly pusherService: PusherService,
   ) {}
 
   async getAgents(companyId: number): Promise<User[]> {
@@ -114,8 +118,24 @@ export class UsersService {
       throw new NotFoundException('Agent not found.');
     }
 
+    const wasActive = user.is_agent_active;
     user.is_agent_active = !user.is_agent_active;
-    return this.userRepository.save(user);
+    const saved = await this.userRepository.save(user);
+
+    if (wasActive && !saved.is_agent_active) {
+      await this.agentRoutingService.reroutePendingConversationsForAgent(
+        companyId,
+        saved.id,
+      );
+    }
+
+    this.pusherService.trigger(
+      `company-${companyId}`,
+      'agent_status_changed',
+      { agent_id: saved.id, is_agent_active: saved.is_agent_active },
+    );
+
+    return saved;
   }
 
   private hashPassword(password: string): string {
