@@ -444,4 +444,97 @@ export class AgentRoutingService {
         : null,
     }));
   }
+
+  /**
+   * Ensure WhatsApp inbound creates/updates bot_conversation and assigns an online agent.
+   */
+  async handleWhatsAppInboundForRouting(
+    companyId: number,
+    phone: string,
+    displayName?: string,
+  ): Promise<{
+    conversationId: number | null;
+    assignedAgentId: number | null;
+    status: string;
+  }> {
+    const normalizedPhone = this.normalizePhone(phone);
+    if (!normalizedPhone) {
+      return {
+        conversationId: null,
+        assignedAgentId: null,
+        status: 'open',
+      };
+    }
+
+    let channelUser = await this.channelUserRepository.findOne({
+      where: { platform: 'whatsapp', external_user_id: normalizedPhone },
+    });
+
+    if (!channelUser) {
+      channelUser = await this.channelUserRepository.save(
+        this.channelUserRepository.create({
+          company_id: companyId,
+          platform: 'whatsapp',
+          external_user_id: normalizedPhone,
+          display_name: displayName?.trim() || normalizedPhone,
+          bot_enabled: true,
+          manual_mode: false,
+          last_seen_at: new Date(),
+        }),
+      );
+    } else {
+      if (Number(channelUser.company_id) !== Number(companyId)) {
+        channelUser.company_id = companyId;
+      }
+      channelUser.last_seen_at = new Date();
+      if (displayName?.trim() && !channelUser.display_name?.trim()) {
+        channelUser.display_name = displayName.trim();
+      }
+      await this.channelUserRepository.save(channelUser);
+    }
+
+    let conversation = await this.conversationRepository
+      .createQueryBuilder('c')
+      .where('c.bot_channel_user_id = :channelUserId', {
+        channelUserId: channelUser.id,
+      })
+      .andWhere('c.status IN (:...statuses)', {
+        statuses: ['open', 'manual', 'pending', 'active'],
+      })
+      .orderBy('c.id', 'DESC')
+      .getOne();
+
+    if (!conversation) {
+      conversation = await this.conversationRepository.save(
+        this.conversationRepository.create({
+          bot_channel_user_id: channelUser.id,
+          status: 'open',
+          last_message_at: new Date(),
+        }),
+      );
+    } else {
+      conversation.last_message_at = new Date();
+      await this.conversationRepository.save(conversation);
+    }
+
+    if (conversation.status !== 'open') {
+      return {
+        conversationId: conversation.id,
+        assignedAgentId: conversation.assigned_agent_id,
+        status: conversation.status,
+      };
+    }
+
+    const result = await this.routeInboundConversation(
+      companyId,
+      conversation.id,
+      normalizedPhone,
+    );
+
+    return {
+      conversationId: conversation.id,
+      assignedAgentId: result.agentId,
+      status: result.agentId ? 'pending' : 'open',
+    };
+  }
 }
