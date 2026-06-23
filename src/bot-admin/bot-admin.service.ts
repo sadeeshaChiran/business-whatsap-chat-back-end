@@ -1216,7 +1216,7 @@ export class BotAdminService {
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertConversationAccess(user, id);
     const where: any = { id, channelUser: { company_id: user.company_id } };
 
     const conversation = await this.conversationRepository.findOne({
@@ -1260,7 +1260,7 @@ export class BotAdminService {
     conversationId: number,
     text: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertConversationAccess(user, conversationId);
     const trimmed = text.trim();
     if (!trimmed) {
       throw new BadRequestException('Message text is required.');
