@@ -31,5 +31,23 @@ export class WhatsappChannel {
 
   @Column({ type: 'text', nullable: true })
   evaluation_whatsapp_key: string | null;
+
+  @Column({ type: 'varchar', length: 20, default: 'evolution' })
+  provider_type: 'evolution' | 'meta';
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  meta_phone_number_id: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  meta_access_token: string | null;
+
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  meta_waba_id: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  meta_verify_token: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  evolution_api_base: string | null;
 }
 

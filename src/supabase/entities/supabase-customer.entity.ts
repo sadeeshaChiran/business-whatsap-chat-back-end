@@ -18,6 +18,9 @@ export class SupabaseCustomer {
   @Column({ name: 'assigned_instance', type: 'text', nullable: true })
   assigned_instance: string | null;
 
+  @Column({ type: 'bigint', nullable: true })
+  last_agent_id: number | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'first_seen_at' })
   first_seen_at: Date;
 

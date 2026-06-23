@@ -8,6 +8,10 @@ export type WhatsappChannelSnapshot = {
   instance_name: string | null;
   evaluation_whatsapp_key: string | null;
   status: string | null;
+  provider_type: 'evolution' | 'meta' | null;
+  meta_phone_number_id: string | null;
+  meta_waba_id: string | null;
+  evolution_api_base: string | null;
 };
 
 @Injectable()
@@ -80,9 +84,10 @@ export class WhatsappChannelService {
     }
 
     const instanceName = patch.instance_name?.trim();
-    if (!instanceName) {
+    const metaPhoneNumberId = patch.meta_phone_number_id?.trim();
+    if (!instanceName && !metaPhoneNumberId) {
       throw new BadRequestException(
-        'WhatsApp instance name is required before saving.',
+        'WhatsApp instance name or Meta phone number id is required before saving.',
       );
     }
 
@@ -90,8 +95,14 @@ export class WhatsappChannelService {
       this.whatsappChannelRepository.create({
         company_id: companyId,
         company_name: companyName,
-        instance_name: instanceName,
+        instance_name: instanceName || metaPhoneNumberId || `company-${companyId}`,
         evaluation_whatsapp_key: patch.evaluation_whatsapp_key ?? null,
+        provider_type: patch.provider_type ?? 'evolution',
+        meta_phone_number_id: patch.meta_phone_number_id ?? null,
+        meta_access_token: patch.meta_access_token ?? null,
+        meta_waba_id: patch.meta_waba_id ?? null,
+        meta_verify_token: patch.meta_verify_token ?? null,
+        evolution_api_base: patch.evolution_api_base ?? null,
         role_type: 'general',
         status: patch.status ?? 'DISCONNECTED',
         weight: 1,
@@ -105,6 +116,10 @@ export class WhatsappChannelService {
       instance_name: channel?.instance_name ?? null,
       evaluation_whatsapp_key: channel?.evaluation_whatsapp_key ?? null,
       status: channel?.status ?? null,
+      provider_type: (channel?.provider_type as 'evolution' | 'meta' | null) ?? 'evolution',
+      meta_phone_number_id: channel?.meta_phone_number_id ?? null,
+      meta_waba_id: channel?.meta_waba_id ?? null,
+      evolution_api_base: channel?.evolution_api_base ?? null,
     };
   }
 }

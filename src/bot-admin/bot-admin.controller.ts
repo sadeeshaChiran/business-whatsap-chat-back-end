@@ -24,6 +24,7 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
+import { AssignConversationDto } from './dto/assign-conversation.dto';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -57,6 +58,26 @@ export class BotAdminController {
   @Get('conversations')
   getConversations(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getConversations(user);
+  }
+
+  /** Admin: conversations waiting in the open/unassigned queue */
+  @Get('conversations/unassigned')
+  getUnassignedConversations(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getUnassignedConversations(user);
+  }
+
+  /** Admin: manually assign an open conversation to an online agent */
+  @Post('conversations/:id/assign')
+  manualAssignConversation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: AssignConversationDto,
+  ) {
+    return this.botAdminService.manualAssignConversation(
+      user,
+      id,
+      payload.agent_id,
+    );
   }
 
   @Get('conversations/evolution/messages')
@@ -104,6 +125,15 @@ export class BotAdminController {
     @Param('id', ParseIntPipe) id: number,
   ) {
     return this.botAdminService.acceptConversation(user, id);
+  }
+
+  /** Agent rejects their assigned pending conversation */
+  @Post('conversations/:id/reject')
+  rejectConversation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.rejectConversation(user, id);
   }
 
   /** Get only conversations assigned to the currently logged-in agent */

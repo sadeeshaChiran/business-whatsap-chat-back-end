@@ -21,6 +21,7 @@ import { SupabaseModule } from './supabase/supabase.module';
 import { EvolutionModule } from './integrations/evolution/evolution.module';
 import { MetaModule } from './integrations/meta/meta.module';
 import { UsersModule } from './users/users.module';
+import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.module';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -55,6 +56,7 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     BotProxyModule,
     EvolutionModule,
     MetaModule,
+    WhatsappIntegrationModule,
     UsersModule,
   ],
   controllers: [AppController],

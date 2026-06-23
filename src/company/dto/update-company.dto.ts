@@ -72,4 +72,46 @@ export class UpdateCompanyDto extends PartialType(
   @IsString()
   @MaxLength(255)
   whatsapp_instance_name?: string;
+
+  @ApiPropertyOptional({
+    description: 'WhatsApp provider adapter: evolution or meta.',
+    enum: ['evolution', 'meta'],
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  whatsapp_provider_type?: 'evolution' | 'meta';
+
+  @ApiPropertyOptional({ maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  meta_phone_number_id?: string;
+
+  @ApiPropertyOptional({ maxLength: 2048 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  meta_access_token?: string;
+
+  @ApiPropertyOptional({ maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  meta_waba_id?: string;
+
+  @ApiPropertyOptional({
+    description: 'Meta webhook verify token configured in Meta Developer Console.',
+    maxLength: 255,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  meta_verify_token?: string;
+
+  @ApiPropertyOptional({ maxLength: 2048 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  evolution_api_base?: string;
 }

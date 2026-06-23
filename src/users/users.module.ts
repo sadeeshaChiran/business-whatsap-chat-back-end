@@ -6,13 +6,16 @@ import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { AuthModule } from '../auth/auth.module';
+import { AgentRoutingModule } from '../agent-routing/agent-routing.module';
+import { PusherService } from '../common/pusher.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Company, BotConversation]),
     AuthModule,
+    AgentRoutingModule,
   ],
-  providers: [UsersService],
+  providers: [UsersService, PusherService],
   controllers: [UsersController],
   exports: [UsersService],
 })

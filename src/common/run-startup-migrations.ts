@@ -10,6 +10,9 @@ const MIGRATION_FILES = [
   'supabase_product_variant_image_match.sql',
   'supabase_product_variant_price_match.sql',
   'supabase_meta_page_connections.sql',
+  'supabase_agent_routing.sql',
+  'supabase_whatsapp_provider.sql',
+  'supabase_whatsapp_meta_verify_token.sql',
 ] as const;
 
 function migrationDir(): string | null {
