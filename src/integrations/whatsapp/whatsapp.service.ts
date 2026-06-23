@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AgentRoutingService } from '../../agent-routing/agent-routing.service';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
@@ -15,6 +16,7 @@ export class WhatsappService {
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
     private readonly whatsappChannelService: WhatsappChannelService,
     private readonly providerFactory: WhatsappProviderFactory,
+    private readonly agentRoutingService: AgentRoutingService,
   ) {}
 
   async getChannelForCompany(companyId: number) {
@@ -69,12 +71,18 @@ export class WhatsappService {
       last_used_at: new Date(),
     });
 
+    const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(
+      Number(channel.company_id),
+      normalized.phone,
+    );
+
     return {
       accepted: true,
       routed: true,
       company_id: Number(channel.company_id),
       provider: normalized.provider,
       normalized,
+      agent_routing: routing,
     };
   }
 
