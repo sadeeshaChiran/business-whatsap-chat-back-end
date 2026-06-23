@@ -188,19 +188,19 @@ export class BotAdminService {
     }
   }
 
-  /** Toggle the logged-in user's own is_active status (online/offline for agents) */
+  /** Toggle the logged-in user's own is_agent_active status (online/offline for agents) */
   async toggleOwnStatus(user: AuthenticatedUser) {
     const u = await this.userRepository.findOne({ where: { id: user.id } });
     if (!u) throw new NotFoundException('User not found.');
-    u.is_active = !u.is_active;
+    u.is_agent_active = !u.is_agent_active;
     const saved = await this.userRepository.save(u);
     // Broadcast to company channel
     this.pusherService.trigger(
       `company-${user.company_id}`,
       'agent_status_changed',
-      { agent_id: saved.id, is_active: saved.is_active },
+      { agent_id: saved.id, is_agent_active: saved.is_agent_active },
     );
-    return { id: saved.id, is_active: saved.is_active };
+    return { id: saved.id, is_agent_active: saved.is_agent_active };
   }
 
   /** Agent accepts a pending conversation (status: pending → active) */

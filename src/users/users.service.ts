@@ -114,7 +114,7 @@ export class UsersService {
       throw new NotFoundException('Agent not found.');
     }
 
-    user.is_active = !user.is_active;
+    user.is_agent_active = !user.is_agent_active;
     return this.userRepository.save(user);
   }
 

@@ -28,6 +28,9 @@ export class User {
   @Column({ type: 'bigint', nullable: true })
   company_id: number | null;
 
+  @Column({ type: 'boolean', default: false })
+  is_agent_active: boolean;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
