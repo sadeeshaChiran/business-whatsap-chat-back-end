@@ -103,11 +103,15 @@ export class AuthService {
   async login(loginDto: LoginDto) {
     const email = loginDto.email.trim().toLowerCase();
     const user = await this.userRepository.findOne({ where: { email } });
-    if (!user || !user.is_active) {
+    if (!user) {
       throw new UnauthorizedException('Invalid email or password');
     }
     if (!this.verifyPassword(loginDto.password, user.password_hash)) {
       throw new UnauthorizedException('Invalid email or password');
+    }
+    if (!user.is_active) {
+      user.is_active = true;
+      await this.userRepository.save(user);
     }
     const companyName = await this.resolveCompanyName(user);
     return this.buildAuthResponse(user, companyName);

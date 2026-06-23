@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { Company } from '../company/entities/company.entity';
+import { User } from '../users/entities/user.entity';
+import { PusherService } from '../common/pusher.service';
 import { BotAdminController } from './bot-admin.controller';
 import { BotAdminService } from './bot-admin.service';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
@@ -32,11 +34,12 @@ import { EvolutionModule } from '../integrations/evolution/evolution.module';
       BotOrderItem,
       BotOrderStatusHistory,
       BotOrderStatusTemplate,
+      User,
     ]),
     AuthModule,
     EvolutionModule,
   ],
   controllers: [BotAdminController],
-  providers: [BotAdminService],
+  providers: [BotAdminService, PusherService],
 })
 export class BotAdminModule {}
