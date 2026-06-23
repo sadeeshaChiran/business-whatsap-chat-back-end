@@ -97,6 +97,27 @@ export class BotAdminController {
     return this.botAdminService.sendConversationMessage(user, id, payload.text);
   }
 
+  /** Agent accepts their assigned pending conversation */
+  @Post('conversations/:id/accept')
+  acceptConversation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.acceptConversation(user, id);
+  }
+
+  /** Get only conversations assigned to the currently logged-in agent */
+  @Get('agent/conversations')
+  getAgentConversations(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getAgentConversations(user);
+  }
+
+  /** Toggle logged-in agent online/offline */
+  @Post('agent/status/toggle')
+  toggleOwnStatus(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.toggleOwnStatus(user);
+  }
+
   @Post('train')
   train(
     @CurrentUser() user: AuthenticatedUser,

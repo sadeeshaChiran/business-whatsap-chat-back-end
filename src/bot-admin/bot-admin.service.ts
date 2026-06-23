@@ -34,6 +34,8 @@ import {
   resolveRelatedChatJids,
   type EvolutionInboxMessage,
 } from '../integrations/evolution/evolution-inbox.util';
+import { User } from '../users/entities/user.entity';
+import { PusherService } from '../common/pusher.service';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -89,7 +91,10 @@ export class BotAdminService {
     private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly evolutionService: EvolutionService,
+    private readonly pusherService: PusherService,
   ) {}
 
   private getEvolutionConfig() {
@@ -160,10 +165,61 @@ export class BotAdminService {
 
   private async assertAdminAccess(user: AuthenticatedUser) {
     const company = await this.getCompanyForUser(user);
-
     if (!company || Number(company.admin_user_id) !== Number(user.id)) {
       throw new ForbiddenException('Only the company admin can manage bot settings.');
     }
+  }
+
+  /** Admin OR agent assigned to a conversation can access it */
+  private async assertConversationAccess(
+    user: AuthenticatedUser,
+    conversationId: number,
+  ) {
+    const company = await this.getCompanyForUser(user);
+    if (!company) throw new ForbiddenException('Company not found.');
+    // Admin always has access
+    if (Number(company.admin_user_id) === Number(user.id)) return;
+    // Non-admin can only access their assigned conversation
+    const conv = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+    if (!conv || Number(conv.assigned_agent_id) !== Number(user.id)) {
+      throw new ForbiddenException('You do not have access to this conversation.');
+    }
+  }
+
+  /** Toggle the logged-in user's own is_agent_active status (online/offline for agents) */
+  async toggleOwnStatus(user: AuthenticatedUser) {
+    const u = await this.userRepository.findOne({ where: { id: user.id } });
+    if (!u) throw new NotFoundException('User not found.');
+    u.is_agent_active = !u.is_agent_active;
+    const saved = await this.userRepository.save(u);
+    // Broadcast to company channel
+    this.pusherService.trigger(
+      `company-${user.company_id}`,
+      'agent_status_changed',
+      { agent_id: saved.id, is_agent_active: saved.is_agent_active },
+    );
+    return { id: saved.id, is_agent_active: saved.is_agent_active };
+  }
+
+  /** Agent accepts a pending conversation (status: pending → active) */
+  async acceptConversation(user: AuthenticatedUser, conversationId: number) {
+    const conv = await this.conversationRepository.findOne({
+      where: { id: conversationId, assigned_agent_id: user.id },
+    });
+    if (!conv) throw new NotFoundException('Conversation not found or not assigned to you.');
+    if (conv.status !== 'pending') {
+      throw new BadRequestException('Conversation is not in pending state.');
+    }
+    conv.status = 'active';
+    const saved = await this.conversationRepository.save(conv);
+    this.pusherService.trigger(
+      `company-${user.company_id}`,
+      'conversation_updated',
+      { conversation_id: saved.id, status: saved.status, agent_id: user.id },
+    );
+    return { id: saved.id, status: saved.status };
   }
 
   private normalizePhoneKey(phone: string): string {
@@ -791,6 +847,51 @@ export class BotAdminService {
     return this.buildCompanyContactRows(user.company_id);
   }
 
+  /** Returns conversations assigned to this agent, with latest message info */
+  async getAgentConversations(user: AuthenticatedUser) {
+    const conversations = await this.conversationRepository.find({
+      where: {
+        assigned_agent_id: user.id,
+        status: 'pending' as any,
+      },
+      relations: ['channelUser'],
+      order: { last_message_at: 'DESC' },
+    });
+
+    // Also include active conversations assigned to this agent
+    const activeConversations = await this.conversationRepository.find({
+      where: {
+        assigned_agent_id: user.id,
+        status: 'active' as any,
+      },
+      relations: ['channelUser'],
+      order: { last_message_at: 'DESC' },
+    });
+
+    const all = [...conversations, ...activeConversations].sort(
+      (a, b) =>
+        new Date(b.last_message_at ?? 0).getTime() -
+        new Date(a.last_message_at ?? 0).getTime(),
+    );
+
+    return all.map((conv) => ({
+      id: conv.id,
+      status: conv.status,
+      assigned_agent_id: conv.assigned_agent_id,
+      assigned_at: conv.assigned_at,
+      last_message_at: conv.last_message_at,
+      channelUser: conv.channelUser
+        ? {
+            id: conv.channelUser.id,
+            display_name: conv.channelUser.display_name,
+            external_user_id: conv.channelUser.external_user_id,
+            platform: conv.channelUser.platform,
+          }
+        : null,
+    }));
+  }
+
+
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
     const [customers, channelUsers] = await Promise.all([
       this.customerRepository.find({
@@ -1115,7 +1216,7 @@ export class BotAdminService {
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertConversationAccess(user, id);
     const where: any = { id, channelUser: { company_id: user.company_id } };
 
     const conversation = await this.conversationRepository.findOne({
@@ -1159,7 +1260,7 @@ export class BotAdminService {
     conversationId: number,
     text: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertConversationAccess(user, conversationId);
     const trimmed = text.trim();
     if (!trimmed) {
       throw new BadRequestException('Message text is required.');
