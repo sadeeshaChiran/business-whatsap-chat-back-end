@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { PusherService } from '../common/pusher.service';
 import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
@@ -29,12 +29,61 @@ export class AgentRoutingService {
   ) {}
 
   private pendingTimeoutMinutes(): number {
-    const raw = Number(process.env.AGENT_PENDING_TIMEOUT_MINUTES ?? 5);
-    return Number.isFinite(raw) && raw > 0 ? raw : 5;
+    const hours = Number(process.env.AGENT_PENDING_TIMEOUT_HOURS ?? 24);
+    if (Number.isFinite(hours) && hours > 0) {
+      return Math.round(hours * 60);
+    }
+    const raw = Number(process.env.AGENT_PENDING_TIMEOUT_MINUTES ?? 1440);
+    return Number.isFinite(raw) && raw > 0 ? raw : 1440;
   }
 
   private pendingTimeoutAt(): Date {
     return new Date(Date.now() + this.pendingTimeoutMinutes() * 60_000);
+  }
+
+  private acceptStickyHours(): number {
+    const raw = Number(process.env.AGENT_ACCEPT_STICKY_HOURS ?? 24);
+    if (Number.isFinite(raw) && raw > 0) {
+      return raw;
+    }
+    const hours = Number(process.env.AGENT_PENDING_TIMEOUT_HOURS ?? 24);
+    return Number.isFinite(hours) && hours > 0 ? hours : 24;
+  }
+
+  private async shouldRestoreActiveAssignment(
+    companyId: number,
+    phone: string,
+    agentId: number,
+  ): Promise<boolean> {
+    const normalizedPhone = this.normalizePhone(phone);
+    if (!normalizedPhone) {
+      return false;
+    }
+
+    const customer = await this.customerRepository
+      .createQueryBuilder('c')
+      .where('c.company_id = :companyId', { companyId })
+      .andWhere(
+        "regexp_replace(c.customer_phone, '[^0-9]', '', 'g') = :phone",
+        { phone: normalizedPhone },
+      )
+      .getOne();
+
+    if (!customer?.last_agent_accepted_at || !customer.last_agent_id) {
+      return false;
+    }
+    if (Number(customer.last_agent_id) !== Number(agentId)) {
+      return false;
+    }
+
+    const acceptedMs = new Date(customer.last_agent_accepted_at).getTime();
+    if (!Number.isFinite(acceptedMs)) {
+      return false;
+    }
+
+    return (
+      Date.now() - acceptedMs < this.acceptStickyHours() * 60 * 60 * 1000
+    );
   }
 
   normalizePhone(value: string | null | undefined): string {
@@ -52,10 +101,13 @@ export class AgentRoutingService {
       ? Number(company.admin_user_id)
       : null;
 
-    const agents = await this.userRepository.find({
-      where: { company_id: companyId, is_agent_active: true, is_active: true },
-      order: { id: 'ASC' },
-    });
+    const agents = await this.userRepository
+      .createQueryBuilder('u')
+      .where('u.company_id = :companyId', { companyId })
+      .andWhere('COALESCE(u.is_active, TRUE) = TRUE')
+      .andWhere('COALESCE(u.is_agent_active, FALSE) = TRUE')
+      .orderBy('u.id', 'ASC')
+      .getMany();
 
     let filtered = agents.filter(
       (agent) => adminUserId === null || Number(agent.id) !== adminUserId,
@@ -67,17 +119,57 @@ export class AgentRoutingService {
       );
     }
 
-    if (filtered.length > 0) {
-      return filtered;
+    return filtered;
+  }
+
+  private async getCompanyAdminUserId(companyId: number): Promise<number | null> {
+    const company = await this.companyRepository.findOne({
+      where: { id: companyId },
+    });
+    return company?.admin_user_id ? Number(company.admin_user_id) : null;
+  }
+
+  /** True when assignee is a support agent (not company admin) and currently online. */
+  private async isHeldByOnlineSupportAgent(
+    companyId: number,
+    assignedAgentId: number | string | null | undefined,
+  ): Promise<boolean> {
+    if (assignedAgentId == null) {
+      return false;
+    }
+    const assigneeId = Number(assignedAgentId);
+    if (!Number.isFinite(assigneeId) || assigneeId <= 0) {
+      return false;
     }
 
-    if (excludeAgentId !== undefined) {
-      return agents.filter(
-        (agent) => Number(agent.id) !== Number(excludeAgentId),
-      );
+    const adminUserId = await this.getCompanyAdminUserId(companyId);
+    if (adminUserId != null && assigneeId === adminUserId) {
+      return false;
     }
 
-    return agents;
+    const onlineSupportIds = new Set(
+      (await this.getActiveAgents(companyId)).map((agent) => Number(agent.id)),
+    );
+    return onlineSupportIds.has(assigneeId);
+  }
+
+  private shouldRouteInboundConversation(
+    conversation: Pick<BotConversation, 'status' | 'assigned_agent_id'>,
+  ): boolean {
+    if (conversation.status === 'active' || conversation.status === 'closed') {
+      return false;
+    }
+    if (
+      (conversation.status === 'pending' || conversation.status === 'manual') &&
+      conversation.assigned_agent_id != null
+    ) {
+      return false;
+    }
+    return (
+      conversation.status === 'open' ||
+      conversation.status === 'pending' ||
+      conversation.status === 'manual'
+    );
   }
 
   async getLastAssignedAgentId(companyId: number): Promise<number | null> {
@@ -121,11 +213,28 @@ export class AgentRoutingService {
       return null;
     }
 
+    const stickyAgentId = Number(customer.last_agent_id);
+    if (
+      excludeAgentId !== undefined &&
+      stickyAgentId === Number(excludeAgentId)
+    ) {
+      return null;
+    }
+
+    const stickyAgent = await this.userRepository.findOne({
+      where: {
+        id: stickyAgentId,
+        company_id: companyId,
+        is_active: true,
+      },
+    });
+    if (!stickyAgent) {
+      return null;
+    }
+
     const agents = await this.getActiveAgents(companyId, excludeAgentId);
     return (
-      agents.find(
-        (agent) => Number(agent.id) === Number(customer.last_agent_id),
-      ) ?? null
+      agents.find((agent) => Number(agent.id) === stickyAgentId) ?? null
     );
   }
 
@@ -156,7 +265,26 @@ export class AgentRoutingService {
     conversationId: number,
     agentId: number,
     assignmentMode: AssignmentMode,
+    customerPhone?: string,
+    options?: { forcePending?: boolean },
   ): Promise<void> {
+    const existing = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+      relations: ['channelUser'],
+    });
+
+    if (
+      existing?.status === 'active' &&
+      Number(existing.assigned_agent_id) === Number(agentId)
+    ) {
+      return;
+    }
+
+    const phone =
+      customerPhone ??
+      existing?.channelUser?.external_user_id ??
+      (await this.resolvePhoneForConversation(conversationId));
+
     await this.conversationRepository.update(conversationId, {
       status: 'pending',
       assigned_agent_id: agentId,
@@ -195,13 +323,36 @@ export class AgentRoutingService {
 
   /**
    * Unified inbound routing: sticky agent first, then round-robin.
+   * Never reassign pending/active chats unless excludeAgentId is the current assignee.
    */
   async routeInboundConversation(
     companyId: number,
     conversationId: number,
     phone: string,
     excludeAgentId?: number,
+    options?: { forcePending?: boolean },
   ): Promise<{ agentId: number | null; assignmentMode: AssignmentMode }> {
+    const existing = await this.conversationRepository.findOne({
+      where: { id: conversationId },
+    });
+    if (
+      existing &&
+      (existing.status === 'pending' || existing.status === 'active') &&
+      existing.assigned_agent_id != null
+    ) {
+      const assignedId = Number(existing.assigned_agent_id);
+      const isExplicitReroute =
+        excludeAgentId !== undefined &&
+        Number(excludeAgentId) === assignedId;
+      if (!isExplicitReroute || existing.status === 'active') {
+        return {
+          agentId: assignedId,
+          assignmentMode:
+            (existing.assignment_mode as AssignmentMode) ?? 'round_robin',
+        };
+      }
+    }
+
     const stickyAgent = await this.resolveStickyAgent(
       companyId,
       phone,
@@ -213,12 +364,17 @@ export class AgentRoutingService {
         conversationId,
         stickyAgent.id,
         'sticky',
+        phone,
+        { forcePending: options?.forcePending },
       );
       return { agentId: stickyAgent.id, assignmentMode: 'sticky' };
     }
 
     const agents = await this.getActiveAgents(companyId, excludeAgentId);
     if (agents.length === 0) {
+      this.logger.warn(
+        `No online agents for company ${companyId}; conversation ${conversationId} left unassigned`,
+      );
       await this.returnConversationToQueue(companyId, conversationId);
       return { agentId: null, assignmentMode: 'unassigned' };
     }
@@ -230,6 +386,8 @@ export class AgentRoutingService {
       conversationId,
       targetAgent.id,
       'round_robin',
+      phone,
+      { forcePending: options?.forcePending },
     );
     return { agentId: targetAgent.id, assignmentMode: 'round_robin' };
   }
@@ -268,10 +426,26 @@ export class AgentRoutingService {
     if (!conv) {
       throw new NotFoundException('Conversation not found.');
     }
-    if (conv.status !== 'open') {
+    if (conv.status === 'active' || conv.status === 'closed') {
       throw new NotFoundException(
-        'Only unassigned (open) conversations can be manually assigned.',
+        'Active or closed conversations cannot be manually reassigned.',
       );
+    }
+    if (conv.assigned_agent_id != null) {
+      const heldOnline = await this.isHeldByOnlineSupportAgent(
+        companyId,
+        conv.assigned_agent_id,
+      );
+      if (heldOnline) {
+        throw new NotFoundException(
+          'Conversation is already assigned to an online agent.',
+        );
+      }
+    }
+
+    const adminUserId = await this.getCompanyAdminUserId(companyId);
+    if (adminUserId != null && Number(agentId) === adminUserId) {
+      throw new NotFoundException('Company admin cannot receive agent chats.');
     }
 
     const agent = await this.userRepository.findOne({
@@ -279,11 +453,10 @@ export class AgentRoutingService {
         id: agentId,
         company_id: companyId,
         is_active: true,
-        is_agent_active: true,
       },
     });
     if (!agent) {
-      throw new NotFoundException('Agent not found or not online.');
+      throw new NotFoundException('Agent not found.');
     }
 
     await this.assignConversationToAgent(
@@ -291,6 +464,8 @@ export class AgentRoutingService {
       conversationId,
       agent.id,
       'manual',
+      conv.channelUser?.external_user_id ?? undefined,
+      { forcePending: true },
     );
   }
 
@@ -316,6 +491,7 @@ export class AgentRoutingService {
     if (customer) {
       await this.customerRepository.update(customer.id, {
         last_agent_id: agentId,
+        last_agent_accepted_at: new Date(),
       });
       return;
     }
@@ -325,6 +501,7 @@ export class AgentRoutingService {
         company_id: companyId,
         customer_phone: phone,
         last_agent_id: agentId,
+        last_agent_accepted_at: new Date(),
         last_seen_at: new Date(),
       }),
     );
@@ -383,14 +560,8 @@ export class AgentRoutingService {
     const due = await this.conversationRepository
       .createQueryBuilder('c')
       .leftJoinAndSelect('c.channelUser', 'channelUser')
-      .leftJoin(User, 'agent', 'agent.id = c.assigned_agent_id')
       .where('c.status = :status', { status: 'pending' })
-      .andWhere(
-        `(c.timeout_at IS NOT NULL AND c.timeout_at <= :now)
-         OR COALESCE(agent.is_agent_active, FALSE) = FALSE
-         OR COALESCE(agent.is_active, TRUE) = FALSE`,
-        { now },
-      )
+      .andWhere('c.timeout_at IS NOT NULL AND c.timeout_at <= :now', { now })
       .getMany();
 
     let rerouted = 0;
@@ -411,6 +582,17 @@ export class AgentRoutingService {
       );
 
       rerouted += 1;
+      this.pusherService.trigger(
+        `company-${companyId}`,
+        'conversation_updated',
+        {
+          conversation_id: conv.id,
+          status: result.agentId ? 'pending' : 'open',
+          agent_id: result.agentId,
+          previous_agent_id: previousAgentId,
+          assignment_mode: result.assignmentMode,
+        },
+      );
       this.logger.log(
         `Timeout reroute conversation ${conv.id}: ${previousAgentId} -> ${result.agentId ?? 'open'}`,
       );
@@ -420,29 +602,268 @@ export class AgentRoutingService {
   }
 
   async getUnassignedConversations(companyId: number) {
-    const rows = await this.conversationRepository
+    const companyIdNum = Number(companyId);
+    await this.releasePendingChatsWhenNoOnlineAgents(companyIdNum);
+    const queueRows = await this.findQueueConversationsForCompany(companyIdNum);
+
+    const assignedIds = [
+      ...new Set(
+        queueRows
+          .map((conv) => Number(conv.assigned_agent_id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ];
+    const assignedAgents =
+      assignedIds.length > 0
+        ? await this.userRepository.findBy({ id: In(assignedIds) })
+        : [];
+    const agentNameById = new Map(
+      assignedAgents.map((agent) => [Number(agent.id), agent.name]),
+    );
+    const agentOnlineById = new Map(
+      assignedAgents.map((agent) => [
+        Number(agent.id),
+        Boolean(agent.is_agent_active),
+      ]),
+    );
+
+    return queueRows.map((conv) => {
+      const assignedId = conv.assigned_agent_id
+        ? Number(conv.assigned_agent_id)
+        : null;
+      const queueReason =
+        assignedId != null && agentOnlineById.get(assignedId) === false
+          ? ('agent_offline' as const)
+          : ('no_agent' as const);
+
+      return {
+        id: conv.id,
+        status: conv.status,
+        assignment_mode: conv.assignment_mode,
+        last_message_at: conv.last_message_at,
+        queue_reason: queueReason,
+        assigned_agent_id: assignedId,
+        assigned_agent_name:
+          assignedId != null ? agentNameById.get(assignedId) ?? null : null,
+        channelUser: conv.channelUser
+          ? {
+              id: conv.channelUser.id,
+              display_name: conv.channelUser.display_name,
+              external_user_id: conv.channelUser.external_user_id,
+              platform: conv.channelUser.platform,
+            }
+          : null,
+      };
+    });
+  }
+
+  /**
+   * Chats waiting for an online agent: not active/closed and not held by an online assignee.
+   */
+  private async findQueueConversationsForCompany(
+    companyId: number,
+  ): Promise<BotConversation[]> {
+    return this.conversationRepository
       .createQueryBuilder('c')
       .innerJoinAndSelect('c.channelUser', 'channelUser')
-      .where('channelUser.company_id = :companyId', { companyId })
-      .andWhere('c.status = :status', { status: 'open' })
+      .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: Number(companyId),
+      })
+      .andWhere('LOWER(c.status) NOT IN (:...closedStatuses)', {
+        closedStatuses: ['active', 'closed'],
+      })
+      .andWhere(this.waitingForOnlineAgentSql(), {
+        companyId: Number(companyId),
+      })
       .orderBy('c.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('c.id', 'DESC')
       .getMany();
+  }
 
-    return rows.map((conv) => ({
-      id: conv.id,
-      status: conv.status,
-      assignment_mode: conv.assignment_mode,
-      last_message_at: conv.last_message_at,
-      channelUser: conv.channelUser
-        ? {
-            id: conv.channelUser.id,
-            display_name: conv.channelUser.display_name,
-            external_user_id: conv.channelUser.external_user_id,
-            platform: conv.channelUser.platform,
-          }
-        : null,
-    }));
+  /** SQL: unassigned OR assignee missing/offline (not held by an online agent). */
+  private waitingForOnlineAgentSql(): string {
+    return `(
+      c.assigned_agent_id IS NULL
+      OR NOT EXISTS (
+        SELECT 1
+        FROM app_user a
+        INNER JOIN companies co ON CAST(co.id AS BIGINT) = CAST(:companyId AS BIGINT)
+        WHERE CAST(a.id AS BIGINT) = CAST(c.assigned_agent_id AS BIGINT)
+          AND CAST(a.company_id AS BIGINT) = CAST(:companyId AS BIGINT)
+          AND COALESCE(a.is_agent_active, FALSE) = TRUE
+          AND (co.admin_user_id IS NULL OR CAST(a.id AS BIGINT) <> CAST(co.admin_user_id AS BIGINT))
+      )
+    )`;
+  }
+
+  /**
+   * When no agents are online, move unaccepted pending chats back to the open queue
+   * so the admin unassigned list stays accurate. Does not touch active chats or sticky data.
+   */
+  async releasePendingChatsWhenNoOnlineAgents(companyId: number): Promise<number> {
+    const onlineSupportAgents = await this.getActiveAgents(companyId);
+    if (onlineSupportAgents.length > 0) {
+      return 0;
+    }
+
+    const pending = await this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoin('c.channelUser', 'channelUser')
+      .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: Number(companyId),
+      })
+      .andWhere('LOWER(c.status) = :status', { status: 'pending' })
+      .getMany();
+
+    let released = 0;
+    for (const conv of pending) {
+      await this.returnConversationToQueue(companyId, conv.id);
+      released += 1;
+    }
+
+    if (released > 0) {
+      this.logger.log(
+        `Released ${released} pending chat(s) to open queue — no online support agents for company ${companyId}`,
+      );
+    }
+
+    return released;
+  }
+
+  private async findOpenUnassignedForCompany(
+    companyId: number,
+  ): Promise<BotConversation[]> {
+    return this.findQueueConversationsForCompany(companyId);
+  }
+
+  private async findPendingOfflineForCompany(
+    companyId: number,
+  ): Promise<BotConversation[]> {
+    return this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoinAndSelect('c.channelUser', 'channelUser')
+      .innerJoin(
+        User,
+        'agent',
+        'CAST(agent.id AS BIGINT) = CAST(c.assigned_agent_id AS BIGINT)',
+      )
+      .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: Number(companyId),
+      })
+      .andWhere('LOWER(c.status) = :status', { status: 'pending' })
+      .andWhere('c.assigned_agent_id IS NOT NULL')
+      .andWhere('COALESCE(agent.is_agent_active, FALSE) = FALSE')
+      .orderBy('c.last_message_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('c.id', 'DESC')
+      .getMany();
+  }
+
+  /**
+   * Assign queue chats and reroute pending chats stuck on offline agents
+   * when at least one agent is online. Called when an agent goes online and by the scheduler.
+   */
+  async assignOpenQueueForCompany(companyId: number): Promise<number> {
+    const agents = await this.getActiveAgents(companyId);
+    if (agents.length === 0) {
+      return 0;
+    }
+
+    const waiting = await this.findQueueConversationsForCompany(companyId);
+    let assigned = 0;
+
+    for (const conv of waiting) {
+      const phone = conv.channelUser?.external_user_id ?? '';
+      if (!phone) {
+        continue;
+      }
+
+      const previousAgentId = conv.assigned_agent_id
+        ? Number(conv.assigned_agent_id)
+        : undefined;
+      const excludeAgentId =
+        previousAgentId &&
+        conv.status === 'pending' &&
+        !(await this.isHeldByOnlineSupportAgent(companyId, previousAgentId))
+          ? previousAgentId
+          : undefined;
+
+      const result = await this.routeInboundConversation(
+        companyId,
+        conv.id,
+        phone,
+        excludeAgentId,
+        { forcePending: true },
+      );
+
+      if (result.agentId) {
+        assigned += 1;
+        this.logger.log(
+          `Auto-assigned queue conversation ${conv.id} to agent ${result.agentId}`,
+        );
+        this.pusherService.trigger(
+          `company-${companyId}`,
+          'conversation_updated',
+          {
+            conversation_id: conv.id,
+            status: 'pending',
+            agent_id: result.agentId,
+            previous_agent_id: previousAgentId ?? null,
+            assignment_mode: result.assignmentMode,
+          },
+        );
+      }
+    }
+
+    return assigned;
+  }
+
+  private async isAgentOnline(agentId: number): Promise<boolean> {
+    const agent = await this.userRepository.findOne({
+      where: { id: agentId },
+      select: ['id', 'is_agent_active'],
+    });
+    return Boolean(agent?.is_agent_active);
+  }
+
+  async processOpenUnassignedQueues(): Promise<number> {
+    const companyRows = await this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoin('c.channelUser', 'channelUser')
+      .select('DISTINCT channelUser.company_id', 'companyId')
+      .where('LOWER(c.status) NOT IN (:...closedStatuses)', {
+        closedStatuses: ['active', 'closed'],
+      })
+      .andWhere(
+        `(
+          c.assigned_agent_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM app_user a
+            INNER JOIN companies co ON CAST(co.id AS BIGINT) = CAST(channelUser.company_id AS BIGINT)
+            WHERE CAST(a.id AS BIGINT) = CAST(c.assigned_agent_id AS BIGINT)
+              AND CAST(a.company_id AS BIGINT) = CAST(channelUser.company_id AS BIGINT)
+              AND COALESCE(a.is_agent_active, FALSE) = TRUE
+              AND (co.admin_user_id IS NULL OR CAST(a.id AS BIGINT) <> CAST(co.admin_user_id AS BIGINT))
+          )
+        )`,
+      )
+      .getRawMany<{ companyId: string | number }>();
+
+    let total = 0;
+
+    for (const row of companyRows) {
+      const companyId = Number(row.companyId);
+      if (!Number.isFinite(companyId) || companyId <= 0) {
+        continue;
+      }
+      total += await this.assignOpenQueueForCompany(companyId);
+    }
+
+    if (total > 0) {
+      this.logger.log(`Open queue auto-assigned ${total} conversation(s)`);
+    }
+
+    return total;
   }
 
   /**
@@ -517,7 +938,31 @@ export class AgentRoutingService {
       await this.conversationRepository.save(conversation);
     }
 
-    if (conversation.status !== 'open') {
+    if (!this.shouldRouteInboundConversation(conversation)) {
+      const assignedId = conversation.assigned_agent_id
+        ? Number(conversation.assigned_agent_id)
+        : null;
+      if (
+        conversation.status === 'pending' &&
+        assignedId &&
+        !(await this.isAgentOnline(assignedId))
+      ) {
+        const result = await this.routeInboundConversation(
+          companyId,
+          conversation.id,
+          normalizedPhone,
+          assignedId,
+        );
+        const refreshed = await this.conversationRepository.findOne({
+          where: { id: conversation.id },
+        });
+        return {
+          conversationId: conversation.id,
+          assignedAgentId: result.agentId,
+          status: refreshed?.status ?? (result.agentId ? 'pending' : 'open'),
+        };
+      }
+
       return {
         conversationId: conversation.id,
         assignedAgentId: conversation.assigned_agent_id,
@@ -531,10 +976,14 @@ export class AgentRoutingService {
       normalizedPhone,
     );
 
+    const refreshed = await this.conversationRepository.findOne({
+      where: { id: conversation.id },
+    });
+
     return {
       conversationId: conversation.id,
       assignedAgentId: result.agentId,
-      status: result.agentId ? 'pending' : 'open',
+      status: refreshed?.status ?? (result.agentId ? 'pending' : 'open'),
     };
   }
 }

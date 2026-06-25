@@ -21,6 +21,9 @@ export class SupabaseCustomer {
   @Column({ type: 'bigint', nullable: true })
   last_agent_id: number | null;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  last_agent_accepted_at: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'first_seen_at' })
   first_seen_at: Date;
 

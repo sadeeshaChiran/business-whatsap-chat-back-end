@@ -30,7 +30,7 @@ export class BotConversation {
   @Column({ type: 'varchar', length: 20, default: 'open' })
   status: 'open' | 'pending' | 'active' | 'manual' | 'closed';
 
-  @Column({ type: 'int', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   assigned_agent_id: number | null;
 
   @Column({ type: 'timestamptz', nullable: true })
@@ -44,6 +44,9 @@ export class BotConversation {
 
   @Column({ type: 'timestamp', nullable: true })
   last_message_at: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  agent_last_read_at: Date | null;
 
   @ManyToOne(() => BotChannelUser, (channelUser) => channelUser.conversations, {
     nullable: false,
