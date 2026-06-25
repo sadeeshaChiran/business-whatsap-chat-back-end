@@ -56,28 +56,54 @@ export class UsersService {
       (u) => adminUserId === null || Number(u.id) !== adminUserId,
     );
 
-    const result = await Promise.all(
-      agents.map(async (agent) => {
-        const [pending, active] = await Promise.all([
-          this.conversationRepository.count({
-            where: { assigned_agent_id: agent.id, status: 'pending' as any },
-          }),
-          this.conversationRepository.count({
-            where: { assigned_agent_id: agent.id, status: 'active' as any },
-          }),
-        ]);
+    const countRows = await this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoin(
+        User,
+        'agent',
+        'CAST(agent.id AS BIGINT) = CAST(c.assigned_agent_id AS BIGINT)',
+      )
+      .select('c.assigned_agent_id', 'agentId')
+      .addSelect('c.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('agent.company_id = :companyId', { companyId })
+      .andWhere('c.assigned_agent_id IS NOT NULL')
+      .andWhere('LOWER(c.status) IN (:...statuses)', {
+        statuses: ['pending', 'active'],
+      })
+      .groupBy('c.assigned_agent_id')
+      .addGroupBy('c.status')
+      .getRawMany<{ agentId: string | number; status: string; count: string }>();
 
-        const { password_hash, ...agentData } = agent as any;
-        return {
-          ...agentData,
-          stats: {
-            total_assigned: pending + active,
-            pending,
-            active,
-          },
-        };
-      }),
-    );
+    const countByAgent = new Map<number, { pending: number; active: number }>();
+    for (const row of countRows) {
+      const agentId = Number(row.agentId);
+      if (!Number.isFinite(agentId)) {
+        continue;
+      }
+      const bucket = countByAgent.get(agentId) ?? { pending: 0, active: 0 };
+      const count = Number(row.count) || 0;
+      if (row.status === 'pending') {
+        bucket.pending += count;
+      } else if (String(row.status).toLowerCase() === 'active') {
+        bucket.active += count;
+      }
+      countByAgent.set(agentId, bucket);
+    }
+
+    const result = agents.map((agent) => {
+      const agentId = Number(agent.id);
+      const counts = countByAgent.get(agentId) ?? { pending: 0, active: 0 };
+      const { password_hash, ...agentData } = agent as any;
+      return {
+        ...agentData,
+        stats: {
+          total_assigned: counts.pending + counts.active,
+          pending: counts.pending,
+          active: counts.active,
+        },
+      };
+    });
 
     return result;
   }
@@ -103,6 +129,7 @@ export class UsersService {
       password_hash: passwordHash,
       company_id: companyId,
       is_active: true,
+      is_agent_active: false,
     });
 
     const saved = await this.userRepository.save(user);
@@ -110,7 +137,10 @@ export class UsersService {
     return result as any;
   }
 
-  async toggleAgent(companyId: number, agentId: number): Promise<User> {
+  async toggleAgent(
+    companyId: number,
+    agentId: number,
+  ): Promise<User & { auto_assigned: number }> {
     const user = await this.userRepository.findOne({
       where: { id: agentId, company_id: companyId },
     });
@@ -118,14 +148,22 @@ export class UsersService {
       throw new NotFoundException('Agent not found.');
     }
 
-    const wasActive = user.is_agent_active;
     user.is_agent_active = !user.is_agent_active;
     const saved = await this.userRepository.save(user);
 
-    if (wasActive && !saved.is_agent_active) {
-      await this.agentRoutingService.reroutePendingConversationsForAgent(
+    let autoAssigned = 0;
+    if (saved.is_agent_active) {
+      autoAssigned = await this.agentRoutingService.assignOpenQueueForCompany(
         companyId,
-        saved.id,
+      );
+      if (autoAssigned > 0) {
+        this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+          auto_assigned: autoAssigned,
+        });
+      }
+    } else {
+      await this.agentRoutingService.releasePendingChatsWhenNoOnlineAgents(
+        companyId,
       );
     }
 
@@ -135,7 +173,7 @@ export class UsersService {
       { agent_id: saved.id, is_agent_active: saved.is_agent_active },
     );
 
-    return saved;
+    return Object.assign(saved, { auto_assigned: autoAssigned });
   }
 
   private hashPassword(password: string): string {

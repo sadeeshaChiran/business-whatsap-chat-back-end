@@ -91,6 +91,7 @@ export class AuthService {
         email,
         password_hash: this.hashPassword(registerDto.password),
         company_id: Number(savedCompany.id),
+        is_agent_active: false,
       }),
     );
 
@@ -183,6 +184,7 @@ export class AuthService {
       company_id: user.company_id != null ? Number(user.company_id) : 0,
       company_name: companyName,
       is_active: user.is_active,
+      is_agent_active: Boolean(user.is_agent_active),
       created_at: user.created_at,
       updated_at: user.updated_at,
     };

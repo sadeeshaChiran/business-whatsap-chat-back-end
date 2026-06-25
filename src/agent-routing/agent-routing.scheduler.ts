@@ -18,8 +18,10 @@ export class AgentRoutingScheduler implements OnModuleInit, OnModuleDestroy {
     );
     this.interval = setInterval(() => {
       void this.agentRoutingService.processPendingTimeouts();
+      void this.agentRoutingService.processOpenUnassignedQueues();
     }, minutes * 60_000);
     void this.agentRoutingService.processPendingTimeouts();
+    void this.agentRoutingService.processOpenUnassignedQueues();
   }
 
   onModuleDestroy() {

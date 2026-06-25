@@ -179,53 +179,82 @@ export class BotAdminService {
   ) {
     const company = await this.getCompanyForUser(user);
     if (!company) throw new ForbiddenException('Company not found.');
-    // Admin always has access
     if (Number(company.admin_user_id) === Number(user.id)) return;
-    // Non-admin can only access their assigned conversation
-    const conv = await this.conversationRepository.findOne({
-      where: { id: conversationId },
-    });
-    if (!conv || Number(conv.assigned_agent_id) !== Number(user.id)) {
+
+    const conv = await this.conversationRepository
+      .createQueryBuilder('c')
+      .select(['c.id', 'c.assigned_agent_id'])
+      .where('c.id = :conversationId', { conversationId })
+      .andWhere('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(user.id) })
+      .getOne();
+
+    if (!conv) {
       throw new ForbiddenException('You do not have access to this conversation.');
     }
+  }
+
+  private findAssignedConversationForAgent(
+    conversationId: number,
+    agentId: number,
+  ) {
+    return this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoinAndSelect('c.channelUser', 'channelUser')
+      .where('c.id = :conversationId', { conversationId })
+      .andWhere('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(agentId) })
+      .getOne();
   }
 
   /** Toggle the logged-in user's own is_agent_active status (online/offline for agents) */
   async toggleOwnStatus(user: AuthenticatedUser) {
     const u = await this.userRepository.findOne({ where: { id: user.id } });
     if (!u) throw new NotFoundException('User not found.');
-    const wasActive = u.is_agent_active;
     u.is_agent_active = !u.is_agent_active;
     const saved = await this.userRepository.save(u);
 
-    if (wasActive && !saved.is_agent_active) {
-      await this.agentRoutingService.reroutePendingConversationsForAgent(
-        user.company_id,
-        saved.id,
+    let autoAssigned = 0;
+    if (saved.is_agent_active) {
+      autoAssigned = await this.agentRoutingService.assignOpenQueueForCompany(
+        Number(user.company_id),
+      );
+      if (autoAssigned > 0) {
+        this.pusherService.trigger(
+          `company-${user.company_id}`,
+          'conversation_updated',
+          { auto_assigned: autoAssigned },
+        );
+      }
+    } else {
+      await this.agentRoutingService.releasePendingChatsWhenNoOnlineAgents(
+        Number(user.company_id),
       );
     }
 
-    // Broadcast to company channel
     this.pusherService.trigger(
       `company-${user.company_id}`,
       'agent_status_changed',
       { agent_id: saved.id, is_agent_active: saved.is_agent_active },
     );
-    return { id: saved.id, is_agent_active: saved.is_agent_active };
+    return {
+      id: saved.id,
+      is_agent_active: saved.is_agent_active,
+      auto_assigned: autoAssigned,
+    };
   }
 
   /** Agent accepts a pending conversation (status: pending → active) */
   async acceptConversation(user: AuthenticatedUser, conversationId: number) {
-    const conv = await this.conversationRepository.findOne({
-      where: { id: conversationId, assigned_agent_id: user.id },
-      relations: ['channelUser'],
-    });
+    const conv = await this.findAssignedConversationForAgent(
+      conversationId,
+      user.id,
+    );
     if (!conv) throw new NotFoundException('Conversation not found or not assigned to you.');
     if (conv.status !== 'pending') {
       throw new BadRequestException('Conversation is not in pending state.');
     }
     conv.status = 'active';
     conv.timeout_at = null;
+    conv.agent_last_read_at = new Date();
     const saved = await this.conversationRepository.save(conv);
 
     const phone = conv.channelUser?.external_user_id ?? '';
@@ -247,10 +276,10 @@ export class BotAdminService {
 
   /** Agent rejects a pending conversation and routes it to the next available agent */
   async rejectConversation(user: AuthenticatedUser, conversationId: number) {
-    const conv = await this.conversationRepository.findOne({
-      where: { id: conversationId, assigned_agent_id: user.id },
-      relations: ['channelUser'],
-    });
+    const conv = await this.findAssignedConversationForAgent(
+      conversationId,
+      user.id,
+    );
     if (!conv) {
       throw new NotFoundException('Conversation not found or not assigned to you.');
     }
@@ -926,48 +955,130 @@ export class BotAdminService {
     return this.buildCompanyContactRows(user.company_id);
   }
 
-  /** Returns conversations assigned to this agent, with latest message info */
+  /** Returns conversations assigned to this agent only (pending + active), regardless of online status. */
   async getAgentConversations(user: AuthenticatedUser) {
-    const conversations = await this.conversationRepository.find({
-      where: {
-        assigned_agent_id: user.id,
-        status: 'pending' as any,
-      },
-      relations: ['channelUser'],
-      order: { last_message_at: 'DESC' },
-    });
+    const agentId = Number(user.id);
 
-    // Also include active conversations assigned to this agent
-    const activeConversations = await this.conversationRepository.find({
-      where: {
-        assigned_agent_id: user.id,
-        status: 'active' as any,
-      },
-      relations: ['channelUser'],
-      order: { last_message_at: 'DESC' },
-    });
+    const all = await this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoinAndSelect('c.channelUser', 'channelUser')
+      .where('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId })
+      .andWhere('LOWER(c.status) IN (:...statuses)', {
+        statuses: ['pending', 'active'],
+      })
+      .orderBy(
+        `CASE WHEN LOWER(c.status) = 'active' THEN 0 WHEN LOWER(c.status) = 'pending' THEN 1 ELSE 2 END`,
+        'ASC',
+      )
+      .addOrderBy('c.last_message_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('c.id', 'DESC')
+      .getMany();
 
-    const all = [...conversations, ...activeConversations].sort(
-      (a, b) =>
-        new Date(b.last_message_at ?? 0).getTime() -
-        new Date(a.last_message_at ?? 0).getTime(),
+    const conversationIds = all.map((conv) => conv.id);
+    const previewByConversation = new Map<
+      number,
+      { content: string; direction: string; created_at: Date }
+    >();
+
+    if (conversationIds.length > 0) {
+      const latestMessages = await this.messageRepository
+        .createQueryBuilder('m')
+        .where('m.conversation_id IN (:...conversationIds)', { conversationIds })
+        .orderBy('m.conversation_id', 'ASC')
+        .addOrderBy('m.id', 'DESC')
+        .getMany();
+
+      for (const message of latestMessages) {
+        if (!previewByConversation.has(message.conversation_id)) {
+          previewByConversation.set(message.conversation_id, {
+            content: message.content,
+            direction: message.direction,
+            created_at: message.created_at,
+          });
+        }
+      }
+    }
+
+    const rows = await Promise.all(
+      all.map(async (conv) => {
+        const unreadCount = await this.countUnreadInboundMessages(conv);
+        const preview = previewByConversation.get(conv.id);
+        return {
+          id: conv.id,
+          status: conv.status,
+          assigned_agent_id: conv.assigned_agent_id,
+          assigned_at: conv.assigned_at,
+          last_message_at: conv.last_message_at,
+          unread_count: unreadCount,
+          last_message_preview: preview?.content?.trim() || null,
+          last_message_direction: preview?.direction ?? null,
+          channelUser: conv.channelUser
+            ? {
+                id: conv.channelUser.id,
+                display_name: conv.channelUser.display_name,
+                external_user_id: conv.channelUser.external_user_id,
+                platform: conv.channelUser.platform,
+              }
+            : null,
+          conversation: {
+            id: conv.id,
+            status: conv.status,
+            last_message_at: conv.last_message_at,
+          },
+        };
+      }),
     );
 
-    return all.map((conv) => ({
-      id: conv.id,
-      status: conv.status,
-      assigned_agent_id: conv.assigned_agent_id,
-      assigned_at: conv.assigned_at,
-      last_message_at: conv.last_message_at,
-      channelUser: conv.channelUser
-        ? {
-            id: conv.channelUser.id,
-            display_name: conv.channelUser.display_name,
-            external_user_id: conv.channelUser.external_user_id,
-            platform: conv.channelUser.platform,
-          }
-        : null,
-    }));
+    return rows.sort((left, right) => {
+      const leftActive = String(left.status).toLowerCase() === 'active' ? 0 : 1;
+      const rightActive = String(right.status).toLowerCase() === 'active' ? 0 : 1;
+      if (leftActive !== rightActive) {
+        return leftActive - rightActive;
+      }
+      const unreadDiff = (right.unread_count ?? 0) - (left.unread_count ?? 0);
+      if (unreadDiff !== 0) {
+        return unreadDiff;
+      }
+      const leftTime = new Date(left.last_message_at ?? 0).getTime();
+      const rightTime = new Date(right.last_message_at ?? 0).getTime();
+      return rightTime - leftTime;
+    });
+  }
+
+  private async countUnreadInboundMessages(
+    conversation: BotConversation,
+  ): Promise<number> {
+    const qb = this.messageRepository
+      .createQueryBuilder('m')
+      .where('m.conversation_id = :conversationId', {
+        conversationId: conversation.id,
+      })
+      .andWhere("m.direction::text = 'inbound'");
+
+    if (conversation.agent_last_read_at) {
+      qb.andWhere('m.created_at > :since', {
+        since: conversation.agent_last_read_at,
+      });
+    } else if (conversation.assigned_at) {
+      qb.andWhere('m.created_at >= :since', {
+        since: conversation.assigned_at,
+      });
+    }
+
+    return qb.getCount();
+  }
+
+  private async markConversationReadByAgent(
+    conversationId: number,
+    agentId: number,
+  ): Promise<void> {
+    await this.conversationRepository
+      .createQueryBuilder()
+      .update(BotConversation)
+      .set({ agent_last_read_at: new Date() })
+      .where('id = :conversationId', { conversationId })
+      .andWhere('CAST(assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(agentId) })
+      .execute();
   }
 
 
@@ -1296,15 +1407,24 @@ export class BotAdminService {
 
   async getConversation(user: AuthenticatedUser, id: number) {
     await this.assertConversationAccess(user, id);
-    const where: any = { id, channelUser: { company_id: user.company_id } };
 
-    const conversation = await this.conversationRepository.findOne({
-      where,
-      relations: ['channelUser'],
-    });
+    const company = await this.getCompanyForUser(user);
+    const isAdmin =
+      company != null && Number(company.admin_user_id) === Number(user.id);
+
+    const conversation = isAdmin
+      ? await this.conversationRepository.findOne({
+          where: { id },
+          relations: ['channelUser'],
+        })
+      : await this.findAssignedConversationForAgent(id, user.id);
 
     if (!conversation) {
       throw new NotFoundException('Conversation not found.');
+    }
+
+    if (Number(conversation.assigned_agent_id) === Number(user.id)) {
+      await this.markConversationReadByAgent(conversation.id, user.id);
     }
 
     const messages = await this.messageRepository.find({
@@ -1346,10 +1466,7 @@ export class BotAdminService {
     }
 
     const conversation = await this.conversationRepository.findOne({
-      where: {
-        id: conversationId,
-        channelUser: { company_id: user.company_id },
-      },
+      where: { id: conversationId },
       relations: ['channelUser'],
     });
 
