@@ -4,11 +4,18 @@ import { In, Repository } from 'typeorm';
 import { PusherService } from '../common/pusher.service';
 import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
+import { BotMessage } from '../bot-admin/entities/bot-message.entity';
 import { Company } from '../company/entities/company.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { User } from '../users/entities/user.entity';
 
 export type AssignmentMode = 'sticky' | 'round_robin' | 'manual' | 'unassigned';
+
+export type InboundWhatsAppMessage = {
+  content: string;
+  message_type?: 'text' | 'image' | 'voice';
+  source?: string;
+};
 
 @Injectable()
 export class AgentRoutingService {
@@ -23,6 +30,8 @@ export class AgentRoutingService {
     private readonly conversationRepository: Repository<BotConversation>,
     @InjectRepository(BotChannelUser)
     private readonly channelUserRepository: Repository<BotChannelUser>,
+    @InjectRepository(BotMessage)
+    private readonly messageRepository: Repository<BotMessage>,
     @InjectRepository(SupabaseCustomer)
     private readonly customerRepository: Repository<SupabaseCustomer>,
     private readonly pusherService: PusherService,
@@ -873,6 +882,7 @@ export class AgentRoutingService {
     companyId: number,
     phone: string,
     displayName?: string,
+    inbound?: InboundWhatsAppMessage,
   ): Promise<{
     conversationId: number | null;
     assignedAgentId: number | null;
@@ -938,6 +948,8 @@ export class AgentRoutingService {
       await this.conversationRepository.save(conversation);
     }
 
+    await this.persistInboundMessage(companyId, conversation.id, inbound);
+
     if (!this.shouldRouteInboundConversation(conversation)) {
       const assignedId = conversation.assigned_agent_id
         ? Number(conversation.assigned_agent_id)
@@ -985,5 +997,39 @@ export class AgentRoutingService {
       assignedAgentId: result.agentId,
       status: refreshed?.status ?? (result.agentId ? 'pending' : 'open'),
     };
+  }
+
+  private async persistInboundMessage(
+    companyId: number,
+    conversationId: number,
+    inbound?: InboundWhatsAppMessage,
+  ) {
+    const content = inbound?.content?.trim();
+    if (!content) {
+      return;
+    }
+
+    const messageType =
+      inbound?.message_type === 'voice'
+        ? 'voice'
+        : inbound?.message_type === 'image'
+          ? 'image'
+          : 'text';
+
+    await this.messageRepository.save(
+      this.messageRepository.create({
+        conversation_id: conversationId,
+        direction: 'inbound',
+        message_type: messageType,
+        platform: 'whatsapp',
+        content,
+        source: inbound?.source?.trim() || 'customer',
+      }),
+    );
+
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+      conversation_id: conversationId,
+      inbound: true,
+    });
   }
 }

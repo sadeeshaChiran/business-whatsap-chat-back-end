@@ -19,10 +19,12 @@ import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity'
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { EvolutionModule } from '../integrations/evolution/evolution.module';
 import { AgentRoutingModule } from '../agent-routing/agent-routing.module';
+import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.module';
 
 @Module({
   imports: [
     AgentRoutingModule,
+    WhatsappIntegrationModule,
     TypeOrmModule.forFeature([
       Company,
       SupabaseCustomer,

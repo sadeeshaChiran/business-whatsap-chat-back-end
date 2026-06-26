@@ -5,6 +5,7 @@ import { AgentRoutingService } from '../../agent-routing/agent-routing.service';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
+import { MetaAdapter } from './adapters/meta.adapter';
 import { WhatsappProviderFactory } from './whatsapp-provider.factory';
 
 @Injectable()
@@ -16,8 +17,18 @@ export class WhatsappService {
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
     private readonly whatsappChannelService: WhatsappChannelService,
     private readonly providerFactory: WhatsappProviderFactory,
+    private readonly metaAdapter: MetaAdapter,
     private readonly agentRoutingService: AgentRoutingService,
   ) {}
+
+  async resolveMetaDisplayPhoneNumber(
+    channel: WhatsappChannel | null,
+  ): Promise<string | null> {
+    if (!channel || channel.provider_type !== 'meta') {
+      return null;
+    }
+    return this.metaAdapter.resolveDisplayPhoneNumber(channel);
+  }
 
   async getChannelForCompany(companyId: number) {
     return this.whatsappChannelService.getForCompany(companyId);
@@ -39,9 +50,11 @@ export class WhatsappService {
 
     return this.whatsappChannelRepository
       .createQueryBuilder('wc')
-      .where('LOWER(TRIM(wc.instance_name)) = LOWER(TRIM(:instance))', {
-        instance: normalized.routing_key,
-      })
+      .where(
+        `(LOWER(TRIM(wc.instance_name)) = LOWER(TRIM(:instance))
+          OR LOWER(TRIM(COALESCE(wc.evolution_instance_name, ''))) = LOWER(TRIM(:instance)))`,
+        { instance: normalized.routing_key },
+      )
       .orderBy('wc.id', 'ASC')
       .getOne();
   }
@@ -74,7 +87,24 @@ export class WhatsappService {
     const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(
       Number(channel.company_id),
       normalized.phone,
+      undefined,
+      normalized.message?.trim()
+        ? {
+            content: normalized.message.trim(),
+            message_type:
+              normalized.input_type === 'voice'
+                ? 'voice'
+                : normalized.input_type === 'image'
+                  ? 'image'
+                  : 'text',
+            source: 'customer',
+          }
+        : undefined,
     );
+
+    if (normalized.provider === 'meta') {
+      void this.forwardMetaInboundToN8nBot(body);
+    }
 
     return {
       accepted: true,
@@ -83,7 +113,45 @@ export class WhatsappService {
       provider: normalized.provider,
       normalized,
       agent_routing: routing,
+      n8n_forwarded: normalized.provider === 'meta',
     };
+  }
+
+  /** Meta webhook hits Nest first; forward raw payload to n8n AI workflow. */
+  private async forwardMetaInboundToN8nBot(body: unknown): Promise<void> {
+    const forwardEnabled =
+      String(process.env.N8N_FORWARD_META_INBOUND ?? 'true').toLowerCase() !==
+      'false';
+    if (!forwardEnabled) {
+      return;
+    }
+
+    const url = (
+      process.env.N8N_WHATSAPP_WEBHOOK_URL ??
+      process.env.EVOLUTION_WEBHOOK_URL ??
+      ''
+    ).trim();
+    if (!url) {
+      this.logger.debug('N8N_WHATSAPP_WEBHOOK_URL not set; skipping Meta n8n forward');
+      return;
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) {
+        this.logger.warn(
+          `Meta n8n forward failed: ${response.status} ${response.statusText}`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Meta n8n forward error: ${message}`);
+    }
   }
 
   async sendText(companyId: number, toPhone: string, text: string) {

@@ -17,6 +17,10 @@ export class WhatsappChannel {
   @Column({ type: 'text' })
   instance_name: string;
 
+  /** Evolution API instance label; kept when provider_type is meta for dual webhook routing. */
+  @Column({ type: 'text', nullable: true })
+  evolution_instance_name: string | null;
+
   @Column({ type: 'text', default: 'DISCONNECTED' })
   status: string;
 
@@ -49,5 +53,8 @@ export class WhatsappChannel {
 
   @Column({ type: 'text', nullable: true })
   evolution_api_base: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  meta_webhook_base_url: string | null;
 }
 
