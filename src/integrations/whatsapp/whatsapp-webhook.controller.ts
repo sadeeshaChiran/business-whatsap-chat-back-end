@@ -1,10 +1,13 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
+  Headers,
   Post,
   Query,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -51,13 +54,22 @@ export class WhatsappWebhookController {
     const channel = await this.whatsappService.getChannelForCompany(
       user.company_id,
     );
+    const apiBaseUrl =
+      channel?.meta_webhook_base_url?.trim() || resolveApiBaseUrl(req);
     const webhooks = this.whatsappService.getPublicWebhookUrls(
-      resolveApiBaseUrl(req),
+      apiBaseUrl,
     );
+    const metaDisplayPhoneNumber =
+      channel?.provider_type === 'meta' &&
+      String(channel.status ?? '').toUpperCase() === 'CONNECTED'
+        ? await this.whatsappService.resolveMetaDisplayPhoneNumber(channel)
+        : null;
     return {
       provider_type: channel?.provider_type ?? 'evolution',
+      meta_webhook_base_url: channel?.meta_webhook_base_url ?? null,
       ...webhooks,
       meta_phone_number_id: channel?.meta_phone_number_id ?? null,
+      meta_display_phone_number: metaDisplayPhoneNumber,
       meta_waba_id: channel?.meta_waba_id ?? null,
       meta_verify_token: channel?.meta_verify_token ?? null,
       has_meta_access_token: Boolean(channel?.meta_access_token?.trim()),
@@ -98,5 +110,33 @@ export class WhatsappWebhookController {
   async handleUnifiedWebhook(@Body() body: unknown) {
     const result = await this.whatsappService.processInboundWebhook(body);
     return { ok: true, ...result };
+  }
+
+  /** n8n bot outbound — uses saved Meta/Evolution credentials from DB (no token in workflow). */
+  @Post('n8n/send')
+  @RawResponse()
+  async n8nSendMessage(
+    @Body() body: { company_id?: number; phone?: string; text?: string },
+    @Headers('x-n8n-internal-key') apiKey?: string,
+  ) {
+    const expected = process.env.N8N_INTERNAL_API_KEY?.trim();
+    if (!expected || apiKey?.trim() !== expected) {
+      throw new UnauthorizedException('Invalid n8n internal key');
+    }
+
+    const companyId = Number(body.company_id || 0);
+    const phone = String(body.phone || '').replace(/\D/g, '');
+    const text = String(body.text || '').trim();
+    if (companyId <= 0 || !phone || !text) {
+      throw new BadRequestException('company_id, phone, and text are required');
+    }
+
+    try {
+      const result = await this.whatsappService.sendText(companyId, phone, text);
+      return { ok: true, ...result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'WhatsApp send failed';
+      throw new BadRequestException(message);
+    }
   }
 }

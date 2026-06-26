@@ -114,4 +114,14 @@ export class UpdateCompanyDto extends PartialType(
   @IsString()
   @MaxLength(2048)
   evolution_api_base?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Public API base URL used to build the Meta webhook callback URL (e.g. http://localhost:3001/v1/api).',
+    maxLength: 2048,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  meta_webhook_base_url?: string;
 }

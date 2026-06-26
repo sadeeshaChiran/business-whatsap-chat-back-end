@@ -100,6 +100,35 @@ export class MetaAdapter implements WhatsappServiceInterface {
     return null;
   }
 
+  async resolveDisplayPhoneNumber(
+    channel: WhatsappChannel,
+  ): Promise<string | null> {
+    const token = channel.meta_access_token?.trim() ?? '';
+    const phoneNumberId = channel.meta_phone_number_id?.trim() ?? '';
+    if (!token || !phoneNumberId) {
+      return null;
+    }
+
+    try {
+      const url = new URL(
+        `https://graph.facebook.com/${this.graphVersion()}/${phoneNumberId}`,
+      );
+      url.searchParams.set('fields', 'display_phone_number');
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        return null;
+      }
+      const data = (await res.json()) as { display_phone_number?: string };
+      const display = String(data.display_phone_number ?? '').trim();
+      return display || null;
+    } catch {
+      return null;
+    }
+  }
+
   async sendText(
     channel: WhatsappChannel,
     toPhone: string,

@@ -37,6 +37,7 @@ import {
 import { User } from '../users/entities/user.entity';
 import { PusherService } from '../common/pusher.service';
 import { AgentRoutingService } from '../agent-routing/agent-routing.service';
+import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -97,6 +98,7 @@ export class BotAdminService {
     private readonly evolutionService: EvolutionService,
     private readonly pusherService: PusherService,
     private readonly agentRoutingService: AgentRoutingService,
+    private readonly whatsappService: WhatsappService,
   ) {}
 
   private getEvolutionConfig() {
@@ -116,6 +118,65 @@ export class BotAdminService {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       order: { id: 'ASC' as any },
     });
+  }
+
+  private isMetaWhatsappChannel(channel: WhatsappChannel | null | undefined): boolean {
+    return (channel?.provider_type ?? 'evolution') === 'meta';
+  }
+
+  private throwWhatsappSendError(error: unknown): never {
+    if (error instanceof BadRequestException) {
+      throw error;
+    }
+    const message =
+      error instanceof Error ? error.message : 'Failed to send WhatsApp message.';
+    throw new BadRequestException(message);
+  }
+
+  private async assertWhatsappSendReady(channel: WhatsappChannel | null) {
+    if (!channel) {
+      throw new BadRequestException('WhatsApp is not configured for this company.');
+    }
+
+    if (this.isMetaWhatsappChannel(channel)) {
+      if (
+        !channel.meta_phone_number_id?.trim() ||
+        !channel.meta_access_token?.trim()
+      ) {
+        throw new BadRequestException(
+          'Meta WhatsApp credentials are not configured for this company.',
+        );
+      }
+      return;
+    }
+
+    const evolution = this.getEvolutionConfig();
+    const instance = channel.instance_name?.trim();
+    const apikey = (channel.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+    if (!instance || !apikey) {
+      throw new BadRequestException(
+        'WhatsApp instance is not configured for this company.',
+      );
+    }
+    if (!evolution.enabled && !channel.evolution_api_base?.trim()) {
+      throw new BadRequestException(
+        'Evolution API is not configured for sending WhatsApp messages.',
+      );
+    }
+  }
+
+  private async sendCompanyWhatsappText(
+    companyId: number,
+    phone: string,
+    text: string,
+  ): Promise<void> {
+    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    await this.assertWhatsappSendReady(channel);
+    try {
+      await this.whatsappService.sendText(companyId, phone, text);
+    } catch (error) {
+      this.throwWhatsappSendError(error);
+    }
   }
 
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
@@ -257,13 +318,44 @@ export class BotAdminService {
     conv.agent_last_read_at = new Date();
     const saved = await this.conversationRepository.save(conv);
 
-    const phone = conv.channelUser?.external_user_id ?? '';
+    const channelUser = conv.channelUser;
+    const phone = channelUser?.external_user_id ?? '';
     if (phone) {
       await this.agentRoutingService.recordStickyAgent(
         user.company_id,
         phone,
         user.id,
       );
+    }
+
+    if (channelUser) {
+      channelUser.manual_mode = false;
+      channelUser.last_seen_at = new Date();
+      await this.channelUserRepository.save(channelUser);
+    }
+
+    const agentLabel =
+      user.name?.trim() || user.email?.split('@')[0]?.trim() || 'Our team';
+    const welcomeText = `Hi! ${agentLabel} is now here to help you. How can I assist you today?`;
+    if (phone) {
+      try {
+        await this.sendCompanyWhatsappText(user.company_id, phone, welcomeText);
+        await this.messageRepository.save(
+          this.messageRepository.create({
+            conversation_id: saved.id,
+            direction: 'outbound',
+            message_type: 'text',
+            platform: channelUser?.platform || 'whatsapp',
+            content: welcomeText,
+            source: 'admin',
+          }),
+        );
+      } catch (error) {
+        console.warn(
+          `Accept welcome WhatsApp failed for conversation ${saved.id}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
     }
 
     this.pusherService.trigger(
@@ -1193,6 +1285,9 @@ export class BotAdminService {
     channelUsers: BotChannelUser[],
   ): Promise<CompanyContactRow[]> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    if (this.isMetaWhatsappChannel(channel)) {
+      return rows;
+    }
     const instance = channel?.instance_name?.trim();
     if (!instance) {
       return rows;
@@ -1294,6 +1389,20 @@ export class BotAdminService {
     }
 
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    if (this.isMetaWhatsappChannel(channel)) {
+      const phone =
+        this.normalizePhoneKey(jid.split('@')[0] ?? jid) ||
+        this.normalizePhoneKey(jid);
+      if (!phone) {
+        throw new BadRequestException('Invalid WhatsApp JID.');
+      }
+      const dbMessages = await this.findDbMessagesForPhone(user.company_id, phone);
+      return {
+        remote_jid: jid.endsWith('@s.whatsapp.net') ? jid : `${phone}@s.whatsapp.net`,
+        messages: this.mergeConversationThreadMessages(dbMessages, []),
+      };
+    }
+
     const instance = channel?.instance_name?.trim();
     if (!instance) {
       throw new BadRequestException('WhatsApp instance is not configured.');
@@ -1339,6 +1448,22 @@ export class BotAdminService {
       throw new BadRequestException('remoteJid is required.');
     }
 
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    if (this.isMetaWhatsappChannel(channel)) {
+      let phone = '';
+      if (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us')) {
+        phone = this.normalizePhoneKey(jid.split('@')[0] ?? jid);
+      }
+      if (!phone) {
+        phone = this.normalizePhoneKey(jid);
+      }
+      if (!phone) {
+        throw new BadRequestException('Invalid WhatsApp JID.');
+      }
+      await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
+      return { remote_jid: jid, sent: true, text: trimmed };
+    }
+
     const evolution = this.getEvolutionConfig();
     if (!evolution.enabled) {
       throw new BadRequestException(
@@ -1346,7 +1471,6 @@ export class BotAdminService {
       );
     }
 
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     const instance = channel?.instance_name?.trim();
     const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
 
@@ -1437,7 +1561,7 @@ export class BotAdminService {
     const instance = channel?.instance_name?.trim();
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
-      phone && instance && apikey
+      !this.isMetaWhatsappChannel(channel) && phone && instance && apikey
         ? (
             await this.fetchEvolutionMessagesForJid(
               user.company_id,
@@ -1484,57 +1608,7 @@ export class BotAdminService {
       throw new BadRequestException('Invalid customer phone on this conversation.');
     }
 
-    const evolution = this.getEvolutionConfig();
-    if (!evolution.enabled) {
-      throw new BadRequestException(
-        'Evolution API is not configured for sending WhatsApp messages.',
-      );
-    }
-
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
-    const instance = channel?.instance_name?.trim();
-    const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
-
-    if (!instance || !apikey) {
-      throw new BadRequestException(
-        'WhatsApp instance is not configured for this company.',
-      );
-    }
-
-    try {
-      const response = await fetch(
-        `${evolution.base}/message/sendText/${encodeURIComponent(instance)}`,
-        {
-          method: 'POST',
-          headers: {
-            apikey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            number: phone,
-            text: trimmed,
-            delay: 1200,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        const body = await response.text();
-        let message = body || 'Failed to send WhatsApp message via Evolution.';
-        try {
-          const parsed = JSON.parse(body) as { message?: string; error?: string };
-          message = parsed.message ?? parsed.error ?? message;
-        } catch {
-          // keep raw body
-        }
-        throw new BadRequestException(message);
-      }
-    } catch (error) {
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      throw new BadRequestException('Failed to send WhatsApp message via Evolution.');
-    }
+    await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
 
     const message = this.messageRepository.create({
       conversation_id: conversationId,
