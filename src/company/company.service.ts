@@ -12,6 +12,7 @@ import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../whatsapp/whatsapp-channel.service';
+import { buildWhatsappChannelPatch } from '../whatsapp/whatsapp-channel-settings.util';
 import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity';
 import { User } from '../users/entities/user.entity';
 
@@ -115,7 +116,14 @@ export class CompanyService {
       is_weekly_report: company.is_weekly_report,
       is_monthly_report: company.is_monthly_report,
       industry,
-      whatsapp_instance_name: channel?.instance_name ?? null,
+      whatsapp_instance_name:
+        channel?.provider_type === 'meta'
+          ? (channel?.evolution_instance_name?.trim() ||
+              (channel?.instance_name &&
+              channel.instance_name !== channel.meta_phone_number_id
+                ? channel.instance_name
+                : null))
+          : (channel?.instance_name ?? null),
       whatsapp_evaluation_key: channel?.evaluation_whatsapp_key ?? null,
       whatsapp_status: channel?.status ?? null,
       whatsapp_provider_type: channel?.provider_type ?? 'evolution',
@@ -235,98 +243,15 @@ export class CompanyService {
     }
 
     const nextCompanyName = company.name;
-    const whatsappPatch: Partial<WhatsappChannel> = {};
     const existingChannel = await this.whatsappChannelService.getForCompany(
       Number(company.id),
     );
-
-    if (updateCompanyDto.whatsapp_instance_name !== undefined) {
-      whatsappPatch.instance_name = updateCompanyDto.whatsapp_instance_name.trim();
-    }
-    if (updateCompanyDto.whatsapp_evaluation_key !== undefined) {
-      whatsappPatch.evaluation_whatsapp_key =
-        updateCompanyDto.whatsapp_evaluation_key.trim() || null;
-    }
-    if (updateCompanyDto.whatsapp_provider_type !== undefined) {
-      whatsappPatch.provider_type = updateCompanyDto.whatsapp_provider_type;
-    }
-    if (updateCompanyDto.meta_phone_number_id !== undefined) {
-      whatsappPatch.meta_phone_number_id =
-        updateCompanyDto.meta_phone_number_id.trim() || null;
-    }
-    if (updateCompanyDto.meta_access_token !== undefined) {
-      whatsappPatch.meta_access_token =
-        updateCompanyDto.meta_access_token.trim() || null;
-    }
-    if (updateCompanyDto.meta_waba_id !== undefined) {
-      whatsappPatch.meta_waba_id = updateCompanyDto.meta_waba_id.trim() || null;
-    }
-    if (updateCompanyDto.meta_verify_token !== undefined) {
-      whatsappPatch.meta_verify_token =
-        updateCompanyDto.meta_verify_token.trim() || null;
-    }
-    if (updateCompanyDto.evolution_api_base !== undefined) {
-      whatsappPatch.evolution_api_base =
-        updateCompanyDto.evolution_api_base.trim() || null;
-    }
-    if (updateCompanyDto.meta_webhook_base_url !== undefined) {
-      whatsappPatch.meta_webhook_base_url =
-        updateCompanyDto.meta_webhook_base_url.trim().replace(/\/+$/, '') || null;
-    }
-
-    const nextProvider =
-      updateCompanyDto.whatsapp_provider_type ??
-      existingChannel?.provider_type ??
-      'evolution';
-
-    if (nextProvider === 'meta') {
-      const metaPhoneNumberId =
-        whatsappPatch.meta_phone_number_id?.trim() ||
-        existingChannel?.meta_phone_number_id?.trim() ||
-        '';
-      const metaAccessToken =
-        whatsappPatch.meta_access_token?.trim() ||
-        existingChannel?.meta_access_token?.trim() ||
-        '';
-
-      if (metaPhoneNumberId) {
-        whatsappPatch.meta_phone_number_id = metaPhoneNumberId;
-        const explicitInstance = updateCompanyDto.whatsapp_instance_name?.trim() || '';
-        const existingInstance = existingChannel?.instance_name?.trim() || '';
-        const existingEvolutionAlias =
-          existingChannel?.evolution_instance_name?.trim() || '';
-        const evolutionAlias =
-          explicitInstance ||
-          existingEvolutionAlias ||
-          (existingInstance && existingInstance !== metaPhoneNumberId
-            ? existingInstance
-            : '');
-        if (evolutionAlias) {
-          whatsappPatch.evolution_instance_name = evolutionAlias;
-        }
-        if (explicitInstance) {
-          whatsappPatch.instance_name = explicitInstance;
-        }
-      }
-      if (metaPhoneNumberId && metaAccessToken) {
-        whatsappPatch.status = 'CONNECTED';
-      } else if (updateCompanyDto.whatsapp_provider_type === 'meta') {
-        whatsappPatch.status = 'DISCONNECTED';
-      }
-    } else if (updateCompanyDto.whatsapp_provider_type === 'evolution') {
-      // Switching back to Evolution: Meta credentials stay stored but provider is Evolution-only.
-      const evolutionInstance =
-        whatsappPatch.instance_name?.trim() ||
-        existingChannel?.instance_name?.trim();
-      if (evolutionInstance) {
-        whatsappPatch.evolution_instance_name = evolutionInstance;
-        whatsappPatch.status =
-          existingChannel?.status === 'CONNECTED' ? 'CONNECTED' : 'DISCONNECTED';
-      }
-    }
-    if (updateCompanyDto.name !== undefined) {
-      whatsappPatch.company_name = nextCompanyName;
-    }
+    const whatsappPatch = buildWhatsappChannelPatch(
+      Number(company.id),
+      nextCompanyName,
+      updateCompanyDto,
+      existingChannel,
+    );
 
     await this.companyRepository.save(company);
 

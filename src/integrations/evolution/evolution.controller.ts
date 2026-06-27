@@ -172,6 +172,10 @@ export class EvolutionController {
 
         instance_name: instanceName,
 
+        evolution_instance_name: instanceName,
+
+        provider_type: 'evolution',
+
         status: 'CONNECTING',
 
       },
@@ -241,6 +245,10 @@ export class EvolutionController {
       {
 
         instance_name: instanceName,
+
+        evolution_instance_name: instanceName,
+
+        provider_type: 'evolution',
 
         evaluation_whatsapp_key: instanceToken,
 
@@ -460,6 +468,36 @@ export class EvolutionController {
       user.company_id,
 
     );
+
+    if (channel?.provider_type === 'meta') {
+
+      const savedCompany = await this.companyService.findOne(
+
+        user.company_id,
+
+        user,
+
+      );
+
+      return {
+
+        instance: channel.evolution_instance_name?.trim() || channel.instance_name?.trim() || '',
+
+        evolution_state: null,
+
+        whatsapp_status: channel.status ?? 'DISCONNECTED',
+
+        connected: channel.status === 'CONNECTED',
+
+        settings_applied: false,
+
+        company: savedCompany,
+
+        skipped: 'meta_provider_active',
+
+      };
+
+    }
 
     const instanceName = channel?.instance_name?.trim();
 
