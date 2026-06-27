@@ -233,37 +233,61 @@ export class BotAdminService {
     }
   }
 
-  /** Admin OR agent assigned to a conversation can access it */
+  /** Admin OR agent assigned to a conversation in their company can access it */
   private async assertConversationAccess(
     user: AuthenticatedUser,
     conversationId: number,
   ) {
     const company = await this.getCompanyForUser(user);
     if (!company) throw new ForbiddenException('Company not found.');
-    if (Number(company.admin_user_id) === Number(user.id)) return;
 
-    const conv = await this.conversationRepository
-      .createQueryBuilder('c')
-      .select(['c.id', 'c.assigned_agent_id'])
-      .where('c.id = :conversationId', { conversationId })
-      .andWhere('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(user.id) })
-      .getOne();
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const conv = isAdmin
+      ? await this.findConversationForCompany(conversationId, user.company_id)
+      : await this.findConversationForCompany(
+          conversationId,
+          user.company_id,
+          { assignedAgentId: user.id },
+        );
 
     if (!conv) {
+      if (isAdmin) {
+        throw new NotFoundException('Conversation not found.');
+      }
       throw new ForbiddenException('You do not have access to this conversation.');
     }
+  }
+
+  private findConversationForCompany(
+    conversationId: number,
+    companyId: number,
+    options?: { assignedAgentId?: number },
+  ) {
+    const qb = this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoinAndSelect('c.channelUser', 'channelUser')
+      .where('c.id = :conversationId', { conversationId })
+      .andWhere('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: Number(companyId),
+      });
+
+    if (options?.assignedAgentId != null) {
+      qb.andWhere('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', {
+        agentId: Number(options.assignedAgentId),
+      });
+    }
+
+    return qb.getOne();
   }
 
   private findAssignedConversationForAgent(
     conversationId: number,
     agentId: number,
+    companyId: number,
   ) {
-    return this.conversationRepository
-      .createQueryBuilder('c')
-      .innerJoinAndSelect('c.channelUser', 'channelUser')
-      .where('c.id = :conversationId', { conversationId })
-      .andWhere('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(agentId) })
-      .getOne();
+    return this.findConversationForCompany(conversationId, companyId, {
+      assignedAgentId: agentId,
+    });
   }
 
   /** Toggle the logged-in user's own is_agent_active status (online/offline for agents) */
@@ -308,6 +332,7 @@ export class BotAdminService {
     const conv = await this.findAssignedConversationForAgent(
       conversationId,
       user.id,
+      user.company_id,
     );
     if (!conv) throw new NotFoundException('Conversation not found or not assigned to you.');
     if (conv.status !== 'pending') {
@@ -371,6 +396,7 @@ export class BotAdminService {
     const conv = await this.findAssignedConversationForAgent(
       conversationId,
       user.id,
+      user.company_id,
     );
     if (!conv) {
       throw new NotFoundException('Conversation not found or not assigned to you.');
@@ -1055,6 +1081,9 @@ export class BotAdminService {
       .createQueryBuilder('c')
       .innerJoinAndSelect('c.channelUser', 'channelUser')
       .where('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId })
+      .andWhere('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: Number(user.company_id),
+      })
       .andWhere('LOWER(c.status) IN (:...statuses)', {
         statuses: ['pending', 'active'],
       })
@@ -1530,21 +1559,24 @@ export class BotAdminService {
   }
 
   async getConversation(user: AuthenticatedUser, id: number) {
-    await this.assertConversationAccess(user, id);
-
     const company = await this.getCompanyForUser(user);
-    const isAdmin =
-      company != null && Number(company.admin_user_id) === Number(user.id);
+    if (!company) {
+      throw new ForbiddenException('Company not found.');
+    }
+
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
 
     const conversation = isAdmin
-      ? await this.conversationRepository.findOne({
-          where: { id },
-          relations: ['channelUser'],
-        })
-      : await this.findAssignedConversationForAgent(id, user.id);
+      ? await this.findConversationForCompany(id, user.company_id)
+      : await this.findConversationForCompany(id, user.company_id, {
+          assignedAgentId: user.id,
+        });
 
     if (!conversation) {
-      throw new NotFoundException('Conversation not found.');
+      if (isAdmin) {
+        throw new NotFoundException('Conversation not found.');
+      }
+      throw new ForbiddenException('You do not have access to this conversation.');
     }
 
     if (Number(conversation.assigned_agent_id) === Number(user.id)) {
@@ -1589,10 +1621,10 @@ export class BotAdminService {
       throw new BadRequestException('Message text is required.');
     }
 
-    const conversation = await this.conversationRepository.findOne({
-      where: { id: conversationId },
-      relations: ['channelUser'],
-    });
+    const conversation = await this.findConversationForCompany(
+      conversationId,
+      user.company_id,
+    );
 
     if (!conversation) {
       throw new NotFoundException('Conversation not found.');

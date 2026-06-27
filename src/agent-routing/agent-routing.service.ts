@@ -435,6 +435,12 @@ export class AgentRoutingService {
     if (!conv) {
       throw new NotFoundException('Conversation not found.');
     }
+    if (
+      conv.channelUser &&
+      Number(conv.channelUser.company_id) !== Number(companyId)
+    ) {
+      throw new NotFoundException('Conversation not found.');
+    }
     if (conv.status === 'active' || conv.status === 'closed') {
       throw new NotFoundException(
         'Active or closed conversations cannot be manually reassigned.',
