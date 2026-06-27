@@ -8,7 +8,7 @@ const { resolve } = require('path');
 
 config({ path: resolve(__dirname, '../.env') });
 
-const API_BASE = (process.env.PUBLIC_API_BASE_URL || `http://localhost:${process.env.PORT || 3001}/v1/api`).replace(/\/+$/, '');
+const API_BASE = (process.env.PUBLIC_API_BASE_URL || `http://localhost:${process.env.PORT || 6001}/v1/api`).replace(/\/+$/, '');
 
 async function main() {
   const databaseUrl =

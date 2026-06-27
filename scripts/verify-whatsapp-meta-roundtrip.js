@@ -7,7 +7,7 @@ const { resolve } = require('path');
 
 config({ path: resolve(__dirname, '../.env') });
 
-const API_BASE = `http://localhost:${process.env.PORT || 3001}/v1/api`;
+const API_BASE = `http://localhost:${process.env.PORT || 6001}/v1/api`;
 const TEST_VERIFY = 'cursor-e2e-verify-token';
 const TEST_PHONE_ID = '123456789012345';
 
