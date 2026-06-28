@@ -14,6 +14,7 @@ export type AssignmentMode = 'sticky' | 'round_robin' | 'manual' | 'unassigned';
 export type InboundWhatsAppMessage = {
   content: string;
   message_type?: 'text' | 'image' | 'voice';
+  media_url?: string | null;
   source?: string;
 };
 
@@ -1030,6 +1031,7 @@ export class AgentRoutingService {
         message_type: messageType,
         platform: 'whatsapp',
         content,
+        media_url: inbound?.media_url?.trim() || null,
         source: inbound?.source?.trim() || 'customer',
       }),
     );
@@ -1037,6 +1039,106 @@ export class AgentRoutingService {
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
       conversation_id: conversationId,
       inbound: true,
+    });
+  }
+
+  async persistOutboundBotReply(
+    companyId: number,
+    conversationId: number,
+    reply: string,
+    options?: { source?: string },
+  ): Promise<void> {
+    const content = reply.trim();
+    if (!content || conversationId <= 0) {
+      return;
+    }
+
+    const recent = await this.messageRepository.findOne({
+      where: {
+        conversation_id: conversationId,
+        direction: 'outbound',
+        content,
+      },
+      order: { id: 'DESC' },
+    });
+    if (recent?.created_at) {
+      const ageMs = Date.now() - new Date(recent.created_at).getTime();
+      if (ageMs >= 0 && ageMs < 120_000) {
+        return;
+      }
+    }
+
+    await this.messageRepository.save(
+      this.messageRepository.create({
+        conversation_id: conversationId,
+        direction: 'outbound',
+        message_type: 'text',
+        platform: 'whatsapp',
+        content,
+        source: options?.source?.trim() || 'bot',
+      }),
+    );
+
+    await this.conversationRepository.update(conversationId, {
+      last_message_at: new Date(),
+    });
+
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+      conversation_id: conversationId,
+      inbound: false,
+    });
+  }
+
+  async persistOutboundProductImages(
+    companyId: number,
+    conversationId: number,
+    urls: string[],
+  ): Promise<void> {
+    if (conversationId <= 0 || !urls.length) {
+      return;
+    }
+
+    for (const rawUrl of urls) {
+      const mediaUrl = rawUrl.trim();
+      if (!mediaUrl) {
+        continue;
+      }
+
+      const recent = await this.messageRepository.findOne({
+        where: {
+          conversation_id: conversationId,
+          direction: 'outbound',
+          media_url: mediaUrl,
+        },
+        order: { id: 'DESC' },
+      });
+      if (recent?.created_at) {
+        const ageMs = Date.now() - new Date(recent.created_at).getTime();
+        if (ageMs >= 0 && ageMs < 120_000) {
+          continue;
+        }
+      }
+
+      await this.messageRepository.save(
+        this.messageRepository.create({
+          conversation_id: conversationId,
+          direction: 'outbound',
+          message_type: 'image',
+          platform: 'whatsapp',
+          content: '[image]',
+          media_url: mediaUrl,
+          source: 'meta_bot',
+        }),
+      );
+    }
+
+    await this.conversationRepository.update(conversationId, {
+      last_message_at: new Date(),
+    });
+
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+      conversation_id: conversationId,
+      inbound: false,
     });
   }
 }

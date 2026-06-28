@@ -113,11 +113,23 @@ export class BotAdminService {
   }
 
   private async resolveCompanyWhatsappChannel(companyId: number) {
-    return this.whatsappChannelRepository.findOne({
+    const channels = await this.whatsappChannelRepository.find({
       where: { company_id: companyId },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      order: { id: 'ASC' as any },
+      order: { id: 'DESC' },
     });
+    if (!channels.length) {
+      return null;
+    }
+    return (
+      channels.find(
+        (channel) =>
+          channel.provider_type === 'meta' &&
+          channel.meta_access_token?.trim() &&
+          channel.meta_phone_number_id?.trim(),
+      ) ??
+      channels.find((channel) => channel.evaluation_whatsapp_key?.trim()) ??
+      channels[0]
+    );
   }
 
   private isMetaWhatsappChannel(channel: WhatsappChannel | null | undefined): boolean {
@@ -658,6 +670,193 @@ export class BotAdminService {
     }
     const cleaned = trimmed.includes(',') ? trimmed.split(',').pop() ?? trimmed : trimmed;
     return `data:${mimetype || 'image/jpeg'};base64,${cleaned}`;
+  }
+
+  private static readonly META_MEDIA_PREFIX = 'meta-media:';
+
+  private metaGraphVersion(): string {
+    return (
+      process.env.META_GRAPH_API_VERSION ??
+      process.env.WHATSAPP_GRAPH_API_VERSION ??
+      'v22.0'
+    ).trim();
+  }
+
+  private extractMetaMediaId(message: {
+    media_url?: string | null;
+    content?: string | null;
+  }): string {
+    const mediaUrl = String(message.media_url ?? '').trim();
+    if (mediaUrl.startsWith(BotAdminService.META_MEDIA_PREFIX)) {
+      return mediaUrl.slice(BotAdminService.META_MEDIA_PREFIX.length).trim();
+    }
+    if (/^\d{10,}$/.test(mediaUrl)) {
+      return mediaUrl;
+    }
+    const content = String(message.content ?? '').trim();
+    const customerImageMatch = content.match(/\[customer image:\s*([^\]]+)\]/i);
+    if (customerImageMatch?.[1]?.trim()) {
+      return customerImageMatch[1].trim();
+    }
+    return '';
+  }
+
+  private needsMetaImageEnrichment(message: {
+    message_type?: string;
+    content?: string;
+    media_url?: string | null;
+  }): boolean {
+    if (this.isDisplayableImageUrl(message.media_url)) {
+      return false;
+    }
+    if (this.extractMetaMediaId(message)) {
+      return true;
+    }
+    if (isWhatsAppHostedMediaUrl(String(message.media_url ?? ''))) {
+      return true;
+    }
+    const messageType = String(message.message_type ?? '').toLowerCase();
+    if (messageType === 'image') {
+      return true;
+    }
+    const content = String(message.content ?? '').trim();
+    return content === '[image]' || /\[customer image:/i.test(content);
+  }
+
+  private async fetchMetaMediaAsDataUrl(
+    mediaId: string,
+    accessToken: string,
+  ): Promise<string> {
+    const id = mediaId.trim();
+    const token = accessToken.trim();
+    if (!id || !token) {
+      return '';
+    }
+
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/${this.metaGraphVersion()}/${id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(12000),
+        },
+      );
+      if (!metaRes.ok) {
+        return '';
+      }
+      const metaJson = (await metaRes.json()) as { url?: string; mime_type?: string };
+      const mediaUrl = String(metaJson.url ?? '').trim();
+      if (!mediaUrl) {
+        return '';
+      }
+      const binRes = await fetch(mediaUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!binRes.ok) {
+        return '';
+      }
+      const mime =
+        binRes.headers.get('content-type')?.trim() ||
+        String(metaJson.mime_type ?? '').trim() ||
+        'image/jpeg';
+      const buffer = Buffer.from(await binRes.arrayBuffer());
+      if (!buffer.length) {
+        return '';
+      }
+      return this.toDataImageUrl(buffer.toString('base64'), mime);
+    } catch {
+      return '';
+    }
+  }
+
+  private async fetchWhatsAppHostedMediaAsDataUrl(
+    mediaUrl: string,
+    accessToken: string,
+  ): Promise<string> {
+    const url = mediaUrl.trim();
+    const token = accessToken.trim();
+    if (!url || !token || !isWhatsAppHostedMediaUrl(url)) {
+      return '';
+    }
+    try {
+      const binRes = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!binRes.ok) {
+        return '';
+      }
+      const mime = binRes.headers.get('content-type')?.trim() || 'image/jpeg';
+      const buffer = Buffer.from(await binRes.arrayBuffer());
+      if (!buffer.length) {
+        return '';
+      }
+      return this.toDataImageUrl(buffer.toString('base64'), mime);
+    } catch {
+      return '';
+    }
+  }
+
+  private async enrichMetaDbImageMessages<
+    T extends {
+      id?: number;
+      message_type?: string;
+      content?: string;
+      media_url?: string | null;
+    },
+  >(messages: T[], channel: WhatsappChannel | null): Promise<T[]> {
+    const token = channel?.meta_access_token?.trim() ?? '';
+    if (!token) {
+      return messages;
+    }
+
+    const enrichedByKey = new Map<string, string>();
+    const targets = messages
+      .filter((message) => this.needsMetaImageEnrichment(message))
+      .slice(-24);
+
+    for (const message of targets) {
+      const mediaId = this.extractMetaMediaId(message);
+      let dataUrl = '';
+      if (mediaId) {
+        dataUrl = await this.fetchMetaMediaAsDataUrl(mediaId, token);
+      }
+      if (!dataUrl) {
+        dataUrl = await this.fetchWhatsAppHostedMediaAsDataUrl(
+          String(message.media_url ?? ''),
+          token,
+        );
+      }
+      if (!dataUrl) {
+        continue;
+      }
+      const key =
+        Number(message.id) > 0
+          ? `id:${message.id}`
+          : `${String(message.message_type ?? '')}|${String(message.media_url ?? '')}|${String(message.content ?? '').slice(0, 80)}`;
+      enrichedByKey.set(key, dataUrl);
+    }
+
+    if (!enrichedByKey.size) {
+      return messages;
+    }
+
+    return messages.map((message) => {
+      const key =
+        Number(message.id) > 0
+          ? `id:${message.id}`
+          : `${String(message.message_type ?? '')}|${String(message.media_url ?? '')}|${String(message.content ?? '').slice(0, 80)}`;
+      const mediaUrl = enrichedByKey.get(key);
+      if (!mediaUrl) {
+        return message;
+      }
+      return {
+        ...message,
+        message_type: 'image',
+        media_url: mediaUrl,
+      };
+    });
   }
 
   private async enrichEvolutionImageMessages(
@@ -1470,9 +1669,13 @@ export class BotAdminService {
         throw new BadRequestException('Invalid WhatsApp JID.');
       }
       const dbMessages = await this.findDbMessagesForPhone(user.company_id, phone);
+      let mergedMessages = this.mergeConversationThreadMessages(dbMessages, []);
+      if (this.isMetaWhatsappChannel(channel)) {
+        mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
+      }
       return {
         remote_jid: jid.endsWith('@s.whatsapp.net') ? jid : `${phone}@s.whatsapp.net`,
-        messages: this.mergeConversationThreadMessages(dbMessages, []),
+        messages: mergedMessages,
       };
     }
 
@@ -1652,10 +1855,127 @@ export class BotAdminService {
           ).messages
         : [];
 
+    let mergedMessages = this.mergeConversationThreadMessages(messages, fetchedEvolution);
+    if (this.isMetaWhatsappChannel(channel)) {
+      mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
+    }
+
     return {
       conversation,
-      messages: this.mergeConversationThreadMessages(messages, fetchedEvolution),
+      messages: mergedMessages,
     };
+  }
+
+  async getConversationMessageMedia(
+    user: AuthenticatedUser,
+    conversationId: number,
+    messageId: number,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    await this.assertConversationAccess(user, conversationId);
+
+    const message = await this.messageRepository.findOne({
+      where: { id: messageId, conversation_id: conversationId },
+    });
+    if (!message) {
+      throw new NotFoundException('Message not found.');
+    }
+
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const hydrated = this.hydrateThreadMessage({
+      id: message.id,
+      direction: message.direction,
+      message_type: message.message_type,
+      platform: message.platform,
+      content: message.content,
+      media_url: message.media_url,
+      transcript: message.transcript,
+      created_at: message.created_at,
+    });
+
+    let mediaUrl = String(hydrated.media_url ?? message.media_url ?? '').trim();
+    if (!this.isDisplayableImageUrl(mediaUrl)) {
+      const embedded = String(message.content ?? '')
+        .match(BotAdminService.THREAD_IMAGE_URL_RE)
+        ?.find((url) => this.isDisplayableImageUrl(url))
+        ?.trim();
+      if (embedded) {
+        mediaUrl = embedded;
+      }
+    }
+
+    if (mediaUrl.startsWith('data:image/')) {
+      const parsed = this.parseDataImageUrl(mediaUrl);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    const metaMediaId = this.extractMetaMediaId(message);
+    const metaToken = channel?.meta_access_token?.trim() ?? '';
+    if (metaMediaId && metaToken) {
+      const dataUrl = await this.fetchMetaMediaAsDataUrl(metaMediaId, metaToken);
+      const parsed = dataUrl ? this.parseDataImageUrl(dataUrl) : null;
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    if (this.isDisplayableImageUrl(mediaUrl)) {
+      const proxied = await this.fetchRemoteImageBuffer(mediaUrl);
+      if (proxied) {
+        return proxied;
+      }
+    }
+
+    if (isWhatsAppHostedMediaUrl(mediaUrl) && metaToken) {
+      const dataUrl = await this.fetchWhatsAppHostedMediaAsDataUrl(mediaUrl, metaToken);
+      const parsed = dataUrl ? this.parseDataImageUrl(dataUrl) : null;
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    throw new NotFoundException('Message media is not available.');
+  }
+
+  private parseDataImageUrl(
+    dataUrl: string,
+  ): { buffer: Buffer; contentType: string } | null {
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
+    if (!match?.[2]) {
+      return null;
+    }
+    try {
+      const buffer = Buffer.from(match[2], 'base64');
+      if (!buffer.length) {
+        return null;
+      }
+      return { buffer, contentType: match[1].trim() || 'image/jpeg' };
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchRemoteImageBuffer(
+    url: string,
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) {
+        return null;
+      }
+      const contentType = res.headers.get('content-type')?.trim() || 'image/jpeg';
+      if (!contentType.startsWith('image/')) {
+        return null;
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (!buffer.length) {
+        return null;
+      }
+      return { buffer, contentType };
+    } catch {
+      return null;
+    }
   }
 
   async sendConversationMessage(

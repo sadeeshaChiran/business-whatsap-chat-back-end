@@ -10,6 +10,7 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
@@ -25,6 +26,7 @@ import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
+import { RawResponse } from '../common/decorators/raw-response.decorator';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -107,6 +109,21 @@ export class BotAdminController {
     @Param('id') id: string,
   ) {
     return this.botAdminService.getConversation(user, Number(id));
+  }
+
+  @Get('conversations/:conversationId/messages/:messageId/media')
+  @RawResponse()
+  async getConversationMessageMedia(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+  ) {
+    const media = await this.botAdminService.getConversationMessageMedia(
+      user,
+      conversationId,
+      messageId,
+    );
+    return new StreamableFile(media.buffer, { type: media.contentType });
   }
 
   @Post('conversations/:id/messages')
