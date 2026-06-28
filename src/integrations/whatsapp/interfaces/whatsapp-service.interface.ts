@@ -19,6 +19,7 @@ export type NormalizedWhatsAppInbound = {
   has_voice: boolean;
   image_url?: string;
   image_caption?: string;
+  meta_media_id?: string;
   voice_url?: string;
 };
 

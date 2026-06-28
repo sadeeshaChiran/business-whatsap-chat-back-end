@@ -64,8 +64,9 @@ export class MetaAdapter implements WhatsappServiceInterface {
             text = String((message.text as Record<string, unknown>)?.body ?? '').trim();
           } else if (messageType === 'image') {
             hasImage = true;
+            const imagePayload = (message.image as Record<string, unknown>) ?? {};
             text =
-              String((message.image as Record<string, unknown>)?.caption ?? '').trim() ||
+              String(imagePayload.caption ?? '').trim() ||
               '[image]';
           } else if (messageType === 'audio') {
             hasVoice = true;
@@ -73,6 +74,11 @@ export class MetaAdapter implements WhatsappServiceInterface {
           } else {
             text = `[${messageType}]`;
           }
+
+          const imagePayload = hasImage
+            ? ((message.image as Record<string, unknown>) ?? {})
+            : {};
+          const metaMediaId = String(imagePayload.id ?? '').trim();
 
           return {
             provider: 'meta',
@@ -88,9 +94,9 @@ export class MetaAdapter implements WhatsappServiceInterface {
             meta_phone_number_id: phoneNumberId,
             has_image: hasImage,
             has_voice: hasVoice,
+            meta_media_id: metaMediaId || undefined,
             image_caption: hasImage
-              ? String((message.image as Record<string, unknown>)?.caption ?? '').trim() ||
-                undefined
+              ? String(imagePayload.caption ?? '').trim() || undefined
               : undefined,
           };
         }
