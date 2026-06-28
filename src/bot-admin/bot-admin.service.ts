@@ -124,6 +124,28 @@ export class BotAdminService {
     return (channel?.provider_type ?? 'evolution') === 'meta';
   }
 
+  private looksLikeMetaPhoneNumberId(value: string | null | undefined): boolean {
+    const trimmed = String(value ?? '').trim();
+    return trimmed.length >= 10 && /^\d+$/.test(trimmed);
+  }
+
+  private resolveEvolutionInstanceName(
+    channel: WhatsappChannel | null | undefined,
+  ): string {
+    if (!channel || this.isMetaWhatsappChannel(channel)) {
+      return '';
+    }
+    const alias = channel.evolution_instance_name?.trim();
+    if (alias) {
+      return alias;
+    }
+    const instance = channel.instance_name?.trim() ?? '';
+    if (instance && !this.looksLikeMetaPhoneNumberId(instance)) {
+      return instance;
+    }
+    return '';
+  }
+
   private throwWhatsappSendError(error: unknown): never {
     if (error instanceof BadRequestException) {
       throw error;
@@ -839,7 +861,7 @@ export class BotAdminService {
     }
 
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
-    const instance = channel?.instance_name?.trim();
+    const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     if (!instance || !apikey) {
       return [];
@@ -994,26 +1016,27 @@ export class BotAdminService {
       throw new BadRequestException('A valid phone number is required.');
     }
 
+    const companyScoped = await this.channelUserRepository.findOne({
+      where: {
+        company_id: companyId,
+        platform: 'whatsapp',
+        external_user_id: normalizedPhone,
+      },
+    });
+    if (companyScoped) {
+      if (displayName?.trim() && !companyScoped.display_name?.trim()) {
+        companyScoped.display_name = displayName.trim();
+      }
+      companyScoped.last_seen_at = companyScoped.last_seen_at ?? new Date();
+      return this.channelUserRepository.save(companyScoped);
+    }
+
     const companyUsers = await this.channelUserRepository.find({
       where: { company_id: companyId, platform: 'whatsapp' },
     });
     const matched = this.findChannelUserForPhone(companyUsers, normalizedPhone);
     if (matched) {
       return matched;
-    }
-
-    const existing = await this.channelUserRepository.findOne({
-      where: { platform: 'whatsapp', external_user_id: normalizedPhone },
-    });
-    if (existing) {
-      if (existing.company_id !== companyId) {
-        existing.company_id = companyId;
-      }
-      if (displayName?.trim() && !existing.display_name?.trim()) {
-        existing.display_name = displayName.trim();
-      }
-      existing.last_seen_at = existing.last_seen_at ?? new Date();
-      return this.channelUserRepository.save(existing);
     }
 
     return this.channelUserRepository.save(
@@ -1076,13 +1099,22 @@ export class BotAdminService {
   /** Returns conversations assigned to this agent only (pending + active), regardless of online status. */
   async getAgentConversations(user: AuthenticatedUser) {
     const agentId = Number(user.id);
+    const companyId = Number(user.company_id);
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      throw new ForbiddenException('Company not found.');
+    }
+
+    const dbUser = await this.userRepository.findOne({ where: { id: agentId } });
+    if (!dbUser || Number(dbUser.company_id) !== companyId) {
+      throw new ForbiddenException('Agent company mismatch.');
+    }
 
     const all = await this.conversationRepository
       .createQueryBuilder('c')
       .innerJoinAndSelect('c.channelUser', 'channelUser')
       .where('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId })
       .andWhere('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
-        companyId: Number(user.company_id),
+        companyId,
       })
       .andWhere('LOWER(c.status) IN (:...statuses)', {
         statuses: ['pending', 'active'],
@@ -1192,13 +1224,25 @@ export class BotAdminService {
   private async markConversationReadByAgent(
     conversationId: number,
     agentId: number,
+    companyId: number,
   ): Promise<void> {
     await this.conversationRepository
       .createQueryBuilder()
       .update(BotConversation)
       .set({ agent_last_read_at: new Date() })
       .where('id = :conversationId', { conversationId })
-      .andWhere('CAST(assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', { agentId: Number(agentId) })
+      .andWhere('CAST(assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', {
+        agentId: Number(agentId),
+      })
+      .andWhere(
+        `id IN (
+          SELECT c.id
+          FROM bot_conversation c
+          INNER JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+          WHERE CAST(u.company_id AS BIGINT) = CAST(:companyId AS BIGINT)
+        )`,
+        { companyId: Number(companyId) },
+      )
       .execute();
   }
 
@@ -1317,7 +1361,7 @@ export class BotAdminService {
     if (this.isMetaWhatsappChannel(channel)) {
       return rows;
     }
-    const instance = channel?.instance_name?.trim();
+    const instance = this.resolveEvolutionInstanceName(channel);
     if (!instance) {
       return rows;
     }
@@ -1432,7 +1476,7 @@ export class BotAdminService {
       };
     }
 
-    const instance = channel?.instance_name?.trim();
+    const instance = this.resolveEvolutionInstanceName(channel);
     if (!instance) {
       throw new BadRequestException('WhatsApp instance is not configured.');
     }
@@ -1500,7 +1544,7 @@ export class BotAdminService {
       );
     }
 
-    const instance = channel?.instance_name?.trim();
+    const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
 
     if (!instance || !apikey) {
@@ -1580,7 +1624,11 @@ export class BotAdminService {
     }
 
     if (Number(conversation.assigned_agent_id) === Number(user.id)) {
-      await this.markConversationReadByAgent(conversation.id, user.id);
+      await this.markConversationReadByAgent(
+        conversation.id,
+        user.id,
+        user.company_id,
+      );
     }
 
     const messages = await this.messageRepository.find({
@@ -1590,7 +1638,7 @@ export class BotAdminService {
 
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
-    const instance = channel?.instance_name?.trim();
+    const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
       !this.isMetaWhatsappChannel(channel) && phone && instance && apikey
@@ -1628,6 +1676,16 @@ export class BotAdminService {
 
     if (!conversation) {
       throw new NotFoundException('Conversation not found.');
+    }
+
+    const company = await this.getCompanyForUser(user);
+    const isAdmin =
+      company != null && Number(company.admin_user_id) === Number(user.id);
+    if (
+      !isAdmin &&
+      Number(conversation.assigned_agent_id) !== Number(user.id)
+    ) {
+      throw new ForbiddenException('You do not have access to this conversation.');
     }
 
     const channelUser = conversation.channelUser;

@@ -904,7 +904,11 @@ export class AgentRoutingService {
     }
 
     let channelUser = await this.channelUserRepository.findOne({
-      where: { platform: 'whatsapp', external_user_id: normalizedPhone },
+      where: {
+        company_id: companyId,
+        platform: 'whatsapp',
+        external_user_id: normalizedPhone,
+      },
     });
 
     if (!channelUser) {
@@ -920,9 +924,6 @@ export class AgentRoutingService {
         }),
       );
     } else {
-      if (Number(channelUser.company_id) !== Number(companyId)) {
-        channelUser.company_id = companyId;
-      }
       channelUser.last_seen_at = new Date();
       if (displayName?.trim() && !channelUser.display_name?.trim()) {
         channelUser.display_name = displayName.trim();
