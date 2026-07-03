@@ -49,6 +49,9 @@ export class BotOrder {
   @Column({ type: 'text', nullable: true })
   invoice_url: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  admin_note: string | null;
+
   @ManyToOne(() => BotChannelUser, { nullable: false, onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'bot_channel_user_id' })
   channelUser: BotChannelUser;

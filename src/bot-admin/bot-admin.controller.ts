@@ -26,6 +26,10 @@ import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
+import { AssignConversationLabelsDto } from './dto/assign-conversation-labels.dto';
+import { CreateBotCustomerLabelDto } from './dto/create-bot-customer-label.dto';
+import { UpdateOrderNoteDto } from './dto/update-order-note.dto';
+import { UpdateBotOrderDto } from './dto/update-bot-order.dto';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
 
 @Controller('bot')
@@ -235,6 +239,79 @@ export class BotAdminController {
     @Param('id') id: string,
   ) {
     return this.botAdminService.sendOrderInvoice(user, Number(id));
+  }
+
+  @Post('orders/:id/note')
+  updateOrderNote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: UpdateOrderNoteDto,
+  ) {
+    return this.botAdminService.updateOrderNote(
+      user,
+      id,
+      payload.admin_note ?? '',
+    );
+  }
+
+  @Post('orders/:id/update')
+  updateOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: UpdateBotOrderDto,
+  ) {
+    return this.botAdminService.updateOrder(user, id, payload);
+  }
+
+  @Delete('orders/:id')
+  deleteOrder(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.deleteOrder(user, id);
+  }
+
+  @Get('labels')
+  listCustomerLabels(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.listCustomerLabels(user);
+  }
+
+  @Get('labels/assignments')
+  listLabelAssignments(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.listLabelAssignments(user);
+  }
+
+  @Post('labels')
+  createCustomerLabel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() payload: CreateBotCustomerLabelDto,
+  ) {
+    return this.botAdminService.createCustomerLabel(
+      user,
+      payload.name,
+      payload.color_code,
+    );
+  }
+
+  @Delete('labels/:id')
+  deleteCustomerLabel(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.deleteCustomerLabel(user, id);
+  }
+
+  @Post('conversations/:id/labels')
+  assignConversationLabels(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: AssignConversationLabelsDto,
+  ) {
+    return this.botAdminService.assignConversationLabels(
+      user,
+      id,
+      payload.label_ids,
+    );
   }
 
   @Get('order-status-templates')

@@ -17,6 +17,7 @@ const MIGRATION_FILES = [
   'supabase_whatsapp_meta_verify_token.sql',
   'supabase_whatsapp_meta_webhook_base.sql',
   'supabase_bot_channel_user_company_scope.sql',
+  'supabase_bot_order_note_labels.sql',
 ] as const;
 
 function migrationDir(): string | null {

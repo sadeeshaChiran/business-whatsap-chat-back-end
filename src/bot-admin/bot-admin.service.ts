@@ -18,6 +18,8 @@ import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
+import { BotConversationLabel } from './entities/bot-conversation-label.entity';
+import { BotCustomerLabel } from './entities/bot-customer-label.entity';
 import { BotMessage } from './entities/bot-message.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
@@ -79,6 +81,10 @@ export class BotAdminService {
     private readonly channelUserRepository: Repository<BotChannelUser>,
     @InjectRepository(BotConversation)
     private readonly conversationRepository: Repository<BotConversation>,
+    @InjectRepository(BotConversationLabel)
+    private readonly conversationLabelRepository: Repository<BotConversationLabel>,
+    @InjectRepository(BotCustomerLabel)
+    private readonly customerLabelRepository: Repository<BotCustomerLabel>,
     @InjectRepository(BotMessage)
     private readonly messageRepository: Repository<BotMessage>,
     @InjectRepository(BotTrainingData)
@@ -1863,6 +1869,11 @@ export class BotAdminService {
     return {
       conversation,
       messages: mergedMessages,
+      labels: await this.listConversationLabels(id, user.company_id),
+      customer_orders: await this.getOrdersForChannelUser(
+        user.company_id,
+        Number(conversation.bot_channel_user_id || 0),
+      ),
     };
   }
 
@@ -2632,5 +2643,314 @@ export class BotAdminService {
     pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefPosition}\n%%EOF`;
 
     return Buffer.from(pdf, 'utf8');
+  }
+
+  async updateOrderNote(
+    user: AuthenticatedUser,
+    orderId: number,
+    adminNote: string,
+  ) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId, company_id: user.company_id },
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+    order.admin_note = adminNote.trim() || null;
+    await this.orderRepository.save(order);
+    return { order };
+  }
+
+  async updateOrder(
+    user: AuthenticatedUser,
+    orderId: number,
+    payload: {
+      customer_name?: string;
+      customer_phone?: string;
+      address?: string;
+      status?: BotOrderStatus;
+      admin_note?: string;
+    },
+  ) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId, company_id: user.company_id },
+      relations: ['channelUser', 'items'],
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+
+    if (payload.customer_name !== undefined) {
+      order.customer_name = payload.customer_name.trim();
+    }
+    if (payload.customer_phone !== undefined) {
+      order.customer_phone = payload.customer_phone.trim();
+    }
+    if (payload.address !== undefined) {
+      order.address = payload.address.trim() || null;
+    }
+    if (payload.status !== undefined) {
+      order.status = payload.status;
+    }
+    if (payload.admin_note !== undefined) {
+      order.admin_note = payload.admin_note.trim() || null;
+    }
+
+    const saved = await this.orderRepository.save(order);
+    return { order: saved };
+  }
+
+  async deleteOrder(user: AuthenticatedUser, orderId: number) {
+    await this.assertAdminAccess(user);
+    const order = await this.orderRepository.findOne({
+      where: { id: orderId, company_id: user.company_id },
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found.');
+    }
+    await this.orderItemRepository.delete({ order_id: orderId });
+    await this.orderStatusHistoryRepository.delete({ order_id: orderId });
+    await this.orderRepository.remove(order);
+    return { id: orderId, removed: true };
+  }
+
+  async getOrdersForChannelUser(companyId: number, channelUserId: number) {
+    if (channelUserId <= 0) {
+      return [];
+    }
+    return this.orderRepository.find({
+      where: { company_id: companyId, bot_channel_user_id: channelUserId },
+      relations: ['items'],
+      order: { created_at: 'DESC' },
+      take: 20,
+    });
+  }
+
+  formatOrdersAsNotes(orders: BotOrder[]): string {
+    if (!orders.length) {
+      return '';
+    }
+    return orders
+      .map((order) => {
+        const lines = (order.items ?? []).map((item) => {
+          const variant = item.variant_text?.trim();
+          const label = variant
+            ? `${item.product_name} (${variant})`
+            : item.product_name;
+          return `- ${label} x ${item.quantity} = ${this.formatMoney(Number(item.total_price || 0))}`;
+        });
+        const note = order.admin_note?.trim();
+        const noteLine = note ? `\nNote: ${note}` : '';
+        return [
+          `Order #${order.id} (${order.status}) — ${this.formatDate(order.created_at)}`,
+          lines.join('\n') || '- (no items)',
+          `Total: ${this.formatMoney(Number(order.total_amount || 0))}${noteLine}`,
+        ].join('\n');
+      })
+      .join('\n\n');
+  }
+
+  async listCustomerLabels(user: AuthenticatedUser) {
+    const rows = await this.customerLabelRepository.find({
+      where: { company_id: user.company_id },
+      order: { name: 'ASC' },
+    });
+    return rows.map((label) => ({
+      id: Number(label.id),
+      name: label.name,
+      color_code: label.color_code,
+    }));
+  }
+
+  async listLabelAssignments(user: AuthenticatedUser) {
+    const companyId = Number(user.company_id);
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      throw new ForbiddenException('Company not found.');
+    }
+
+    const labels = await this.listCustomerLabels(user);
+    const conversationsByLabel = new Map<number, Set<number>>(
+      labels.map((label) => [label.id, new Set<number>()]),
+    );
+
+    const rows = await this.conversationLabelRepository
+      .createQueryBuilder('cl')
+      .innerJoinAndSelect('cl.label', 'label')
+      .innerJoinAndSelect('cl.conversation', 'conversation')
+      .leftJoinAndSelect('conversation.channelUser', 'channelUser')
+      .where('label.company_id = :companyId', { companyId })
+      .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('conversation.id', 'DESC')
+      .addOrderBy('label.name', 'ASC')
+      .getMany();
+
+    type AssignmentConversation = {
+      conversation_id: number;
+      status: string;
+      last_message_at: string | null;
+      display_name: string;
+      external_user_id: string;
+      platform: string;
+      labels: Array<{ id: number; name: string; color_code: string }>;
+    };
+
+    const conversationMap = new Map<number, AssignmentConversation>();
+
+    for (const row of rows) {
+      const conversationId = Number(row.conversation_id);
+      const labelId = Number(row.label_id);
+      const label = row.label;
+      const conversation = row.conversation;
+      if (
+        !label ||
+        !conversation ||
+        !Number.isInteger(conversationId) ||
+        conversationId <= 0 ||
+        !Number.isInteger(labelId) ||
+        labelId <= 0
+      ) {
+        continue;
+      }
+
+      const labelConversationSet =
+        conversationsByLabel.get(labelId) ?? new Set<number>();
+      labelConversationSet.add(conversationId);
+      conversationsByLabel.set(labelId, labelConversationSet);
+
+      if (!conversationMap.has(conversationId)) {
+        const channelUser = conversation.channelUser;
+        conversationMap.set(conversationId, {
+          conversation_id: conversationId,
+          status: String(conversation.status || 'open'),
+          last_message_at: conversation.last_message_at
+            ? new Date(conversation.last_message_at).toISOString()
+            : null,
+          display_name: String(channelUser?.display_name || '').trim(),
+          external_user_id: String(channelUser?.external_user_id || '').trim(),
+          platform: String(channelUser?.platform || '').trim(),
+          labels: [],
+        });
+      }
+
+      const assignment = conversationMap.get(conversationId);
+      if (!assignment) {
+        continue;
+      }
+      if (!assignment.labels.some((item) => item.id === labelId)) {
+        assignment.labels.push({
+          id: labelId,
+          name: label.name,
+          color_code: label.color_code,
+        });
+      }
+    }
+
+    return {
+      summary: labels.map((label) => ({
+        ...label,
+        conversation_count: conversationsByLabel.get(label.id)?.size ?? 0,
+      })),
+      conversations: [...conversationMap.values()],
+    };
+  }
+
+  async createCustomerLabel(
+    user: AuthenticatedUser,
+    name: string,
+    colorCode?: string,
+  ) {
+    await this.assertAdminAccess(user);
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      throw new BadRequestException('Label name is required.');
+    }
+    const existing = await this.customerLabelRepository.findOne({
+      where: { company_id: user.company_id, name: trimmedName },
+    });
+    if (existing) {
+      throw new BadRequestException('A label with this name already exists.');
+    }
+    const label = await this.customerLabelRepository.save(
+      this.customerLabelRepository.create({
+        company_id: user.company_id,
+        name: trimmedName,
+        color_code: colorCode?.trim() || '#64748b',
+      }),
+    );
+    return {
+      id: Number(label.id),
+      name: label.name,
+      color_code: label.color_code,
+    };
+  }
+
+  async deleteCustomerLabel(user: AuthenticatedUser, labelId: number) {
+    await this.assertAdminAccess(user);
+    const label = await this.customerLabelRepository.findOne({
+      where: { id: labelId, company_id: user.company_id },
+    });
+    if (!label) {
+      throw new NotFoundException('Label not found.');
+    }
+    await this.conversationLabelRepository.delete({ label_id: labelId });
+    await this.customerLabelRepository.remove(label);
+    return { id: labelId, removed: true };
+  }
+
+  async listConversationLabels(conversationId: number, companyId: number) {
+    const rows = await this.conversationLabelRepository
+      .createQueryBuilder('cl')
+      .innerJoin(BotCustomerLabel, 'l', 'l.id = cl.label_id')
+      .where('cl.conversation_id = :conversationId', { conversationId })
+      .andWhere('l.company_id = :companyId', { companyId })
+      .select([
+        'l.id AS id',
+        'l.name AS name',
+        'l.color_code AS color_code',
+      ])
+      .getRawMany<{ id: string | number; name: string; color_code: string }>();
+    return rows.map((row) => ({
+      id: Number(row.id),
+      name: row.name,
+      color_code: row.color_code,
+    }));
+  }
+
+  async assignConversationLabels(
+    user: AuthenticatedUser,
+    conversationId: number,
+    labelIds: number[],
+  ) {
+    await this.assertConversationAccess(user, conversationId);
+    const uniqueIds = [...new Set(labelIds.map((id) => Number(id)).filter((id) => id > 0))];
+    const labels = uniqueIds.length
+      ? await this.customerLabelRepository.find({
+          where: uniqueIds.map((id) => ({ id, company_id: user.company_id })),
+        })
+      : [];
+    if (uniqueIds.length && labels.length !== uniqueIds.length) {
+      throw new BadRequestException('One or more labels are invalid.');
+    }
+    await this.conversationLabelRepository.delete({ conversation_id: conversationId });
+    if (labels.length) {
+      await this.conversationLabelRepository.save(
+        labels.map((label) =>
+          this.conversationLabelRepository.create({
+            conversation_id: Number(conversationId),
+            label_id: Number(label.id),
+          }),
+        ),
+      );
+    }
+    return {
+      conversation_id: conversationId,
+      labels: labels.map((label) => ({
+        id: Number(label.id),
+        name: label.name,
+        color_code: label.color_code,
+      })),
+    };
   }
 }
