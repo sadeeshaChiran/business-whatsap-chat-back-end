@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { WhatsappChannel } from '../../../whatsapp/entities/whatsapp-channel.entity';
 import type {
   NormalizedWhatsAppInbound,
+  WhatsappOutboundMedia,
   WhatsappServiceInterface,
 } from '../interfaces/whatsapp-service.interface';
 
@@ -194,6 +195,51 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Evolution sendText failed (${res.status}): ${body}`);
+    }
+  }
+
+  async sendMedia(
+    channel: WhatsappChannel,
+    toPhone: string,
+    media: WhatsappOutboundMedia,
+  ): Promise<void> {
+    const base = this.baseUrl(channel);
+    const apiKey = channel.evaluation_whatsapp_key?.trim();
+    const instance = channel.instance_name?.trim();
+    const phone = toPhone.replace(/\D/g, '');
+    if (!base || !apiKey || !instance || !phone || !media.buffer?.length) {
+      throw new Error(
+        'Evolution sendMedia missing base, api key, instance, phone, or media buffer.',
+      );
+    }
+
+    const mimetype = media.mimetype || 'application/octet-stream';
+    const base64 = media.buffer.toString('base64');
+    const mediaPayload = `data:${mimetype};base64,${base64}`;
+    const caption = media.caption?.trim() || '';
+
+    const res = await fetch(
+      `${base}/message/sendMedia/${encodeURIComponent(instance)}`,
+      {
+        method: 'POST',
+        headers: {
+          apikey: apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          number: phone,
+          mediatype: media.mediaType,
+          mimetype,
+          caption,
+          media: mediaPayload,
+          fileName: media.fileName || 'file',
+          delay: 1200,
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Evolution sendMedia failed (${res.status}): ${body}`);
     }
   }
 
