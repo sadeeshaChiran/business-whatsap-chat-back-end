@@ -23,6 +23,15 @@ export type NormalizedWhatsAppInbound = {
   voice_url?: string;
 };
 
+export type WhatsappOutboundMedia = {
+  buffer: Buffer;
+  mimetype: string;
+  fileName: string;
+  caption?: string;
+  /** WhatsApp media kind — images are primary; documents/audio/video supported when provider allows. */
+  mediaType: 'image' | 'document' | 'audio' | 'video';
+};
+
 export interface WhatsappServiceInterface {
   readonly provider: WhatsappProviderType;
 
@@ -32,5 +41,11 @@ export interface WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
+  ): Promise<void>;
+
+  sendMedia(
+    channel: WhatsappChannel,
+    toPhone: string,
+    media: WhatsappOutboundMedia,
   ): Promise<void>;
 }

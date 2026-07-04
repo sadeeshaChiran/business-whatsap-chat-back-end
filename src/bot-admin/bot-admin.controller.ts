@@ -13,6 +13,7 @@ import {
   StreamableFile,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,6 +29,7 @@ import { SendConversationMessageDto } from './dto/send-conversation-message.dto'
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { AssignConversationLabelsDto } from './dto/assign-conversation-labels.dto';
 import { CreateBotCustomerLabelDto } from './dto/create-bot-customer-label.dto';
+import { CreateBotCustomerNoteDto } from './dto/create-bot-customer-note.dto';
 import { UpdateOrderNoteDto } from './dto/update-order-note.dto';
 import { UpdateBotOrderDto } from './dto/update-bot-order.dto';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
@@ -130,6 +132,39 @@ export class BotAdminController {
     return new StreamableFile(media.buffer, { type: media.contentType });
   }
 
+  /** Must be registered before `conversations/:id/messages` so `/messages/media` is not swallowed. */
+  @Post('conversations/:id/messages/media')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 16 * 1024 * 1024 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        caption: { type: 'string' },
+      },
+    },
+  })
+  sendConversationMedia(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: any,
+    @Body('caption') caption?: string,
+  ) {
+    return this.botAdminService.sendConversationMedia(
+      user,
+      id,
+      file,
+      typeof caption === 'string' ? caption : undefined,
+    );
+  }
+
   @Post('conversations/:id/messages')
   sendConversationMessage(
     @CurrentUser() user: AuthenticatedUser,
@@ -161,6 +196,12 @@ export class BotAdminController {
   @Get('agent/conversations')
   getAgentConversations(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getAgentConversations(user);
+  }
+
+  /** Orders for clients currently assigned to this agent only */
+  @Get('agent/orders')
+  getAgentOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.getAgentOrders(user);
   }
 
   /** Toggle logged-in agent online/offline */
@@ -312,6 +353,47 @@ export class BotAdminController {
       id,
       payload.label_ids,
     );
+  }
+
+  @Get('notes')
+  listCustomerNotes(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.listCustomerNotes(user);
+  }
+
+  @Get('notes/channel-user/:channelUserId')
+  listChannelUserNotes(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('channelUserId', ParseIntPipe) channelUserId: number,
+  ) {
+    return this.botAdminService.listChannelUserNotes(user, channelUserId);
+  }
+
+  @Post('notes')
+  createCustomerNote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() payload: CreateBotCustomerNoteDto,
+  ) {
+    return this.botAdminService.createCustomerNote(
+      user,
+      payload.bot_channel_user_id,
+      payload.content,
+    );
+  }
+
+  @Delete('notes/:id')
+  deleteCustomerNote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.deleteCustomerNote(user, id);
+  }
+
+  @Post('notes/:id/send')
+  sendCustomerNote(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.botAdminService.sendCustomerNote(user, id);
   }
 
   @Get('order-status-templates')

@@ -237,6 +237,26 @@ export class WhatsappService {
     return { provider: adapter.provider, sent: true };
   }
 
+  async sendMedia(
+    companyId: number,
+    toPhone: string,
+    media: {
+      buffer: Buffer;
+      mimetype: string;
+      fileName: string;
+      caption?: string;
+      mediaType: 'image' | 'document' | 'audio' | 'video';
+    },
+  ) {
+    const channel = await this.whatsappChannelService.getForCompany(companyId);
+    if (!channel) {
+      throw new NotFoundException('WhatsApp channel not configured for this company.');
+    }
+    const adapter = this.providerFactory.getAdapterForChannel(channel);
+    await adapter.sendMedia(channel, toPhone, media);
+    return { provider: adapter.provider, sent: true };
+  }
+
   async verifyMetaWebhookToken(verifyToken: string): Promise<boolean> {
     const token = verifyToken.trim();
     if (!token) {

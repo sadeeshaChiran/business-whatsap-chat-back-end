@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { WhatsappChannel } from '../../../whatsapp/entities/whatsapp-channel.entity';
 import type {
   NormalizedWhatsAppInbound,
+  WhatsappOutboundMedia,
   WhatsappServiceInterface,
 } from '../interfaces/whatsapp-service.interface';
 
@@ -167,5 +168,152 @@ export class MetaAdapter implements WhatsappServiceInterface {
       const body = await res.text();
       throw new Error(`Meta sendText failed (${res.status}): ${body}`);
     }
+  }
+
+  async sendMedia(
+    channel: WhatsappChannel,
+    toPhone: string,
+    media: WhatsappOutboundMedia,
+  ): Promise<void> {
+    const token = channel.meta_access_token?.trim() ?? '';
+    const phoneNumberId = channel.meta_phone_number_id?.trim() ?? '';
+    const phone = toPhone.replace(/\D/g, '');
+    if (!token || !phoneNumberId || !phone || !media.buffer?.length) {
+      throw new Error(
+        'Meta sendMedia missing token, phone number id, phone, or media buffer.',
+      );
+    }
+
+    const mediaId = await this.uploadMedia(token, phoneNumberId, media);
+    const caption = media.caption?.trim() || undefined;
+    const type = media.mediaType;
+    const payloadBody: Record<string, unknown> = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phone,
+      type,
+    };
+
+    if (type === 'image') {
+      payloadBody.image = { id: mediaId, ...(caption ? { caption } : {}) };
+    } else if (type === 'document') {
+      payloadBody.document = {
+        id: mediaId,
+        filename: media.fileName || 'file',
+        ...(caption ? { caption } : {}),
+      };
+    } else if (type === 'audio') {
+      payloadBody.audio = { id: mediaId };
+    } else if (type === 'video') {
+      payloadBody.video = { id: mediaId, ...(caption ? { caption } : {}) };
+    } else {
+      throw new Error(`Meta sendMedia unsupported media type: ${type}`);
+    }
+
+    const res = await fetch(
+      `https://graph.facebook.com/${this.graphVersion()}/${phoneNumberId}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payloadBody),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(this.formatMetaError('send', res.status, body));
+    }
+  }
+
+  private normalizeMimeType(media: WhatsappOutboundMedia): string {
+    const mime = (media.mimetype || '').trim().toLowerCase();
+    if (mime && mime !== 'application/octet-stream') {
+      return mime;
+    }
+    const name = (media.fileName || '').toLowerCase();
+    if (name.endsWith('.png')) return 'image/png';
+    if (name.endsWith('.webp')) return 'image/webp';
+    if (name.endsWith('.gif')) return 'image/gif';
+    if (name.endsWith('.pdf')) return 'application/pdf';
+    if (media.mediaType === 'image') return 'image/jpeg';
+    if (media.mediaType === 'video') return 'video/mp4';
+    if (media.mediaType === 'audio') return 'audio/mpeg';
+    return 'application/octet-stream';
+  }
+
+  private formatMetaError(kind: string, status: number, body: string): string {
+    try {
+      const json = JSON.parse(body) as {
+        error?: { message?: string; code?: number; error_data?: { details?: string } };
+      };
+      const err = json?.error;
+      if (err?.message) {
+        const details = err.error_data?.details
+          ? ` ${err.error_data.details}`
+          : '';
+        const code = err.code != null ? ` (#${err.code})` : '';
+        return `WhatsApp ${kind} failed${code}: ${err.message}${details}`;
+      }
+    } catch {
+      // fall through
+    }
+    return `WhatsApp ${kind} failed (${status}): ${body.slice(0, 400)}`;
+  }
+
+  private async uploadMedia(
+    token: string,
+    phoneNumberId: string,
+    media: WhatsappOutboundMedia,
+  ): Promise<string> {
+    const mimetype = this.normalizeMimeType(media);
+    const fileName = (media.fileName || 'upload.bin')
+      .replace(/[^\w.\-()+ ]+/g, '_')
+      .trim() || 'upload.bin';
+    const buffer = Buffer.isBuffer(media.buffer)
+      ? media.buffer
+      : Buffer.from(media.buffer);
+
+    // Build multipart manually — Node FormData/Blob uploads are unreliable with Meta.
+    const boundary = `----BhsMediaBoundary${Date.now().toString(16)}`;
+    const parts: Buffer[] = [];
+    const pushText = (value: string) => parts.push(Buffer.from(value, 'utf8'));
+
+    pushText(
+      `--${boundary}\r\nContent-Disposition: form-data; name="messaging_product"\r\n\r\nwhatsapp\r\n`,
+    );
+    pushText(
+      `--${boundary}\r\nContent-Disposition: form-data; name="type"\r\n\r\n${mimetype}\r\n`,
+    );
+    pushText(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mimetype}\r\n\r\n`,
+    );
+    parts.push(buffer);
+    pushText(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat(parts);
+
+    const res = await fetch(
+      `https://graph.facebook.com/${this.graphVersion()}/${phoneNumberId}/media`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(body.length),
+        },
+        body,
+      },
+    );
+    if (!res.ok) {
+      const responseBody = await res.text();
+      throw new Error(this.formatMetaError('media upload', res.status, responseBody));
+    }
+    const json = (await res.json()) as { id?: string };
+    const mediaId = String(json.id ?? '').trim();
+    if (!mediaId) {
+      throw new Error('Meta media upload returned no media id.');
+    }
+    return mediaId;
   }
 }

@@ -20,6 +20,7 @@ import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotConversationLabel } from './entities/bot-conversation-label.entity';
 import { BotCustomerLabel } from './entities/bot-customer-label.entity';
+import { BotCustomerNote } from './entities/bot-customer-note.entity';
 import { BotMessage } from './entities/bot-message.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
@@ -85,6 +86,8 @@ export class BotAdminService {
     private readonly conversationLabelRepository: Repository<BotConversationLabel>,
     @InjectRepository(BotCustomerLabel)
     private readonly customerLabelRepository: Repository<BotCustomerLabel>,
+    @InjectRepository(BotCustomerNote)
+    private readonly customerNoteRepository: Repository<BotCustomerNote>,
     @InjectRepository(BotMessage)
     private readonly messageRepository: Repository<BotMessage>,
     @InjectRepository(BotTrainingData)
@@ -219,6 +222,45 @@ export class BotAdminService {
     }
   }
 
+  private async sendCompanyWhatsappMedia(
+    companyId: number,
+    phone: string,
+    media: {
+      buffer: Buffer;
+      mimetype: string;
+      fileName: string;
+      caption?: string;
+      mediaType: 'image' | 'document' | 'audio' | 'video';
+    },
+  ): Promise<void> {
+    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    await this.assertWhatsappSendReady(channel);
+    try {
+      await this.whatsappService.sendMedia(companyId, phone, media);
+    } catch (error) {
+      this.throwWhatsappSendError(error);
+    }
+  }
+
+  private resolveOutboundMediaType(
+    mimetype: string,
+  ): 'image' | 'document' | 'audio' | 'video' {
+    const mime = (mimetype || '').toLowerCase();
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime.startsWith('audio/')) return 'audio';
+    return 'document';
+  }
+
+  private resolveOutboundMessageType(
+    mediaType: 'image' | 'document' | 'audio' | 'video',
+  ): 'text' | 'image' | 'voice' | 'system' {
+    if (mediaType === 'image') return 'image';
+    if (mediaType === 'audio') return 'voice';
+    // Documents/videos are stored as image rows with media_url for thread display.
+    return 'image';
+  }
+
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
     Pending: 'Your order  is pending.',
     Confirmed: 'Your order  has been confirmed.',
@@ -264,6 +306,15 @@ export class BotAdminService {
     if (!company) {
       throw new ForbiddenException('Company not found for the current user.');
     }
+  }
+
+  /** Labels and related data are always scoped to the logged-in user's company. */
+  private requireUserCompanyId(user: AuthenticatedUser): number {
+    const companyId = Number(user.company_id);
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      throw new ForbiddenException('Company not found.');
+    }
+    return companyId;
   }
 
   private async assertAdminAccess(user: AuthenticatedUser) {
@@ -1262,7 +1313,12 @@ export class BotAdminService {
     id: number,
     payload: ToggleBotUserDto,
   ) {
-    await this.assertAdminAccess(user);
+    const company = await this.getCompanyForUser(user);
+    if (!company) {
+      throw new ForbiddenException('Company not found.');
+    }
+
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
     let channelUser: BotChannelUser | null = null;
 
     if (id > 0) {
@@ -1271,7 +1327,8 @@ export class BotAdminService {
       });
     }
 
-    if (!channelUser && payload.external_user_id?.trim()) {
+    // Only admins may create/ensure a channel user from an external id.
+    if (!channelUser && isAdmin && payload.external_user_id?.trim()) {
       channelUser = await this.ensureChannelUserForContact(
         user.company_id,
         payload.external_user_id,
@@ -1280,6 +1337,34 @@ export class BotAdminService {
 
     if (!channelUser) {
       throw new NotFoundException('Bot user not found.');
+    }
+
+    // Agents may only toggle bot for clients already assigned to them.
+    if (!isAdmin) {
+      const assigned = await this.conversationRepository
+        .createQueryBuilder('c')
+        .innerJoin('c.channelUser', 'channelUser')
+        .where('c.bot_channel_user_id = :channelUserId', {
+          channelUserId: channelUser.id,
+        })
+        .andWhere(
+          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
+          { agentId: Number(user.id) },
+        )
+        .andWhere(
+          'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+          { companyId: Number(user.company_id) },
+        )
+        .andWhere('LOWER(c.status) IN (:...statuses)', {
+          statuses: ['pending', 'active'],
+        })
+        .getOne();
+
+      if (!assigned) {
+        throw new ForbiddenException(
+          'You can only turn the client bot on/off for conversations assigned to you.',
+        );
+      }
     }
 
     channelUser.bot_enabled = !channelUser.bot_enabled;
@@ -1376,6 +1461,8 @@ export class BotAdminService {
                 display_name: conv.channelUser.display_name,
                 external_user_id: conv.channelUser.external_user_id,
                 platform: conv.channelUser.platform,
+                bot_enabled: conv.channelUser.bot_enabled,
+                manual_mode: conv.channelUser.manual_mode,
               }
             : null,
           conversation: {
@@ -1866,13 +1953,18 @@ export class BotAdminService {
       mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
     }
 
+    const channelUserId = Number(conversation.bot_channel_user_id || 0);
     return {
       conversation,
       messages: mergedMessages,
       labels: await this.listConversationLabels(id, user.company_id),
       customer_orders: await this.getOrdersForChannelUser(
         user.company_id,
-        Number(conversation.bot_channel_user_id || 0),
+        channelUserId,
+      ),
+      customer_notes: await this.listNotesForChannelUser(
+        user.company_id,
+        channelUserId,
       ),
     };
   }
@@ -2037,7 +2129,136 @@ export class BotAdminService {
       message_type: 'text',
       platform: channelUser.platform || 'whatsapp',
       content: trimmed,
-      source: 'admin',
+      source: isAdmin ? 'admin' : 'agent',
+    });
+    const saved = await this.messageRepository.save(message);
+
+    conversation.last_message_at = new Date();
+    await this.conversationRepository.save(conversation);
+
+    return { message: saved };
+  }
+
+  private normalizeUploadedMediaFile(file: {
+    buffer?: Buffer | Uint8Array;
+    mimetype?: string;
+    originalname?: string;
+    size?: number;
+    path?: string;
+  } | null | undefined): {
+    buffer: Buffer;
+    mimetype: string;
+    originalname: string;
+    size: number;
+  } {
+    if (!file) {
+      throw new BadRequestException(
+        'Media file is required. Attach an image or file and try again.',
+      );
+    }
+
+    let buffer: Buffer | null = null;
+    if (Buffer.isBuffer(file.buffer)) {
+      buffer = file.buffer;
+    } else if (file.buffer instanceof Uint8Array) {
+      buffer = Buffer.from(file.buffer);
+    } else if (file.path && existsSync(file.path)) {
+      buffer = readFileSync(file.path);
+    }
+
+    if (!buffer?.length) {
+      throw new BadRequestException(
+        'Media file is required. Attach an image or file and try again.',
+      );
+    }
+
+    const maxBytes = 16 * 1024 * 1024;
+    const size = file.size ?? buffer.length;
+    if (size > maxBytes || buffer.length > maxBytes) {
+      throw new BadRequestException('Media file is too large (max 16MB).');
+    }
+
+    return {
+      buffer,
+      mimetype: (file.mimetype || 'application/octet-stream').trim(),
+      originalname: (file.originalname || 'file').trim() || 'file',
+      size,
+    };
+  }
+
+  async sendConversationMedia(
+    user: AuthenticatedUser,
+    conversationId: number,
+    file: {
+      buffer?: Buffer | Uint8Array;
+      mimetype?: string;
+      originalname?: string;
+      size?: number;
+      path?: string;
+    } | null | undefined,
+    caption?: string,
+  ) {
+    await this.assertConversationAccess(user, conversationId);
+    const uploaded = this.normalizeUploadedMediaFile(file);
+
+    const conversation = await this.findConversationForCompany(
+      conversationId,
+      user.company_id,
+    );
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found.');
+    }
+
+    const company = await this.getCompanyForUser(user);
+    const isAdmin =
+      company != null && Number(company.admin_user_id) === Number(user.id);
+    if (
+      !isAdmin &&
+      Number(conversation.assigned_agent_id) !== Number(user.id)
+    ) {
+      throw new ForbiddenException('You do not have access to this conversation.');
+    }
+
+    const channelUser = conversation.channelUser;
+    if (!channelUser) {
+      throw new BadRequestException('Conversation has no linked channel user.');
+    }
+
+    const phone = this.normalizePhoneKey(channelUser.external_user_id);
+    if (!phone) {
+      throw new BadRequestException('Invalid customer phone on this conversation.');
+    }
+
+    const mimetype = uploaded.mimetype;
+    const fileName = uploaded.originalname;
+    const mediaType = this.resolveOutboundMediaType(mimetype);
+    const trimmedCaption = caption?.trim() || '';
+
+    await this.sendCompanyWhatsappMedia(user.company_id, phone, {
+      buffer: uploaded.buffer,
+      mimetype,
+      fileName,
+      caption: trimmedCaption || undefined,
+      mediaType,
+    });
+
+    // Keep a displayable preview for images; avoid huge base64 for other files.
+    const mediaUrl =
+      mediaType === 'image' && uploaded.buffer.length <= 2 * 1024 * 1024
+        ? `data:${mimetype};base64,${uploaded.buffer.toString('base64')}`
+        : null;
+    const content =
+      trimmedCaption ||
+      (mediaType === 'image' ? '[image]' : `[file: ${fileName}]`);
+
+    const message = this.messageRepository.create({
+      conversation_id: conversationId,
+      direction: 'outbound',
+      message_type: this.resolveOutboundMessageType(mediaType),
+      platform: channelUser.platform || 'whatsapp',
+      content,
+      media_url: mediaUrl,
+      source: isAdmin ? 'admin' : 'agent',
     });
     const saved = await this.messageRepository.save(message);
 
@@ -2192,21 +2413,118 @@ export class BotAdminService {
     });
   }
 
+  /**
+   * Orders for clients currently assigned to this agent (pending/active chats only).
+   * Does not change admin order listing or mutations.
+   */
+  async getAgentOrders(user: AuthenticatedUser) {
+    const agentId = Number(user.id);
+    const companyId = Number(user.company_id);
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      throw new ForbiddenException('Company not found.');
+    }
+
+    const dbUser = await this.userRepository.findOne({ where: { id: agentId } });
+    if (!dbUser || Number(dbUser.company_id) !== companyId) {
+      throw new ForbiddenException('Agent company mismatch.');
+    }
+
+    const assignedConversations = await this.conversationRepository
+      .createQueryBuilder('c')
+      .innerJoin('c.channelUser', 'channelUser')
+      .where('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', {
+        agentId,
+      })
+      .andWhere(
+        'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+        { companyId },
+      )
+      .andWhere('LOWER(c.status) IN (:...statuses)', {
+        statuses: ['pending', 'active'],
+      })
+      .getMany();
+
+    const channelUserIds = [
+      ...new Set(
+        assignedConversations
+          .map((row) => Number(row.bot_channel_user_id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      ),
+    ];
+
+    if (channelUserIds.length === 0) {
+      return [];
+    }
+
+    return this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.channelUser', 'channelUser')
+      .leftJoinAndSelect('o.items', 'items')
+      .leftJoinAndSelect('o.statusHistory', 'statusHistory')
+      .where('CAST(o.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .andWhere('o.bot_channel_user_id IN (:...channelUserIds)', {
+        channelUserIds,
+      })
+      .orderBy('o.id', 'DESC')
+      .take(100)
+      .getMany();
+  }
+
   async createOrder(user: AuthenticatedUser, payload: CreateBotOrderDto) {
-    await this.assertAdminAccess(user);
+    const companyId = this.requireUserCompanyId(user);
+    const company = await this.getCompanyForUser(user);
+    if (!company || Number(company.id) !== companyId) {
+      throw new ForbiddenException('Company not found.');
+    }
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
 
     // Verify channel user exists and belongs to this company
-    const channelUser = await this.channelUserRepository.findOne({
-      where: { id: payload.bot_channel_user_id, company_id: user.company_id },
-    });
+    const channelUser = await this.channelUserRepository
+      .createQueryBuilder('channelUser')
+      .where('channelUser.id = :channelUserId', {
+        channelUserId: payload.bot_channel_user_id,
+      })
+      .andWhere(
+        'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+        { companyId },
+      )
+      .getOne();
 
     if (!channelUser) {
       throw new NotFoundException('Channel user not found.');
     }
 
+    // Agents may only create orders for clients currently assigned to them.
+    if (!isAdmin) {
+      const assigned = await this.conversationRepository
+        .createQueryBuilder('c')
+        .where('c.bot_channel_user_id = :channelUserId', {
+          channelUserId: channelUser.id,
+        })
+        .andWhere(
+          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
+          { agentId: Number(user.id) },
+        )
+        .andWhere('LOWER(c.status) IN (:...statuses)', {
+          statuses: ['pending', 'active'],
+        })
+        .getOne();
+      if (!assigned) {
+        throw new ForbiddenException(
+          'You can only create orders for clients currently assigned to you.',
+        );
+      }
+    }
+
+    if (!payload.items?.length) {
+      throw new BadRequestException('Add at least one order item.');
+    }
+
     // Create order
     const order = this.orderRepository.create({
-      company_id: user.company_id,
+      company_id: companyId,
       bot_channel_user_id: payload.bot_channel_user_id,
       customer_name: payload.customer_name,
       customer_phone: payload.customer_phone,
@@ -2753,10 +3071,14 @@ export class BotAdminService {
   }
 
   async listCustomerLabels(user: AuthenticatedUser) {
-    const rows = await this.customerLabelRepository.find({
-      where: { company_id: user.company_id },
-      order: { name: 'ASC' },
-    });
+    const companyId = this.requireUserCompanyId(user);
+    const rows = await this.customerLabelRepository
+      .createQueryBuilder('label')
+      .where('CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .orderBy('label.name', 'ASC')
+      .getMany();
     return rows.map((label) => ({
       id: Number(label.id),
       name: label.name,
@@ -2765,22 +3087,43 @@ export class BotAdminService {
   }
 
   async listLabelAssignments(user: AuthenticatedUser) {
-    const companyId = Number(user.company_id);
-    if (!Number.isFinite(companyId) || companyId <= 0) {
+    const companyId = this.requireUserCompanyId(user);
+
+    const company = await this.getCompanyForUser(user);
+    if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
 
     const labels = await this.listCustomerLabels(user);
     const conversationsByLabel = new Map<number, Set<number>>(
       labels.map((label) => [label.id, new Set<number>()]),
     );
 
-    const rows = await this.conversationLabelRepository
+    const qb = this.conversationLabelRepository
       .createQueryBuilder('cl')
       .innerJoinAndSelect('cl.label', 'label')
       .innerJoinAndSelect('cl.conversation', 'conversation')
-      .leftJoinAndSelect('conversation.channelUser', 'channelUser')
-      .where('label.company_id = :companyId', { companyId })
+      .innerJoinAndSelect('conversation.channelUser', 'channelUser')
+      .where('CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .andWhere(
+        'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+        { companyId },
+      );
+
+    // Agents only see labels on conversations currently assigned to them.
+    if (!isAdmin) {
+      qb.andWhere(
+        'CAST(conversation.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
+        { agentId: Number(user.id) },
+      ).andWhere('LOWER(conversation.status) IN (:...statuses)', {
+        statuses: ['pending', 'active'],
+      });
+    }
+
+    const rows = await qb
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('conversation.id', 'DESC')
       .addOrderBy('label.name', 'ASC')
@@ -2862,19 +3205,24 @@ export class BotAdminService {
     colorCode?: string,
   ) {
     await this.assertAdminAccess(user);
+    const companyId = this.requireUserCompanyId(user);
     const trimmedName = name.trim();
     if (!trimmedName) {
       throw new BadRequestException('Label name is required.');
     }
-    const existing = await this.customerLabelRepository.findOne({
-      where: { company_id: user.company_id, name: trimmedName },
-    });
+    const existing = await this.customerLabelRepository
+      .createQueryBuilder('label')
+      .where('CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .andWhere('label.name = :name', { name: trimmedName })
+      .getOne();
     if (existing) {
       throw new BadRequestException('A label with this name already exists.');
     }
     const label = await this.customerLabelRepository.save(
       this.customerLabelRepository.create({
-        company_id: user.company_id,
+        company_id: companyId,
         name: trimmedName,
         color_code: colorCode?.trim() || '#64748b',
       }),
@@ -2888,9 +3236,14 @@ export class BotAdminService {
 
   async deleteCustomerLabel(user: AuthenticatedUser, labelId: number) {
     await this.assertAdminAccess(user);
-    const label = await this.customerLabelRepository.findOne({
-      where: { id: labelId, company_id: user.company_id },
-    });
+    const companyId = this.requireUserCompanyId(user);
+    const label = await this.customerLabelRepository
+      .createQueryBuilder('label')
+      .where('label.id = :labelId', { labelId })
+      .andWhere('CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .getOne();
     if (!label) {
       throw new NotFoundException('Label not found.');
     }
@@ -2900,11 +3253,22 @@ export class BotAdminService {
   }
 
   async listConversationLabels(conversationId: number, companyId: number) {
+    const scopedCompanyId = Number(companyId);
+    if (!Number.isFinite(scopedCompanyId) || scopedCompanyId <= 0) {
+      return [];
+    }
     const rows = await this.conversationLabelRepository
       .createQueryBuilder('cl')
       .innerJoin(BotCustomerLabel, 'l', 'l.id = cl.label_id')
+      .innerJoin(BotConversation, 'c', 'c.id = cl.conversation_id')
+      .innerJoin(BotChannelUser, 'cu', 'cu.id = c.bot_channel_user_id')
       .where('cl.conversation_id = :conversationId', { conversationId })
-      .andWhere('l.company_id = :companyId', { companyId })
+      .andWhere('CAST(l.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: scopedCompanyId,
+      })
+      .andWhere('CAST(cu.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId: scopedCompanyId,
+      })
       .select([
         'l.id AS id',
         'l.name AS name',
@@ -2923,17 +3287,58 @@ export class BotAdminService {
     conversationId: number,
     labelIds: number[],
   ) {
+    const companyId = this.requireUserCompanyId(user);
     await this.assertConversationAccess(user, conversationId);
-    const uniqueIds = [...new Set(labelIds.map((id) => Number(id)).filter((id) => id > 0))];
+
+    // Conversation must belong to this company (defense in depth).
+    const conversation = await this.findConversationForCompany(
+      conversationId,
+      companyId,
+    );
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found.');
+    }
+
+    const uniqueIds = [
+      ...new Set(labelIds.map((id) => Number(id)).filter((id) => id > 0)),
+    ];
     const labels = uniqueIds.length
-      ? await this.customerLabelRepository.find({
-          where: uniqueIds.map((id) => ({ id, company_id: user.company_id })),
-        })
+      ? await this.customerLabelRepository
+          .createQueryBuilder('label')
+          .where('label.id IN (:...uniqueIds)', { uniqueIds })
+          .andWhere(
+            'CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+            { companyId },
+          )
+          .getMany()
       : [];
     if (uniqueIds.length && labels.length !== uniqueIds.length) {
-      throw new BadRequestException('One or more labels are invalid.');
+      throw new BadRequestException(
+        'One or more labels are invalid for this company.',
+      );
     }
-    await this.conversationLabelRepository.delete({ conversation_id: conversationId });
+
+    // Only clear this company's label assignments on the conversation.
+    const companyLabelIds = await this.customerLabelRepository
+      .createQueryBuilder('label')
+      .select('label.id', 'id')
+      .where('CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .getRawMany<{ id: string | number }>();
+    const scopedLabelIds = companyLabelIds
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (scopedLabelIds.length > 0) {
+      await this.conversationLabelRepository
+        .createQueryBuilder()
+        .delete()
+        .from(BotConversationLabel)
+        .where('conversation_id = :conversationId', { conversationId })
+        .andWhere('label_id IN (:...scopedLabelIds)', { scopedLabelIds })
+        .execute();
+    }
+
     if (labels.length) {
       await this.conversationLabelRepository.save(
         labels.map((label) =>
@@ -2951,6 +3356,272 @@ export class BotAdminService {
         name: label.name,
         color_code: label.color_code,
       })),
+    };
+  }
+
+  private mapCustomerNote(note: BotCustomerNote) {
+    const channelUser = note.channelUser;
+    return {
+      id: Number(note.id),
+      company_id: Number(note.company_id),
+      bot_channel_user_id: Number(note.bot_channel_user_id),
+      content: note.content,
+      created_by_user_id:
+        note.created_by_user_id == null ? null : Number(note.created_by_user_id),
+      created_by_name: note.created_by_name,
+      sent_at: note.sent_at ? new Date(note.sent_at).toISOString() : null,
+      created_at: note.created_at
+        ? new Date(note.created_at).toISOString()
+        : null,
+      channelUser: channelUser
+        ? {
+            id: Number(channelUser.id),
+            display_name: channelUser.display_name,
+            external_user_id: channelUser.external_user_id,
+            platform: channelUser.platform,
+          }
+        : null,
+    };
+  }
+
+  /** Admin: any company client. Agent: only currently assigned clients. */
+  private async assertChannelUserNoteAccess(
+    user: AuthenticatedUser,
+    channelUserId: number,
+  ) {
+    const companyId = this.requireUserCompanyId(user);
+    const company = await this.getCompanyForUser(user);
+    if (!company || Number(company.id) !== companyId) {
+      throw new ForbiddenException('Company not found.');
+    }
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+
+    const channelUser = await this.channelUserRepository
+      .createQueryBuilder('channelUser')
+      .where('channelUser.id = :channelUserId', { channelUserId })
+      .andWhere(
+        'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+        { companyId },
+      )
+      .getOne();
+
+    if (!channelUser) {
+      throw new NotFoundException('Client not found.');
+    }
+
+    if (!isAdmin) {
+      const assigned = await this.conversationRepository
+        .createQueryBuilder('c')
+        .where('c.bot_channel_user_id = :channelUserId', { channelUserId })
+        .andWhere(
+          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
+          { agentId: Number(user.id) },
+        )
+        .andWhere('LOWER(c.status) IN (:...statuses)', {
+          statuses: ['pending', 'active'],
+        })
+        .getOne();
+      if (!assigned) {
+        throw new ForbiddenException(
+          'You can only manage notes for clients currently assigned to you.',
+        );
+      }
+    }
+
+    return { companyId, isAdmin, channelUser };
+  }
+
+  private async listNotesForChannelUser(
+    companyId: number,
+    channelUserId: number,
+  ) {
+    if (!channelUserId) return [];
+    const rows = await this.customerNoteRepository
+      .createQueryBuilder('note')
+      .leftJoinAndSelect('note.channelUser', 'channelUser')
+      .where('CAST(note.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .andWhere('note.bot_channel_user_id = :channelUserId', { channelUserId })
+      .orderBy('note.created_at', 'DESC')
+      .addOrderBy('note.id', 'DESC')
+      .getMany();
+    return rows.map((row) => this.mapCustomerNote(row));
+  }
+
+  async listCustomerNotes(user: AuthenticatedUser) {
+    const companyId = this.requireUserCompanyId(user);
+    const company = await this.getCompanyForUser(user);
+    if (!company || Number(company.id) !== companyId) {
+      throw new ForbiddenException('Company not found.');
+    }
+    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+
+    const qb = this.customerNoteRepository
+      .createQueryBuilder('note')
+      .leftJoinAndSelect('note.channelUser', 'channelUser')
+      .where('CAST(note.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      });
+
+    if (!isAdmin) {
+      const assignedConversations = await this.conversationRepository
+        .createQueryBuilder('c')
+        .innerJoin('c.channelUser', 'channelUser')
+        .where(
+          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
+          { agentId: Number(user.id) },
+        )
+        .andWhere(
+          'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+          { companyId },
+        )
+        .andWhere('LOWER(c.status) IN (:...statuses)', {
+          statuses: ['pending', 'active'],
+        })
+        .getMany();
+
+      const channelUserIds = [
+        ...new Set(
+          assignedConversations
+            .map((row) => Number(row.bot_channel_user_id))
+            .filter((id) => Number.isFinite(id) && id > 0),
+        ),
+      ];
+      if (channelUserIds.length === 0) {
+        return [];
+      }
+      qb.andWhere('note.bot_channel_user_id IN (:...channelUserIds)', {
+        channelUserIds,
+      });
+    }
+
+    const rows = await qb
+      .orderBy('note.created_at', 'DESC')
+      .addOrderBy('note.id', 'DESC')
+      .take(200)
+      .getMany();
+
+    return rows.map((row) => this.mapCustomerNote(row));
+  }
+
+  async listChannelUserNotes(user: AuthenticatedUser, channelUserId: number) {
+    await this.assertChannelUserNoteAccess(user, channelUserId);
+    return this.listNotesForChannelUser(
+      this.requireUserCompanyId(user),
+      channelUserId,
+    );
+  }
+
+  async createCustomerNote(
+    user: AuthenticatedUser,
+    channelUserId: number,
+    content: string,
+  ) {
+    const { companyId, channelUser } = await this.assertChannelUserNoteAccess(
+      user,
+      channelUserId,
+    );
+    const trimmed = content.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Note content is required.');
+    }
+
+    const author = await this.userRepository.findOne({ where: { id: user.id } });
+    const note = await this.customerNoteRepository.save(
+      this.customerNoteRepository.create({
+        company_id: companyId,
+        bot_channel_user_id: channelUser.id,
+        content: trimmed,
+        created_by_user_id: Number(user.id),
+        created_by_name: author?.name?.trim() || author?.email || 'User',
+        sent_at: null,
+      }),
+    );
+    note.channelUser = channelUser;
+    return this.mapCustomerNote(note);
+  }
+
+  async deleteCustomerNote(user: AuthenticatedUser, noteId: number) {
+    const companyId = this.requireUserCompanyId(user);
+    const note = await this.customerNoteRepository
+      .createQueryBuilder('note')
+      .leftJoinAndSelect('note.channelUser', 'channelUser')
+      .where('note.id = :noteId', { noteId })
+      .andWhere('CAST(note.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .getOne();
+    if (!note) {
+      throw new NotFoundException('Note not found.');
+    }
+    await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
+    await this.customerNoteRepository.remove(note);
+    return { id: noteId, removed: true };
+  }
+
+  async sendCustomerNote(user: AuthenticatedUser, noteId: number) {
+    const companyId = this.requireUserCompanyId(user);
+    const note = await this.customerNoteRepository
+      .createQueryBuilder('note')
+      .leftJoinAndSelect('note.channelUser', 'channelUser')
+      .where('note.id = :noteId', { noteId })
+      .andWhere('CAST(note.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
+        companyId,
+      })
+      .getOne();
+    if (!note) {
+      throw new NotFoundException('Note not found.');
+    }
+
+    const { channelUser, isAdmin } = await this.assertChannelUserNoteAccess(
+      user,
+      Number(note.bot_channel_user_id),
+    );
+
+    const phone = this.normalizePhoneKey(channelUser.external_user_id);
+    if (!phone) {
+      throw new BadRequestException('Invalid customer phone for this client.');
+    }
+
+    const text = note.content.trim();
+    if (!text) {
+      throw new BadRequestException('Note content is empty.');
+    }
+
+    await this.sendCompanyWhatsappText(companyId, phone, text);
+
+    note.sent_at = new Date();
+    const saved = await this.customerNoteRepository.save(note);
+    saved.channelUser = channelUser;
+
+    // Also store as outbound chat message when a conversation exists.
+    const conversation = await this.conversationRepository
+      .createQueryBuilder('c')
+      .where('c.bot_channel_user_id = :channelUserId', {
+        channelUserId: channelUser.id,
+      })
+      .orderBy('c.id', 'DESC')
+      .getOne();
+
+    if (conversation) {
+      await this.messageRepository.save(
+        this.messageRepository.create({
+          conversation_id: conversation.id,
+          direction: 'outbound',
+          message_type: 'text',
+          platform: channelUser.platform || 'whatsapp',
+          content: text,
+          source: isAdmin ? 'admin' : 'agent',
+        }),
+      );
+      conversation.last_message_at = new Date();
+      await this.conversationRepository.save(conversation);
+    }
+
+    return {
+      note: this.mapCustomerNote(saved),
+      message: 'Note sent to client on WhatsApp.',
     };
   }
 }

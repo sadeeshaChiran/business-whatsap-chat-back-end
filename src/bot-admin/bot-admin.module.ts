@@ -15,6 +15,7 @@ import { BotOrderStatusHistory } from './entities/bot-order-status-history.entit
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
 import { BotConversationLabel } from './entities/bot-conversation-label.entity';
 import { BotCustomerLabel } from './entities/bot-customer-label.entity';
+import { BotCustomerNote } from './entities/bot-customer-note.entity';
 import { BotOrder } from './entities/bot-order.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
@@ -35,6 +36,7 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
       BotConversation,
       BotConversationLabel,
       BotCustomerLabel,
+      BotCustomerNote,
       BotMessage,
       BotTrainingData,
       BotFlag,
