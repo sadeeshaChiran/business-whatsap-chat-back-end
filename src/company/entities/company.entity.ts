@@ -49,6 +49,18 @@ export class Company {
   @Column({ type: 'boolean', default: true })
   is_monthly_report: boolean;
 
+  @Column({ type: 'text', default: 'product' })
+  business_category: string;
+
+  @Column({ type: 'boolean', default: true })
+  order_collect_customer_info: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  order_collect_products: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  order_allow_note: boolean;
+
   @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
   incomeCategories: IncomeCatergory[];
 

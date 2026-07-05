@@ -215,8 +215,23 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
 
     const mimetype = media.mimetype || 'application/octet-stream';
     const base64 = media.buffer.toString('base64');
-    const mediaPayload = `data:${mimetype};base64,${base64}`;
+    const mediaPayload = base64; // Strip 'data:...;base64,' prefix as Evolution API expects pure base64
     const caption = media.caption?.trim() || '';
+
+    const payload = {
+      number: phone,
+      mediatype: media.mediaType,
+      mimetype,
+      caption,
+      media: mediaPayload.slice(0, 100) + '... (truncated)', // Truncate base64 for logs
+      fileName: media.fileName || 'file',
+      delay: 1200,
+      options: {
+        delay: 1200,
+        presence: 'composing',
+      },
+    };
+    console.log('Sending media to Evolution API payload:', payload);
 
     const res = await fetch(
       `${base}/message/sendMedia/${encodeURIComponent(instance)}`,
@@ -234,11 +249,22 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
           media: mediaPayload,
           fileName: media.fileName || 'file',
           delay: 1200,
+          options: {
+            delay: 1200,
+            presence: 'composing',
+          },
+          mediaMessage: {
+            mediatype: media.mediaType,
+            caption: caption,
+            media: mediaPayload,
+            fileName: media.fileName || 'file',
+          },
         }),
       },
     );
     if (!res.ok) {
       const body = await res.text();
+      console.error(`Evolution sendMedia failed response:`, { status: res.status, body });
       throw new Error(`Evolution sendMedia failed (${res.status}): ${body}`);
     }
   }

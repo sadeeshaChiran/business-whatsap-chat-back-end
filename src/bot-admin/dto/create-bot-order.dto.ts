@@ -13,20 +13,23 @@ export class CreateBotOrderItemDto {
   @Min(1)
   quantity: number;
 
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  unit_price: number;
+  unit_price?: number;
 }
 
 export class CreateBotOrderDto {
   @IsNumber()
   bot_channel_user_id: number;
 
+  @IsOptional()
   @IsString()
-  customer_name: string;
+  customer_name?: string | null;
 
+  @IsOptional()
   @IsString()
-  customer_phone: string;
+  customer_phone?: string | null;
 
   @IsOptional()
   @IsString()

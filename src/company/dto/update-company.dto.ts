@@ -124,4 +124,25 @@ export class UpdateCompanyDto extends PartialType(
   @IsString()
   @MaxLength(2048)
   meta_webhook_base_url?: string;
+
+  @ApiPropertyOptional({ enum: ['product', 'service'] })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  business_category?: 'product' | 'service';
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  order_collect_customer_info?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  order_collect_products?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  order_allow_note?: boolean;
 }

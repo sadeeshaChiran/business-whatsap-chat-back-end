@@ -1,7 +1,9 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsEmail,
+  IsIn,
+  IsOptional,
   IsString,
   MaxLength,
   MinLength,
@@ -13,6 +15,12 @@ class RegisterCompanyDto {
   @IsString()
   @MaxLength(255)
   name: string;
+
+  @ApiPropertyOptional({ enum: ['product', 'service'], default: 'product' })
+  @IsOptional()
+  @IsString()
+  @IsIn(['product', 'service'])
+  category?: 'product' | 'service';
 }
 
 export class RegisterDto {
