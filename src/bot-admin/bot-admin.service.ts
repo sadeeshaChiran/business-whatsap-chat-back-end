@@ -168,6 +168,7 @@ export class BotAdminService {
   }
 
   private throwWhatsappSendError(error: unknown): never {
+    console.error('WhatsApp service error details:', error);
     if (error instanceof BadRequestException) {
       throw error;
     }
@@ -2526,8 +2527,8 @@ export class BotAdminService {
     const order = this.orderRepository.create({
       company_id: companyId,
       bot_channel_user_id: payload.bot_channel_user_id,
-      customer_name: payload.customer_name,
-      customer_phone: payload.customer_phone,
+      customer_name: payload.customer_name ?? '',
+      customer_phone: payload.customer_phone ?? '',
       address: payload.address || null,
       status: 'Pending',
       total_amount: 0,
@@ -2540,7 +2541,8 @@ export class BotAdminService {
     const items: BotOrderItem[] = [];
 
     for (const itemPayload of payload.items) {
-      const totalPrice = itemPayload.quantity * itemPayload.unit_price;
+      const unitPrice = itemPayload.unit_price ?? 0;
+      const totalPrice = itemPayload.quantity * unitPrice;
       totalAmount += totalPrice;
 
       const item = this.orderItemRepository.create({
@@ -2548,7 +2550,7 @@ export class BotAdminService {
         product_name: itemPayload.product_name,
         variant_text: itemPayload.variant_text || null,
         quantity: itemPayload.quantity,
-        unit_price: itemPayload.unit_price,
+        unit_price: unitPrice,
         total_price: totalPrice,
       });
 

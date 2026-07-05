@@ -82,6 +82,10 @@ export class AuthService {
         is_email_nofications: true,
         is_weekly_report: true,
         is_monthly_report: true,
+        business_category: registerDto.company.category ?? 'product',
+        order_collect_customer_info: true,
+        order_collect_products: true,
+        order_allow_note: true,
       }),
     );
 

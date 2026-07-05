@@ -137,6 +137,10 @@ export class CompanyService {
       facebook_connection_status: metaConnection?.status ?? null,
       instagram_business_account_id:
         metaConnection?.instagram_business_account_id ?? null,
+      business_category: company.business_category ?? 'product',
+      order_collect_customer_info: company.order_collect_customer_info ?? true,
+      order_collect_products: company.order_collect_products ?? true,
+      order_allow_note: company.order_allow_note ?? true,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };
@@ -240,6 +244,18 @@ export class CompanyService {
     }
     if (updateCompanyDto.is_monthly_report !== undefined) {
       company.is_monthly_report = updateCompanyDto.is_monthly_report;
+    }
+    if (updateCompanyDto.business_category !== undefined) {
+      company.business_category = updateCompanyDto.business_category;
+    }
+    if (updateCompanyDto.order_collect_customer_info !== undefined) {
+      company.order_collect_customer_info = updateCompanyDto.order_collect_customer_info;
+    }
+    if (updateCompanyDto.order_collect_products !== undefined) {
+      company.order_collect_products = updateCompanyDto.order_collect_products;
+    }
+    if (updateCompanyDto.order_allow_note !== undefined) {
+      company.order_allow_note = updateCompanyDto.order_allow_note;
     }
 
     const nextCompanyName = company.name;
