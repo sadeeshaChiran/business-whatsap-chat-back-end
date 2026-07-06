@@ -102,7 +102,11 @@ export class AuthService {
     savedCompany.admin_user_id = user.id;
     await this.companyRepository.save(savedCompany);
 
-    return this.buildAuthResponse(user, savedCompany.name);
+    return this.buildAuthResponse(
+      user,
+      savedCompany.name,
+      savedCompany.business_category,
+    );
   }
 
   async login(loginDto: LoginDto) {
@@ -118,8 +122,8 @@ export class AuthService {
       user.is_active = true;
       await this.userRepository.save(user);
     }
-    const companyName = await this.resolveCompanyName(user);
-    return this.buildAuthResponse(user, companyName);
+    const company = await this.resolveCompanyProfile(user);
+    return this.buildAuthResponse(user, company?.name, company?.business_category);
   }
 
   async getProfile(userId: number) {
@@ -127,18 +131,17 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
-    const companyName = await this.resolveCompanyName(user);
-    return this.serializeUser(user, companyName);
+    const company = await this.resolveCompanyProfile(user);
+    return this.serializeUser(user, company?.name, company?.business_category);
   }
 
-  private async resolveCompanyName(user: User): Promise<string | undefined> {
+  private async resolveCompanyProfile(user: User): Promise<Company | null> {
     if (!user.company_id) {
-      return undefined;
+      return null;
     }
-    const company = await this.companyRepository.findOne({
+    return this.companyRepository.findOne({
       where: { id: user.company_id },
     });
-    return company?.name;
   }
 
   verifyToken(token: string): AuthenticatedUser {
@@ -171,22 +174,31 @@ export class AuthService {
     };
   }
 
-  private buildAuthResponse(user: User, companyName?: string) {
+  private buildAuthResponse(
+    user: User,
+    companyName?: string,
+    businessCategory?: string | null,
+  ) {
     return {
       access_token: this.generateToken(user),
       token_type: 'Bearer',
       expires_in: this.jwtTtlSeconds,
-      user: this.serializeUser(user, companyName),
+      user: this.serializeUser(user, companyName, businessCategory),
     };
   }
 
-  private serializeUser(user: User, companyName?: string) {
+  private serializeUser(
+    user: User,
+    companyName?: string,
+    businessCategory?: string | null,
+  ) {
     return {
       id: Number(user.id),
       name: user.name,
       email: user.email,
       company_id: user.company_id != null ? Number(user.company_id) : 0,
       company_name: companyName,
+      business_category: businessCategory ?? 'product',
       is_active: user.is_active,
       is_agent_active: Boolean(user.is_agent_active),
       created_at: user.created_at,

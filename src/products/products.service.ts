@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as XLSX from 'xlsx';
 import { Brackets, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { Company } from '../company/entities/company.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductVariant } from './entities/product-variant.entity';
@@ -64,7 +66,19 @@ export class ProductsService {
     private readonly productVariantRepository: Repository<ProductVariant>,
     @InjectRepository(ProductCatergory)
     private readonly productCategoryRepository: Repository<ProductCatergory>,
+    @InjectRepository(Company)
+    private readonly companyRepository: Repository<Company>,
   ) {}
+
+  private async assertProductBusiness(companyId: number) {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    if (company.business_category === 'service') {
+      throw new ForbiddenException('Products are not available for service-based businesses');
+    }
+  }
 
   private normalizeGallery(gallery?: string[] | null): string[] {
     return (gallery ?? [])
@@ -341,6 +355,8 @@ export class ProductsService {
   }
 
   async create(createProductDto: CreateProductDto, user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     const category = await this.findCategoryForCompany(
       createProductDto.category_id,
       user.company_id,
@@ -408,6 +424,8 @@ export class ProductsService {
   }
 
   async findAll(user: AuthenticatedUser, categoryId?: number) {
+    await this.assertProductBusiness(user.company_id);
+
     const where = {
       company_id: user.company_id,
       is_deleted: false,
@@ -424,6 +442,8 @@ export class ProductsService {
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     return this.findOwnedProduct(id, user.company_id);
   }
 
@@ -432,6 +452,8 @@ export class ProductsService {
     updateProductDto: UpdateProductDto,
     user: AuthenticatedUser,
   ) {
+    await this.assertProductBusiness(user.company_id);
+
     const product = await this.findProductEntity(id, user.company_id);
 
     if (updateProductDto.category_id !== undefined) {
@@ -532,6 +554,8 @@ export class ProductsService {
   }
 
   async remove(id: number, user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     const product = await this.findProductEntity(id, user.company_id);
     product.is_deleted = true;
     await this.productRepository.save(product);
@@ -1012,6 +1036,8 @@ export class ProductsService {
   }
 
   async import(file: { buffer: Buffer } | undefined, user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     if (!file) {
       throw new BadRequestException('A CSV or Excel file is required');
     }
