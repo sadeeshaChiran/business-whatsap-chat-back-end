@@ -145,4 +145,9 @@ export class UpdateCompanyDto extends PartialType(
   @IsOptional()
   @IsBoolean()
   order_allow_note?: boolean;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  bot_enabled?: boolean;
 }

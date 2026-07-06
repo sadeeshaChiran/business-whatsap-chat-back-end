@@ -2124,6 +2124,10 @@ export class BotAdminService {
 
     await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
 
+    channelUser.manual_mode = true;
+    channelUser.last_seen_at = new Date();
+    await this.channelUserRepository.save(channelUser);
+
     const message = this.messageRepository.create({
       conversation_id: conversationId,
       direction: 'outbound',
@@ -2242,6 +2246,10 @@ export class BotAdminService {
       caption: trimmedCaption || undefined,
       mediaType,
     });
+
+    channelUser.manual_mode = true;
+    channelUser.last_seen_at = new Date();
+    await this.channelUserRepository.save(channelUser);
 
     // Keep a displayable preview for images; avoid huge base64 for other files.
     const mediaUrl =

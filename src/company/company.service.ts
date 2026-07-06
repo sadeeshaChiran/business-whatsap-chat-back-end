@@ -257,6 +257,9 @@ export class CompanyService {
     if (updateCompanyDto.order_allow_note !== undefined) {
       company.order_allow_note = updateCompanyDto.order_allow_note;
     }
+    if (updateCompanyDto.bot_enabled !== undefined) {
+      company.bot_enabled = updateCompanyDto.bot_enabled;
+    }
 
     const nextCompanyName = company.name;
     const existingChannel = await this.whatsappChannelService.getForCompany(
