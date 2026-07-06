@@ -19,6 +19,7 @@ const MIGRATION_FILES = [
   'supabase_bot_channel_user_company_scope.sql',
   'supabase_bot_order_note_labels.sql',
   'supabase_bot_customer_notes.sql',
+  'supabase_company_extensions.sql',
 ] as const;
 
 function migrationDir(): string | null {

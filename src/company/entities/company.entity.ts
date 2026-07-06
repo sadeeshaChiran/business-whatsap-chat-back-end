@@ -61,6 +61,9 @@ export class Company {
   @Column({ type: 'boolean', default: true })
   order_allow_note: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  bot_enabled: boolean;
+
   @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
   incomeCategories: IncomeCatergory[];
 

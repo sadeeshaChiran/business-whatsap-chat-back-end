@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
+import { Company } from '../company/entities/company.entity';
 import { ProductVariant } from './entities/product-variant.entity';
 import { Product } from './entities/product.entity';
 import { ProductCatergoryModule } from './product_catergory/product_catergory.module';
@@ -10,7 +11,7 @@ import { ProductsService } from './products.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Product, ProductVariant, ProductCatergory]),
+    TypeOrmModule.forFeature([Product, ProductVariant, ProductCatergory, Company]),
     AuthModule,
     ProductCatergoryModule,
   ],

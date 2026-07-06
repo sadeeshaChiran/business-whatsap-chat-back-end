@@ -1,5 +1,6 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -19,6 +20,18 @@ export class ProductCatergoryService {
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
   ) {}
+
+  private async assertProductBusiness(companyId: number) {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company) {
+      throw new NotFoundException(
+        'Company not found for the current login. Please log out and log in again.',
+      );
+    }
+    if (company.business_category === 'service') {
+      throw new ForbiddenException('Product categories are not available for service-based businesses');
+    }
+  }
 
   private async ensureUniqueName(
     companyId: number,
@@ -59,6 +72,8 @@ export class ProductCatergoryService {
     createProductCatergoryDto: CreateProductCatergoryDto,
     user: AuthenticatedUser,
   ) {
+    await this.assertProductBusiness(user.company_id);
+
     const name = createProductCatergoryDto.name.trim();
     if (!createProductCatergoryDto.is_common) {
       await this.ensureCompanyExists(user.company_id);
@@ -77,6 +92,8 @@ export class ProductCatergoryService {
   }
 
   async findAll(user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     return this.productCategoryRepository
       .createQueryBuilder('category')
       .where(
@@ -92,6 +109,8 @@ export class ProductCatergoryService {
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+
     const category = await this.productCategoryRepository
       .createQueryBuilder('category')
       .where('category.id = :id', { id })
