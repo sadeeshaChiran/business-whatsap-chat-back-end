@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -141,6 +142,10 @@ export class CompanyService {
       order_collect_customer_info: company.order_collect_customer_info ?? true,
       order_collect_products: company.order_collect_products ?? true,
       order_allow_note: company.order_allow_note ?? true,
+      bot_enabled: false,
+      agent_assignment_timeout_minutes:
+        company.agent_assignment_timeout_minutes ?? 1440,
+      agent_offline_shift_minutes: company.agent_offline_shift_minutes ?? 0,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };
@@ -220,7 +225,11 @@ export class CompanyService {
       company.name = updateCompanyDto.name.trim();
     }
     if (updateCompanyDto.plan !== undefined) {
-      company.plan = updateCompanyDto.plan.trim();
+      const nextPlan = updateCompanyDto.plan.trim().toLowerCase();
+      if (nextPlan && nextPlan !== 'free') {
+        throw new BadRequestException('This package is coming soon. Select Free to continue.');
+      }
+      company.plan = nextPlan;
     }
     if (updateCompanyDto.email !== undefined) {
       const loginEmail = await this.resolveLoginEmail(user);
@@ -258,8 +267,16 @@ export class CompanyService {
       company.order_allow_note = updateCompanyDto.order_allow_note;
     }
     if (updateCompanyDto.bot_enabled !== undefined) {
-      company.bot_enabled = updateCompanyDto.bot_enabled;
+      company.bot_enabled = false;
     }
+    if (updateCompanyDto.agent_assignment_timeout_minutes !== undefined) {
+      company.agent_assignment_timeout_minutes = updateCompanyDto.agent_assignment_timeout_minutes;
+    }
+    if (updateCompanyDto.agent_offline_shift_minutes !== undefined) {
+      company.agent_offline_shift_minutes = updateCompanyDto.agent_offline_shift_minutes;
+    }
+
+    company.bot_enabled = false;
 
     const nextCompanyName = company.name;
     const existingChannel = await this.whatsappChannelService.getForCompany(

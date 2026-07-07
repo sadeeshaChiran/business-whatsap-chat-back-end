@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   UploadedFile,
@@ -378,6 +379,15 @@ export class BotAdminController {
       payload.bot_channel_user_id,
       payload.content,
     );
+  }
+
+  @Patch('notes/:id/check')
+  setCustomerNoteChecked(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: { checked?: boolean },
+  ) {
+    return this.botAdminService.setCustomerNoteChecked(user, id, payload.checked !== false);
   }
 
   @Delete('notes/:id')

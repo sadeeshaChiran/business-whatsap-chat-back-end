@@ -1,4 +1,4 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
@@ -120,6 +120,21 @@ export class UsersService {
     });
     if (existing) {
       throw new ConflictException('User with this email already exists.');
+    }
+
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company || String(company.plan ?? '').trim().toLowerCase() !== 'free') {
+      throw new BadRequestException('Select the Free package before adding agents.');
+    }
+
+    const adminUserId = company.admin_user_id ? Number(company.admin_user_id) : null;
+    const existingAgentCount = await this.userRepository
+      .createQueryBuilder('user')
+      .where('user.company_id = :companyId', { companyId })
+      .andWhere(adminUserId ? 'CAST(user.id AS BIGINT) != CAST(:adminUserId AS BIGINT)' : '1=1', { adminUserId })
+      .getCount();
+    if (existingAgentCount >= 3) {
+      throw new BadRequestException('Free package allows maximum 3 support agents.');
     }
 
     const passwordHash = this.hashPassword(password);

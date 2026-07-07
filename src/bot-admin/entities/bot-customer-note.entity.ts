@@ -31,6 +31,15 @@ export class BotCustomerNote {
   @Column({ type: 'timestamptz', nullable: true })
   sent_at: Date | null;
 
+  @Column({ type: 'boolean', default: false })
+  checked_by_admin: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  checked_at: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  checked_by_user_id: number | null;
+
   @ManyToOne(() => BotChannelUser, { nullable: false, onDelete: 'CASCADE' })
   @JoinColumn({ name: 'bot_channel_user_id' })
   channelUser: BotChannelUser;

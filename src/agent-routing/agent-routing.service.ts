@@ -38,7 +38,7 @@ export class AgentRoutingService {
     private readonly pusherService: PusherService,
   ) {}
 
-  private pendingTimeoutMinutes(): number {
+  private envPendingTimeoutMinutes(): number {
     const hours = Number(process.env.AGENT_PENDING_TIMEOUT_HOURS ?? 24);
     if (Number.isFinite(hours) && hours > 0) {
       return Math.round(hours * 60);
@@ -47,8 +47,28 @@ export class AgentRoutingService {
     return Number.isFinite(raw) && raw > 0 ? raw : 1440;
   }
 
-  private pendingTimeoutAt(): Date {
-    return new Date(Date.now() + this.pendingTimeoutMinutes() * 60_000);
+  private async getCompanyRoutingSettings(companyId: number): Promise<{
+    assignmentTimeoutMinutes: number;
+    offlineShiftMinutes: number;
+  }> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    const assignmentTimeoutMinutes = Number(company?.agent_assignment_timeout_minutes);
+    const offlineShiftMinutes = Number(company?.agent_offline_shift_minutes);
+    return {
+      assignmentTimeoutMinutes:
+        Number.isFinite(assignmentTimeoutMinutes) && assignmentTimeoutMinutes > 0
+          ? Math.round(assignmentTimeoutMinutes)
+          : this.envPendingTimeoutMinutes(),
+      offlineShiftMinutes:
+        Number.isFinite(offlineShiftMinutes) && offlineShiftMinutes >= 0
+          ? Math.round(offlineShiftMinutes)
+          : 0,
+    };
+  }
+
+  private async pendingTimeoutAt(companyId: number): Promise<Date> {
+    const settings = await this.getCompanyRoutingSettings(companyId);
+    return new Date(Date.now() + settings.assignmentTimeoutMinutes * 60_000);
   }
 
   private acceptStickyHours(): number {
@@ -299,7 +319,7 @@ export class AgentRoutingService {
       status: 'pending',
       assigned_agent_id: agentId,
       assigned_at: new Date(),
-      timeout_at: this.pendingTimeoutAt(),
+      timeout_at: await this.pendingTimeoutAt(companyId),
       assignment_mode: assignmentMode,
     });
 
@@ -749,7 +769,21 @@ export class AgentRoutingService {
   private async findOpenUnassignedForCompany(
     companyId: number,
   ): Promise<BotConversation[]> {
-    return this.findQueueConversationsForCompany(companyId);
+    const settings = await this.getCompanyRoutingSettings(companyId);
+    const rows = await this.findQueueConversationsForCompany(companyId);
+    if (settings.offlineShiftMinutes <= 0) {
+      return rows;
+    }
+    const cutoffMs = Date.now() - settings.offlineShiftMinutes * 60_000;
+    return rows.filter((conv) => {
+      if (conv.assigned_agent_id == null) {
+        return true;
+      }
+      if (!conv.assigned_at) {
+        return true;
+      }
+      return new Date(conv.assigned_at).getTime() <= cutoffMs;
+    });
   }
 
   private async findPendingOfflineForCompany(
@@ -919,7 +953,7 @@ export class AgentRoutingService {
           platform: 'whatsapp',
           external_user_id: normalizedPhone,
           display_name: displayName?.trim() || normalizedPhone,
-          bot_enabled: true,
+          bot_enabled: false,
           manual_mode: false,
           last_seen_at: new Date(),
         }),
@@ -957,6 +991,7 @@ export class AgentRoutingService {
     }
 
     await this.persistInboundMessage(companyId, conversation.id, inbound);
+    const clientMessagePreview = inbound?.content?.trim() || 'New client message';
 
     if (!this.shouldRouteInboundConversation(conversation)) {
       const assignedId = conversation.assigned_agent_id
@@ -976,13 +1011,28 @@ export class AgentRoutingService {
         const refreshed = await this.conversationRepository.findOne({
           where: { id: conversation.id },
         });
+        const nextStatus = refreshed?.status ?? (result.agentId ? 'pending' : 'open');
+        this.triggerClientMessageNotification({
+          companyId,
+          conversationId: conversation.id,
+          assignedAgentId: result.agentId,
+          status: nextStatus,
+          preview: clientMessagePreview,
+        });
         return {
           conversationId: conversation.id,
           assignedAgentId: result.agentId,
-          status: refreshed?.status ?? (result.agentId ? 'pending' : 'open'),
+          status: nextStatus,
         };
       }
 
+      this.triggerClientMessageNotification({
+        companyId,
+        conversationId: conversation.id,
+        assignedAgentId: conversation.assigned_agent_id,
+        status: conversation.status,
+        preview: clientMessagePreview,
+      });
       return {
         conversationId: conversation.id,
         assignedAgentId: conversation.assigned_agent_id,
@@ -1000,11 +1050,37 @@ export class AgentRoutingService {
       where: { id: conversation.id },
     });
 
+    const routedStatus = refreshed?.status ?? (result.agentId ? 'pending' : 'open');
+    this.triggerClientMessageNotification({
+      companyId,
+      conversationId: conversation.id,
+      assignedAgentId: result.agentId,
+      status: routedStatus,
+      preview: clientMessagePreview,
+    });
+
     return {
       conversationId: conversation.id,
       assignedAgentId: result.agentId,
-      status: refreshed?.status ?? (result.agentId ? 'pending' : 'open'),
+      status: routedStatus,
     };
+  }
+
+  private triggerClientMessageNotification(params: {
+    companyId: number;
+    conversationId: number;
+    assignedAgentId: number | null | undefined;
+    status: string;
+    preview: string;
+  }) {
+    this.pusherService.trigger(`company-${params.companyId}`, 'conversation_updated', {
+      conversation_id: params.conversationId,
+      status: params.status,
+      agent_id: params.assignedAgentId ?? null,
+      inbound: true,
+      client_message: true,
+      preview: params.preview,
+    });
   }
 
   private async persistInboundMessage(
@@ -1039,6 +1115,7 @@ export class AgentRoutingService {
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
       conversation_id: conversationId,
       inbound: true,
+      message_saved: true,
     });
   }
 

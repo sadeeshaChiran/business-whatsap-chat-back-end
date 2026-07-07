@@ -150,4 +150,16 @@ export class UpdateCompanyDto extends PartialType(
   @IsOptional()
   @IsBoolean()
   bot_enabled?: boolean;
+
+  @ApiPropertyOptional({ example: 1440, minimum: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  agent_assignment_timeout_minutes?: number;
+
+  @ApiPropertyOptional({ example: 0, minimum: 0 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  agent_offline_shift_minutes?: number;
 }
