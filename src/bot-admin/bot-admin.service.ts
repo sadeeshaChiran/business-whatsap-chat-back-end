@@ -1302,7 +1302,7 @@ export class BotAdminService {
         platform: 'whatsapp',
         external_user_id: normalizedPhone,
         display_name: displayName?.trim() || normalizedPhone,
-        bot_enabled: true,
+        bot_enabled: false,
         manual_mode: false,
         last_seen_at: new Date(),
       }),
@@ -1368,11 +1368,8 @@ export class BotAdminService {
       }
     }
 
-    channelUser.bot_enabled = !channelUser.bot_enabled;
-    channelUser.manual_mode =
-      channelUser.bot_enabled === false
-        ? payload.manual_mode ?? true
-        : false;
+    channelUser.bot_enabled = false;
+    channelUser.manual_mode = true;
 
     const saved = await this.channelUserRepository.save(channelUser);
     return {
@@ -3380,6 +3377,10 @@ export class BotAdminService {
         note.created_by_user_id == null ? null : Number(note.created_by_user_id),
       created_by_name: note.created_by_name,
       sent_at: note.sent_at ? new Date(note.sent_at).toISOString() : null,
+      checked_by_admin: Boolean(note.checked_by_admin),
+      checked_at: note.checked_at ? new Date(note.checked_at).toISOString() : null,
+      checked_by_user_id:
+        note.checked_by_user_id == null ? null : Number(note.checked_by_user_id),
       created_at: note.created_at
         ? new Date(note.created_at).toISOString()
         : null,
@@ -3546,6 +3547,9 @@ export class BotAdminService {
         created_by_user_id: Number(user.id),
         created_by_name: author?.name?.trim() || author?.email || 'User',
         sent_at: null,
+        checked_by_admin: false,
+        checked_at: null,
+        checked_by_user_id: null,
       }),
     );
     note.channelUser = channelUser;
@@ -3568,6 +3572,32 @@ export class BotAdminService {
     await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
     await this.customerNoteRepository.remove(note);
     return { id: noteId, removed: true };
+  }
+
+
+  async setCustomerNoteChecked(
+    user: AuthenticatedUser,
+    noteId: number,
+    checked: boolean,
+  ) {
+    await this.assertAdminAccess(user);
+    const companyId = this.requireUserCompanyId(user);
+    const note = await this.customerNoteRepository
+      .createQueryBuilder('note')
+      .leftJoinAndSelect('note.channelUser', 'channelUser')
+      .where('note.id = :noteId', { noteId })
+      .andWhere('note.company_id = :companyId', { companyId })
+      .getOne();
+
+    if (!note) {
+      throw new NotFoundException('Note not found.');
+    }
+
+    note.checked_by_admin = checked;
+    note.checked_at = checked ? new Date() : null;
+    note.checked_by_user_id = checked ? Number(user.id) : null;
+    const saved = await this.customerNoteRepository.save(note);
+    return this.mapCustomerNote(saved);
   }
 
   async sendCustomerNote(user: AuthenticatedUser, noteId: number) {

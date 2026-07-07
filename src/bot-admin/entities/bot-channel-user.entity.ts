@@ -41,7 +41,7 @@ export class BotChannelUser {
   @Column({ type: 'text', nullable: true })
   session_state: string | null;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: false })
   bot_enabled: boolean;
 
   @Column({ type: 'boolean', default: false })

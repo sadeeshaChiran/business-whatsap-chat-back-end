@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Company } from '../company/entities/company.entity';
@@ -85,17 +85,16 @@ export class WhatsappChannelService {
 
     const instanceName = patch.instance_name?.trim();
     const metaPhoneNumberId = patch.meta_phone_number_id?.trim();
-    if (!instanceName && !metaPhoneNumberId) {
-      throw new BadRequestException(
-        'WhatsApp instance name or Meta phone number id is required before saving.',
-      );
-    }
+    // Allow saving without WhatsApp credentials — use a placeholder so the
+    // channel row is created and can be updated later once credentials are added.
+    const resolvedInstanceName =
+      instanceName || metaPhoneNumberId || `company-${companyId}`;
 
     return this.whatsappChannelRepository.save(
       this.whatsappChannelRepository.create({
         company_id: companyId,
         company_name: companyName,
-        instance_name: instanceName || metaPhoneNumberId || `company-${companyId}`,
+        instance_name: resolvedInstanceName,
         evaluation_whatsapp_key: patch.evaluation_whatsapp_key ?? null,
         provider_type: patch.provider_type ?? 'evolution',
         meta_phone_number_id: patch.meta_phone_number_id ?? null,

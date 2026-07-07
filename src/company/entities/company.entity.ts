@@ -61,8 +61,14 @@ export class Company {
   @Column({ type: 'boolean', default: true })
   order_allow_note: boolean;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: false })
   bot_enabled: boolean;
+
+  @Column({ type: 'int', default: 1440 })
+  agent_assignment_timeout_minutes: number;
+
+  @Column({ type: 'int', default: 0 })
+  agent_offline_shift_minutes: number;
 
   @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
   incomeCategories: IncomeCatergory[];
