@@ -548,12 +548,25 @@ export class EvolutionController {
     );
 
     let settingsApplied = false;
+    let webhookConfigured = false;
     if (status === 'CONNECTED') {
       try {
         await this.evolutionService.applyInstanceSettings(instanceName, apiKey);
         settingsApplied = true;
       } catch {
         settingsApplied = false;
+      }
+
+      if (this.evolutionService.isWebhookAutoConfigureEnabled()) {
+        try {
+          await this.evolutionService.configureInstanceWebhook(
+            instanceName,
+            apiKey,
+          );
+          webhookConfigured = true;
+        } catch {
+          webhookConfigured = false;
+        }
       }
     }
 
@@ -580,6 +593,7 @@ export class EvolutionController {
       connected: status === 'CONNECTED',
 
       settings_applied: settingsApplied,
+      webhook_configured: webhookConfigured,
 
       company: savedCompany,
 
