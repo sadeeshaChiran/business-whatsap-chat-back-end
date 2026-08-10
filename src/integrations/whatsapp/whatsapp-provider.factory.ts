@@ -41,11 +41,15 @@ export class WhatsappProviderFactory {
   }
 
   normalizeInboundWebhook(body: unknown) {
+    return this.normalizeInboundWebhooks(body)[0] ?? null;
+  }
+
+  normalizeInboundWebhooks(body: unknown) {
     const provider = this.detectProviderFromWebhook(body);
     if (!provider) {
-      return null;
+      return [];
     }
-    return this.getAdapter(provider).normalizeInboundWebhook(body);
+    return this.getAdapter(provider).normalizeInboundWebhooks(body);
   }
 }
 

@@ -26,6 +26,9 @@ export class BotMessage {
   @Column({ type: 'varchar', length: 30 })
   platform: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  provider_message_id: string | null;
+
   @Column({ type: 'text' })
   content: string;
 

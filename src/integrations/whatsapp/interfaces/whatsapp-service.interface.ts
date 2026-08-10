@@ -37,6 +37,8 @@ export interface WhatsappServiceInterface {
 
   normalizeInboundWebhook(body: unknown): NormalizedWhatsAppInbound | null;
 
+  normalizeInboundWebhooks(body: unknown): NormalizedWhatsAppInbound[];
+
   sendText(
     channel: WhatsappChannel,
     toPhone: string,

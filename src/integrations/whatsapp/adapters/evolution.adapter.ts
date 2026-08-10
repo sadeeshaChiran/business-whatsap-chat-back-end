@@ -79,6 +79,21 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
         '',
     ).trim();
 
+    const alternateJid = String(
+      key.remoteJidAlt ??
+        key.remote_jid_alt ??
+        key.senderPn ??
+        envelope?.remoteJidAlt ??
+        data.remoteJidAlt ??
+        data.senderPn ??
+        payload.remoteJidAlt ??
+        payload.senderPn ??
+        '',
+    ).trim();
+    if (remoteJid.endsWith('@lid') && alternateJid.includes('@')) {
+      remoteJid = alternateJid;
+    }
+
     const fromMe = Boolean(
       key.fromMe ?? envelope?.fromMe ?? data.fromMe ?? payload.fromMe ?? false,
     );
@@ -166,6 +181,32 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
           ).trim() || undefined
         : undefined,
     };
+  }
+
+  normalizeInboundWebhooks(body: unknown): NormalizedWhatsAppInbound[] {
+    const root = (body as Record<string, unknown>) ?? {};
+    const payload = (root.body as Record<string, unknown>) ?? root;
+    const data = (payload.data as Record<string, unknown>) ?? payload;
+    const nestedData = (data.data as Record<string, unknown>) ?? {};
+    const messages =
+      (Array.isArray(data.messages) && data.messages) ||
+      (Array.isArray(payload.messages) && payload.messages) ||
+      (Array.isArray(nestedData.messages) && nestedData.messages) ||
+      [];
+
+    if (!messages.length) {
+      const normalized = this.normalizeInboundWebhook(body);
+      return normalized ? [normalized] : [];
+    }
+
+    return messages
+      .map((message) =>
+        this.normalizeInboundWebhook({
+          ...payload,
+          data: { ...data, messages: [message] },
+        }),
+      )
+      .filter((item): item is NormalizedWhatsAppInbound => Boolean(item));
   }
 
   async sendText(

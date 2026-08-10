@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -31,7 +31,24 @@ export class CompanyService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly whatsappChannelService: WhatsappChannelService,
+    private readonly dataSource: DataSource,
   ) {}
+
+  private whatsappAccountIdentity(provider: 'evolution' | 'meta', channel: WhatsappChannel | null, update?: UpdateCompanyDto): string {
+    return provider === 'meta'
+      ? (update?.meta_phone_number_id ?? channel?.meta_phone_number_id ?? '').trim()
+      : (update?.whatsapp_instance_name ?? channel?.evolution_instance_name ?? channel?.instance_name ?? '').trim();
+  }
+
+  private async deleteCompanyWhatsappConversationHistory(companyId: number) {
+    await this.dataSource.transaction(async (manager) => {
+      const conversationIds = `SELECT c.id FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND cu.platform = 'whatsapp'`;
+      await manager.query(`DELETE FROM bot_conversation_label WHERE conversation_id IN (${conversationIds})`, [companyId]);
+      await manager.query(`DELETE FROM bot_flag WHERE conversation_id IN (${conversationIds})`, [companyId]);
+      await manager.query(`DELETE FROM bot_message WHERE conversation_id IN (${conversationIds})`, [companyId]);
+      await manager.query(`DELETE FROM bot_conversation WHERE id IN (${conversationIds})`, [companyId]);
+    });
+  }
 
   private async getIndustryOrFail(id: number): Promise<Industry> {
     const industry = await this.industryRepository.findOne({ where: { id } });
@@ -282,6 +299,12 @@ export class CompanyService {
     const existingChannel = await this.whatsappChannelService.getForCompany(
       Number(company.id),
     );
+    const previousProvider = existingChannel?.provider_type ?? 'evolution';
+    const nextProvider = updateCompanyDto.whatsapp_provider_type ?? previousProvider;
+    const whatsappAccountChanged =
+      nextProvider !== previousProvider ||
+      this.whatsappAccountIdentity(previousProvider, existingChannel) !==
+        this.whatsappAccountIdentity(nextProvider, existingChannel, updateCompanyDto);
     const whatsappPatch = buildWhatsappChannelPatch(
       Number(company.id),
       nextCompanyName,
@@ -293,6 +316,10 @@ export class CompanyService {
 
     if (Object.keys(whatsappPatch).length > 0) {
       await this.upsertWhatsappChannel(Number(company.id), nextCompanyName, whatsappPatch);
+    }
+
+    if (whatsappAccountChanged && updateCompanyDto.delete_previous_whatsapp_chats === true) {
+      await this.deleteCompanyWhatsappConversationHistory(Number(company.id));
     }
 
     const refreshed = await this.reloadCompany(Number(company.id));

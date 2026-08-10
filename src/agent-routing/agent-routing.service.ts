@@ -16,6 +16,7 @@ export type InboundWhatsAppMessage = {
   message_type?: 'text' | 'image' | 'voice';
   media_url?: string | null;
   source?: string;
+  provider_message_id?: string;
 };
 
 @Injectable()
@@ -938,6 +939,28 @@ export class AgentRoutingService {
       };
     }
 
+    const providerMessageId = inbound?.provider_message_id?.trim();
+    if (providerMessageId) {
+      const duplicate = await this.messageRepository
+        .createQueryBuilder('message')
+        .innerJoin('message.conversation', 'conversation')
+        .innerJoin('conversation.channelUser', 'channelUser')
+        .select('conversation.id', 'conversation_id')
+        .addSelect('conversation.assigned_agent_id', 'assigned_agent_id')
+        .addSelect('conversation.status', 'status')
+        .where('message.platform = :platform', { platform: 'whatsapp' })
+        .andWhere('message.provider_message_id = :providerMessageId', { providerMessageId })
+        .andWhere('channelUser.company_id = :companyId', { companyId })
+        .getRawOne<{ conversation_id: string; assigned_agent_id: string | null; status: string }>();
+      if (duplicate) {
+        return {
+          conversationId: Number(duplicate.conversation_id),
+          assignedAgentId: duplicate.assigned_agent_id ? Number(duplicate.assigned_agent_id) : null,
+          status: duplicate.status,
+        };
+      }
+    }
+
     let channelUser = await this.channelUserRepository.findOne({
       where: {
         company_id: companyId,
@@ -1106,6 +1129,7 @@ export class AgentRoutingService {
         direction: 'inbound',
         message_type: messageType,
         platform: 'whatsapp',
+        provider_message_id: inbound?.provider_message_id?.trim() || null,
         content,
         media_url: inbound?.media_url?.trim() || null,
         source: inbound?.source?.trim() || 'customer',

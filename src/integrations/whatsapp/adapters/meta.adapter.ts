@@ -107,6 +107,34 @@ export class MetaAdapter implements WhatsappServiceInterface {
     return null;
   }
 
+  normalizeInboundWebhooks(body: unknown): NormalizedWhatsAppInbound[] {
+    const root = (body as Record<string, unknown>) ?? {};
+    const payload = (root.body as Record<string, unknown>) ?? root;
+    if (payload.object !== 'whatsapp_business_account') {
+      return [];
+    }
+
+    const normalized: NormalizedWhatsAppInbound[] = [];
+    const entries = Array.isArray(payload.entry) ? payload.entry : [];
+    for (const rawEntry of entries) {
+      const entry = rawEntry as Record<string, unknown>;
+      const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+      for (const rawChange of changes) {
+        const change = rawChange as Record<string, unknown>;
+        const value = change?.value as Record<string, unknown> | undefined;
+        const messages = Array.isArray(value?.messages) ? value.messages : [];
+        for (const message of messages) {
+          const item = this.normalizeInboundWebhook({
+            object: payload.object,
+            entry: [{ ...entry, changes: [{ ...change, value: { ...value, messages: [message] } }] }],
+          });
+          if (item) normalized.push(item);
+        }
+      }
+    }
+    return normalized;
+  }
+
   async resolveDisplayPhoneNumber(
     channel: WhatsappChannel,
   ): Promise<string | null> {
