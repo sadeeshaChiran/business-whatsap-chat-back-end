@@ -67,4 +67,5 @@ export class BotConversation {
 
   @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
   updated_at: Date;
+  closed_at: any;
 }
