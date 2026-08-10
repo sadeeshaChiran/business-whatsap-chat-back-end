@@ -64,10 +64,26 @@ export class WhatsappService {
   }
 
   async processInboundWebhook(body: unknown) {
-    const normalized = this.normalizeInboundWebhook(body);
-    if (!normalized) {
+    const normalizedMessages = this.providerFactory.normalizeInboundWebhooks(body);
+    if (!normalizedMessages.length) {
       return { accepted: false, reason: 'unsupported_payload' };
     }
+
+    const results: Awaited<ReturnType<WhatsappService['processNormalizedInbound']>>[] = [];
+    for (const [index, normalized] of normalizedMessages.entries()) {
+      results.push(await this.processNormalizedInbound(body, normalized, index === 0));
+    }
+
+    return results.length === 1
+      ? results[0]
+      : { accepted: true, processed: results.length, results };
+  }
+
+  private async processNormalizedInbound(
+    body: unknown,
+    normalized: NormalizedWhatsAppInbound,
+    forwardMeta: boolean,
+  ) {
     if (normalized.from_me || !normalized.phone) {
       return { accepted: true, ignored: true, normalized };
     }
@@ -80,10 +96,7 @@ export class WhatsappService {
       return { accepted: true, routed: false, normalized };
     }
 
-    await this.whatsappChannelRepository.update(channel.id, {
-      last_used_at: new Date(),
-    });
-
+    await this.whatsappChannelRepository.update(channel.id, { last_used_at: new Date() });
     const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(
       Number(channel.company_id),
       normalized.phone,
@@ -91,22 +104,15 @@ export class WhatsappService {
       normalized.message?.trim()
         ? {
             content: normalized.message.trim(),
-            message_type:
-              normalized.input_type === 'voice'
-                ? 'voice'
-                : normalized.input_type === 'image'
-                  ? 'image'
-                  : 'text',
-            media_url:
-              normalized.meta_media_id?.trim()
-                ? `meta-media:${normalized.meta_media_id.trim()}`
-                : null,
+            message_type: normalized.input_type === 'voice' ? 'voice' : normalized.input_type === 'image' ? 'image' : 'text',
+            media_url: normalized.meta_media_id?.trim() ? `meta-media:${normalized.meta_media_id.trim()}` : null,
             source: 'customer',
+            provider_message_id: normalized.message_id?.trim() || undefined,
           }
         : undefined,
     );
 
-    if (normalized.provider === 'meta') {
+    if (normalized.provider === 'meta' && forwardMeta) {
       void this.forwardMetaInboundToN8nBot(body, {
         companyId: Number(channel.company_id),
         conversationId: routing.conversationId,
@@ -120,10 +126,9 @@ export class WhatsappService {
       provider: normalized.provider,
       normalized,
       agent_routing: routing,
-      n8n_forwarded: normalized.provider === 'meta',
+      n8n_forwarded: normalized.provider === 'meta' && forwardMeta,
     };
   }
-
   /** Meta webhook hits Nest first; forward raw payload to n8n AI workflow. */
   private async forwardMetaInboundToN8nBot(
     body: unknown,

@@ -162,4 +162,9 @@ export class UpdateCompanyDto extends PartialType(
   @IsInt()
   @Min(0)
   agent_offline_shift_minutes?: number;
+
+  @ApiPropertyOptional({ description: 'Delete all existing company WhatsApp chats when the provider account identity changes.', example: false })
+  @IsOptional()
+  @IsBoolean()
+  delete_previous_whatsapp_chats?: boolean;
 }
