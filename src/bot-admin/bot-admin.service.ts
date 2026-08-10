@@ -108,7 +108,7 @@ export class BotAdminService {
     private readonly pusherService: PusherService,
     private readonly agentRoutingService: AgentRoutingService,
     private readonly whatsappService: WhatsappService,
-  ) { }
+  ) {}
 
   private getEvolutionConfig() {
     // User may paste Evolution Manager URL (ends with /manager). API base is root.
@@ -277,16 +277,16 @@ export class BotAdminService {
 
     const [totalUsers, activeBots, totalConversations, totalOrders, pendingOrders] =
       await Promise.all([
-        this.channelUserRepository.count({ where: { company_id } }),
-        this.channelUserRepository.count({ where: { company_id, bot_enabled: true } }),
-        this.conversationRepository
-          .createQueryBuilder('conversation')
-          .leftJoin('conversation.channelUser', 'channelUser')
-          .where('channelUser.company_id = :company_id', { company_id })
-          .getCount(),
-        this.orderRepository.count({ where: { company_id } }),
-        this.orderRepository.count({ where: { company_id, status: 'Pending' } }),
-      ]);
+      this.channelUserRepository.count({ where: { company_id } }),
+      this.channelUserRepository.count({ where: { company_id, bot_enabled: true } }),
+      this.conversationRepository
+        .createQueryBuilder('conversation')
+        .leftJoin('conversation.channelUser', 'channelUser')
+        .where('channelUser.company_id = :company_id', { company_id })
+        .getCount(),
+      this.orderRepository.count({ where: { company_id } }),
+      this.orderRepository.count({ where: { company_id, status: 'Pending' } }),
+    ]);
 
     return {
       totalUsers,
@@ -337,10 +337,10 @@ export class BotAdminService {
     const conv = isAdmin
       ? await this.findConversationForCompany(conversationId, user.company_id)
       : await this.findConversationForCompany(
-        conversationId,
-        user.company_id,
-        { assignedAgentId: user.id },
-      );
+          conversationId,
+          user.company_id,
+          { assignedAgentId: user.id },
+        );
 
     if (!conv) {
       if (isAdmin) {
@@ -1005,48 +1005,6 @@ export class BotAdminService {
       );
   }
 
-  private async resolveConversationWindow(
-    conversation: BotConversation,
-  ): Promise<{ start: number; end: number }> {
-    const start = new Date(conversation.created_at).getTime();
-
-    const next = await this.conversationRepository
-      .createQueryBuilder('c')
-      .where('c.bot_channel_user_id = :channelUserId', {
-        channelUserId: conversation.bot_channel_user_id,
-      })
-      .andWhere('c.id != :id', { id: conversation.id })
-      .andWhere('c.created_at > :createdAt', { createdAt: conversation.created_at })
-      .orderBy('c.created_at', 'ASC')
-      .getOne();
-
-    const end = next
-      ? new Date(next.created_at).getTime()
-      : conversation.closed_at
-        ? new Date(conversation.closed_at).getTime()
-        : Date.now();
-
-    return { start, end };
-  }
-
-
-
-  private filterEvolutionMessagesForConversation(
-    evolutionMessages: EvolutionInboxMessage[],
-    window: { start: number; end: number },
-  ): EvolutionInboxMessage[] {
-    if (!Number.isFinite(window.start)) return evolutionMessages;
-    return evolutionMessages.filter((m) => {
-      const ts = this.getEvolutionMessageTimestamp(m);
-      return ts >= window.start && ts <= window.end;
-    });
-  }
-
-  private getEvolutionMessageTimestamp(message: EvolutionInboxMessage): number {
-    const ts = new Date(message.created_at).getTime();
-    return Number.isFinite(ts) ? ts : 0;
-  }
-
   private async findDbMessagesForPhone(companyId: number, phone: string) {
     const normalized = this.normalizePhoneKey(phone);
     if (!normalized) {
@@ -1222,13 +1180,13 @@ export class BotAdminService {
         conversation:
           conversationId > 0
             ? {
-              id: conversationId,
-              status: latest.conversation?.status ?? other.conversation?.status ?? 'open',
-              last_message_at:
-                latest.conversation?.last_message_at ??
-                other.conversation?.last_message_at ??
-                null,
-            }
+                id: conversationId,
+                status: latest.conversation?.status ?? other.conversation?.status ?? 'open',
+                last_message_at:
+                  latest.conversation?.last_message_at ??
+                  other.conversation?.last_message_at ??
+                  null,
+              }
             : latest.conversation ?? other.conversation,
         evolution_remote_jid:
           latest.evolution_remote_jid ?? other.evolution_remote_jid ?? null,
@@ -1497,13 +1455,13 @@ export class BotAdminService {
           last_message_direction: preview?.direction ?? null,
           channelUser: conv.channelUser
             ? {
-              id: conv.channelUser.id,
-              display_name: conv.channelUser.display_name,
-              external_user_id: conv.channelUser.external_user_id,
-              platform: conv.channelUser.platform,
-              bot_enabled: conv.channelUser.bot_enabled,
-              manual_mode: conv.channelUser.manual_mode,
-            }
+                id: conv.channelUser.id,
+                display_name: conv.channelUser.display_name,
+                external_user_id: conv.channelUser.external_user_id,
+                platform: conv.channelUser.platform,
+                bot_enabled: conv.channelUser.bot_enabled,
+                manual_mode: conv.channelUser.manual_mode,
+              }
             : null,
           conversation: {
             id: conv.id,
@@ -1635,10 +1593,10 @@ export class BotAdminService {
         channelUser: channelUser ? mapChannelUser(channelUser) : null,
         conversation: conversation
           ? {
-            id: conversation.id,
-            status: conversation.status,
-            last_message_at: conversation.last_message_at,
-          }
+              id: conversation.id,
+              status: conversation.status,
+              last_message_at: conversation.last_message_at,
+            }
           : null,
         evolution_remote_jid: null as string | null,
         last_message_preview: null as string | null,
@@ -1670,10 +1628,10 @@ export class BotAdminService {
         channelUser: mapChannelUser(channelUser),
         conversation: conversation
           ? {
-            id: conversation.id,
-            status: conversation.status,
-            last_message_at: conversation.last_message_at,
-          }
+              id: conversation.id,
+              status: conversation.status,
+              last_message_at: conversation.last_message_at,
+            }
           : null,
         evolution_remote_jid: null,
         last_message_preview: null,
@@ -1713,10 +1671,10 @@ export class BotAdminService {
         }
         const preferredJid =
           chat.alternate_jid?.endsWith('@s.whatsapp.net') ||
-            chat.alternate_jid?.endsWith('@c.us')
+          chat.alternate_jid?.endsWith('@c.us')
             ? chat.alternate_jid
             : chat.remote_jid.endsWith('@s.whatsapp.net') ||
-              chat.remote_jid.endsWith('@c.us')
+                chat.remote_jid.endsWith('@c.us')
               ? chat.remote_jid
               : chat.alternate_jid ?? chat.remote_jid;
         const existingIndex = rows.findIndex(
@@ -1753,19 +1711,19 @@ export class BotAdminService {
           },
           channelUser: matchedChannelUser
             ? {
-              id: matchedChannelUser.id,
-              platform: matchedChannelUser.platform,
-              external_user_id: matchedChannelUser.external_user_id,
-              display_name:
-                chat.display_name?.trim() ||
-                matchedChannelUser.display_name ||
-                phone,
-              language: matchedChannelUser.language,
-              bot_enabled: matchedChannelUser.bot_enabled,
-              manual_mode: matchedChannelUser.manual_mode,
-              last_seen_at:
-                matchedChannelUser.last_seen_at ?? chat.last_message_at,
-            }
+                id: matchedChannelUser.id,
+                platform: matchedChannelUser.platform,
+                external_user_id: matchedChannelUser.external_user_id,
+                display_name:
+                  chat.display_name?.trim() ||
+                  matchedChannelUser.display_name ||
+                  phone,
+                language: matchedChannelUser.language,
+                bot_enabled: matchedChannelUser.bot_enabled,
+                manual_mode: matchedChannelUser.manual_mode,
+                last_seen_at:
+                  matchedChannelUser.last_seen_at ?? chat.last_message_at,
+              }
             : null,
           conversation: {
             id: 0,
@@ -1949,8 +1907,8 @@ export class BotAdminService {
     const conversation = isAdmin
       ? await this.findConversationForCompany(id, user.company_id)
       : await this.findConversationForCompany(id, user.company_id, {
-        assignedAgentId: user.id,
-      });
+          assignedAgentId: user.id,
+        });
 
     if (!conversation) {
       if (isAdmin) {
@@ -1976,28 +1934,19 @@ export class BotAdminService {
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
-
     const fetchedEvolution =
       !this.isMetaWhatsappChannel(channel) && phone && instance && apikey
         ? (
-          await this.fetchEvolutionMessagesForJid(
-            user.company_id,
-            `${phone}@s.whatsapp.net`,
-            instance,
-            apikey,
-          )
-        ).messages
+            await this.fetchEvolutionMessagesForJid(
+              user.company_id,
+              `${phone}@s.whatsapp.net`,
+              instance,
+              apikey,
+            )
+          ).messages
         : [];
 
-    const window = await this.resolveConversationWindow(conversation);
-    const scopedEvolutionMessages = this.filterEvolutionMessagesForConversation(
-      fetchedEvolution,
-      window,
-    );
-
-    let mergedMessages = this.mergeConversationThreadMessages(messages, scopedEvolutionMessages);
-
-
+    let mergedMessages = this.mergeConversationThreadMessages(messages, fetchedEvolution);
     if (this.isMetaWhatsappChannel(channel)) {
       mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
     }
@@ -2376,7 +2325,7 @@ export class BotAdminService {
     const rawContent = content?.trim()
       ? content.trim()
       : `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`;
-
+    
     try {
       const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
         method: 'POST',
@@ -2393,7 +2342,7 @@ export class BotAdminService {
       if (response.ok) {
         return response.json();
       }
-
+      
       const errBody = await response.text();
       console.error('Bot training upload failed:', response.status, errBody);
     } catch (error) {
@@ -2871,7 +2820,7 @@ export class BotAdminService {
   private getInvoiceDirectory() {
     return resolve(
       this.getEnvValue('BOT_INVOICE_DIR') ??
-      join(process.cwd(), '..', 'bot', 'app', 'static', 'invoices'),
+        join(process.cwd(), '..', 'bot', 'app', 'static', 'invoices'),
     );
   }
 
@@ -3362,13 +3311,13 @@ export class BotAdminService {
     ];
     const labels = uniqueIds.length
       ? await this.customerLabelRepository
-        .createQueryBuilder('label')
-        .where('label.id IN (:...uniqueIds)', { uniqueIds })
-        .andWhere(
-          'CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
-          { companyId },
-        )
-        .getMany()
+          .createQueryBuilder('label')
+          .where('label.id IN (:...uniqueIds)', { uniqueIds })
+          .andWhere(
+            'CAST(label.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
+            { companyId },
+          )
+          .getMany()
       : [];
     if (uniqueIds.length && labels.length !== uniqueIds.length) {
       throw new BadRequestException(
@@ -3437,11 +3386,11 @@ export class BotAdminService {
         : null,
       channelUser: channelUser
         ? {
-          id: Number(channelUser.id),
-          display_name: channelUser.display_name,
-          external_user_id: channelUser.external_user_id,
-          platform: channelUser.platform,
-        }
+            id: Number(channelUser.id),
+            display_name: channelUser.display_name,
+            external_user_id: channelUser.external_user_id,
+            platform: channelUser.platform,
+          }
         : null,
     };
   }
