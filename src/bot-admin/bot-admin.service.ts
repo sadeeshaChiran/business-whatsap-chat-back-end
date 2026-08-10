@@ -1653,16 +1653,17 @@ export class BotAdminService {
     }
     const instance = this.resolveEvolutionInstanceName(channel);
     if (!instance) {
-      return rows;
+      return [];
     }
 
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     if (!apikey) {
-      return rows;
+      return [];
     }
 
     try {
       const chats = await this.evolutionService.findChats(instance, apikey);
+      const instanceRows: CompanyContactRow[] = [];
 
       for (const chat of chats) {
         const phone = chat.phone;
@@ -1697,11 +1698,14 @@ export class BotAdminService {
           if (row.channelUser && chat.display_name) {
             row.channelUser.display_name = chat.display_name;
           }
+          if (!instanceRows.includes(row)) {
+            instanceRows.push(row);
+          }
           continue;
         }
 
         const matchedChannelUser = this.findChannelUserForPhone(channelUsers, phone);
-        rows.push({
+        instanceRows.push({
           customer: {
             id: 0,
             customer_phone: phone,
@@ -1734,11 +1738,12 @@ export class BotAdminService {
           last_message_preview: chat.last_message_preview,
         });
       }
+
+      return this.dedupeConversationRows(instanceRows);
     } catch (error) {
       console.error('Evolution findChats failed:', error);
+      return [];
     }
-
-    return this.dedupeConversationRows(rows);
   }
 
   async getEvolutionInboxMessages(
