@@ -1650,7 +1650,7 @@ export class BotAdminService {
   ): Promise<CompanyContactRow[]> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     if (this.isMetaWhatsappChannel(channel)) {
-      return rows;
+      return rows.filter((row) => Number(row.conversation?.id ?? 0) > 0);
     }
     const instance = this.resolveEvolutionInstanceName(channel);
     if (!instance) {
@@ -1786,7 +1786,7 @@ export class BotAdminService {
       throw new BadRequestException('WhatsApp instance API key is missing.');
     }
 
-    const { remoteJid: resolvedJid, phone, messages } =
+    const { remoteJid: resolvedJid, messages } =
       await this.fetchEvolutionMessagesForJid(
         user.company_id,
         jid,
@@ -1794,15 +1794,9 @@ export class BotAdminService {
         apikey,
       );
 
-    const resolvedPhone =
-      phone || this.normalizePhoneKey(resolvedJid.split('@')[0] ?? resolvedJid);
-    const dbMessages = resolvedPhone
-      ? await this.findDbMessagesForPhone(user.company_id, resolvedPhone)
-      : [];
-
     return {
       remote_jid: resolvedJid,
-      messages: this.mergeConversationThreadMessages(dbMessages, messages),
+      messages: this.mergeConversationThreadMessages([], messages),
     };
   }
 
@@ -1952,7 +1946,9 @@ export class BotAdminService {
           ).messages
         : [];
 
-    let mergedMessages = this.mergeConversationThreadMessages(messages, fetchedEvolution);
+    let mergedMessages = this.isMetaWhatsappChannel(channel)
+      ? this.mergeConversationThreadMessages(messages, [])
+      : this.mergeConversationThreadMessages([], fetchedEvolution);
     if (this.isMetaWhatsappChannel(channel)) {
       mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
     }

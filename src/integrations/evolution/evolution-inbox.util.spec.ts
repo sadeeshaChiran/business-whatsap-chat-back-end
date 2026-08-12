@@ -115,6 +115,38 @@ describe('parseEvolutionFindMessages', () => {
     expect(result[0].content).toBe('[image]');
     expect(result[0].media_url).toBeNull();
   });
+
+  it('renders revoked messages as deleted instead of media placeholders', () => {
+    const result = parseEvolutionFindMessages(
+      {
+        messages: {
+          records: [
+            {
+              key: {
+                id: 'revoke-1',
+                fromMe: true,
+                remoteJid: '94717467162@s.whatsapp.net',
+              },
+              messageType: 'protocolMessage',
+              message: {
+                protocolMessage: {
+                  type: 0,
+                  key: { id: 'original-message-id' },
+                },
+              },
+              messageTimestamp: 1710000180,
+            },
+          ],
+        },
+      },
+      '94717467162@s.whatsapp.net',
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message_type).toBe('system');
+    expect(result[0].content).toBe('This message was deleted');
+    expect(result[0].media_url).toBeNull();
+  });
 });
 
 describe('parseEvolutionFindChats', () => {

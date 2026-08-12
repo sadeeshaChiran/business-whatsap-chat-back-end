@@ -312,6 +312,44 @@ export class CompanyService {
       existingChannel,
     );
 
+    if (whatsappAccountChanged) {
+      if (updateCompanyDto.delete_previous_whatsapp_chats !== true) {
+        throw new BadRequestException(
+          'Confirm removal of the previous WhatsApp setup and conversations before changing the provider or account.',
+        );
+      }
+
+      whatsappPatch.status = 'DISCONNECTED';
+      if (nextProvider === 'meta') {
+        whatsappPatch.instance_name = `meta-${company.id}`;
+        whatsappPatch.evolution_instance_name = null;
+        whatsappPatch.evaluation_whatsapp_key = null;
+        whatsappPatch.evolution_api_base = null;
+        whatsappPatch.evolution_read_messages = null;
+        whatsappPatch.meta_phone_number_id = updateCompanyDto.meta_phone_number_id?.trim() || null;
+        whatsappPatch.meta_access_token = updateCompanyDto.meta_access_token?.trim() || null;
+        whatsappPatch.meta_waba_id = updateCompanyDto.meta_waba_id?.trim() || null;
+        whatsappPatch.meta_verify_token = updateCompanyDto.meta_verify_token?.trim() || null;
+        whatsappPatch.meta_webhook_base_url =
+          updateCompanyDto.meta_webhook_base_url?.trim().replace(/\/+$/, '') || null;
+        if (whatsappPatch.meta_phone_number_id && whatsappPatch.meta_access_token) {
+          whatsappPatch.status = 'CONNECTED';
+        }
+      } else {
+        whatsappPatch.instance_name =
+          updateCompanyDto.whatsapp_instance_name?.trim() || `company-${company.id}`;
+        whatsappPatch.evolution_instance_name = whatsappPatch.instance_name;
+        whatsappPatch.evaluation_whatsapp_key = null;
+        whatsappPatch.evolution_api_base = updateCompanyDto.evolution_api_base?.trim() || null;
+        whatsappPatch.evolution_read_messages = null;
+        whatsappPatch.meta_phone_number_id = null;
+        whatsappPatch.meta_access_token = null;
+        whatsappPatch.meta_waba_id = null;
+        whatsappPatch.meta_verify_token = null;
+        whatsappPatch.meta_webhook_base_url = null;
+      }
+    }
+
     await this.companyRepository.save(company);
 
     if (Object.keys(whatsappPatch).length > 0) {

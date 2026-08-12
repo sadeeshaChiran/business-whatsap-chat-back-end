@@ -13,7 +13,7 @@ export type AssignmentMode = 'sticky' | 'round_robin' | 'manual' | 'unassigned';
 
 export type InboundWhatsAppMessage = {
   content: string;
-  message_type?: 'text' | 'image' | 'voice';
+  message_type?: 'text' | 'image' | 'voice' | 'system';
   media_url?: string | null;
   source?: string;
   provider_message_id?: string;
@@ -1121,7 +1121,9 @@ export class AgentRoutingService {
         ? 'voice'
         : inbound?.message_type === 'image'
           ? 'image'
-          : 'text';
+          : inbound?.message_type === 'system'
+            ? 'system'
+            : 'text';
 
     await this.messageRepository.save(
       this.messageRepository.create({

@@ -104,7 +104,13 @@ export class WhatsappService {
       normalized.message?.trim()
         ? {
             content: normalized.message.trim(),
-            message_type: normalized.input_type === 'voice' ? 'voice' : normalized.input_type === 'image' ? 'image' : 'text',
+            message_type: normalized.input_type === 'voice'
+              ? 'voice'
+              : normalized.input_type === 'image'
+                ? 'image'
+                : normalized.input_type === 'system'
+                  ? 'system'
+                  : 'text',
             media_url: normalized.meta_media_id?.trim() ? `meta-media:${normalized.meta_media_id.trim()}` : null,
             source: 'customer',
             provider_message_id: normalized.message_id?.trim() || undefined,
@@ -112,7 +118,11 @@ export class WhatsappService {
         : undefined,
     );
 
-    if (normalized.provider === 'meta' && forwardMeta) {
+    if (
+      normalized.provider === 'meta' &&
+      forwardMeta &&
+      normalized.input_type !== 'system'
+    ) {
       void this.forwardMetaInboundToN8nBot(body, {
         companyId: Number(channel.company_id),
         conversationId: routing.conversationId,
@@ -126,7 +136,10 @@ export class WhatsappService {
       provider: normalized.provider,
       normalized,
       agent_routing: routing,
-      n8n_forwarded: normalized.provider === 'meta' && forwardMeta,
+      n8n_forwarded:
+        normalized.provider === 'meta' &&
+        forwardMeta &&
+        normalized.input_type !== 'system',
     };
   }
   /** Meta webhook hits Nest first; forward raw payload to n8n AI workflow. */

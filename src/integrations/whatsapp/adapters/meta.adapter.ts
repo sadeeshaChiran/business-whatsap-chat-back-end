@@ -53,6 +53,10 @@ export class MetaAdapter implements WhatsappServiceInterface {
           const message = rawMessage as Record<string, unknown>;
           const phone = String(message.from ?? '').replace(/\D/g, '');
           const messageType = String(message.type ?? 'text').toLowerCase();
+          const isDeletedMessage =
+            ['deleted', 'revoked', 'revoke'].includes(messageType) ||
+            message.deleted === true ||
+            message.is_deleted === true;
           const messageId = String(message.id ?? '').trim();
           if (!phone) {
             continue;
@@ -61,7 +65,9 @@ export class MetaAdapter implements WhatsappServiceInterface {
           let text = '';
           let hasImage = false;
           let hasVoice = false;
-          if (messageType === 'text') {
+          if (isDeletedMessage) {
+            text = 'This message was deleted';
+          } else if (messageType === 'text') {
             text = String((message.text as Record<string, unknown>)?.body ?? '').trim();
           } else if (messageType === 'image') {
             hasImage = true;
@@ -89,8 +95,14 @@ export class MetaAdapter implements WhatsappServiceInterface {
             message: text,
             message_id: messageId,
             from_me: false,
-            input_type: hasVoice ? 'voice' : hasImage ? 'image' : 'text',
-            message_type: messageType,
+            input_type: isDeletedMessage
+              ? 'system'
+              : hasVoice
+                ? 'voice'
+                : hasImage
+                  ? 'image'
+                  : 'text',
+            message_type: isDeletedMessage ? 'system' : messageType,
             timestamp: Number(message.timestamp ?? Math.floor(Date.now() / 1000)),
             meta_phone_number_id: phoneNumberId,
             has_image: hasImage,
