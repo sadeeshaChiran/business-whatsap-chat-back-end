@@ -559,9 +559,6 @@ export class BotAdminService {
     if (sa === sb) {
       return true;
     }
-    if (sa.length >= 9 && sb.length >= 9) {
-      return sa.endsWith(sb) || sb.endsWith(sa);
-    }
     return false;
   }
 
@@ -1079,6 +1076,7 @@ export class BotAdminService {
       relatedJids.push(jid);
     }
 
+    const allowedJids = new Set(relatedJids.map((value) => value.trim().toLowerCase()));
     const byId = new Map<string, EvolutionInboxMessage>();
     for (const relatedJid of relatedJids) {
       try {
@@ -1088,6 +1086,9 @@ export class BotAdminService {
           apikey,
         );
         for (const message of batch) {
+          if (!allowedJids.has(message.remote_jid.trim().toLowerCase())) {
+            continue;
+          }
           if (!byId.has(message.id)) {
             byId.set(message.id, message);
           }

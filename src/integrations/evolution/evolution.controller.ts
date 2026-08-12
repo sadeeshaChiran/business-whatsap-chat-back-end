@@ -9,6 +9,7 @@ import {
   Get,
 
   Post,
+  Patch,
 
   UseGuards,
 
@@ -33,6 +34,7 @@ import { Company } from '../../company/entities/company.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 
 import { CreateEvolutionInstanceDto } from './dto/create-evolution-instance.dto';
+import { UpdateEvolutionInstanceSettingsDto } from './dto/update-evolution-instance-settings.dto';
 
 import { EvolutionService } from './evolution.service';
 
@@ -125,13 +127,39 @@ export class EvolutionController {
   }
 
   @Get('instance/settings-defaults')
-  getInstanceSettingsDefaults() {
+  async getInstanceSettingsDefaults(@CurrentUser() user: AuthenticatedUser) {
     const defaults = this.evolutionService.getInstanceSettingsDefaults();
+    const channel = await this.whatsappChannelService.getForCompany(user.company_id);
     return {
-      read_messages: defaults.readMessages,
+      read_messages: channel?.evolution_read_messages ?? defaults.readMessages,
       always_online: defaults.alwaysOnline,
       groups_ignore: defaults.groupsIgnore,
     };
+  }
+
+  @Patch('instance/settings')
+  async updateInstanceSettings(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: UpdateEvolutionInstanceSettingsDto,
+  ) {
+    const company = await this.assertAdmin(user);
+    const channel = await this.whatsappChannelService.getForCompany(user.company_id);
+    if (!channel || channel.provider_type === 'meta') {
+      throw new BadRequestException('Evolution instance is not configured for this company.');
+    }
+    const instanceName = channel.evolution_instance_name?.trim() || channel.instance_name?.trim();
+    const apiKey = channel.evaluation_whatsapp_key?.trim() || undefined;
+    if (!instanceName) {
+      throw new BadRequestException('Evolution instance name is missing.');
+    }
+
+    await this.evolutionService.applyInstanceSettings(instanceName, apiKey, {
+      readMessages: body.read_messages,
+    });
+    await this.whatsappChannelService.upsertForCompany(user.company_id, company.name, {
+      evolution_read_messages: body.read_messages,
+    });
+    return { instance: instanceName, read_messages: body.read_messages, settings_applied: true };
   }
 
   @Post('instance')
@@ -177,6 +205,7 @@ export class EvolutionController {
         provider_type: 'evolution',
 
         status: 'CONNECTING',
+        evolution_read_messages: body.read_messages ?? this.evolutionService.getInstanceSettingsDefaults().readMessages,
 
       },
 
@@ -253,6 +282,7 @@ export class EvolutionController {
         evaluation_whatsapp_key: instanceToken,
 
         status: 'CONNECTING',
+        evolution_read_messages: body.read_messages ?? this.evolutionService.getInstanceSettingsDefaults().readMessages,
 
       },
 
@@ -551,7 +581,11 @@ export class EvolutionController {
     let webhookConfigured = false;
     if (status === 'CONNECTED') {
       try {
-        await this.evolutionService.applyInstanceSettings(instanceName, apiKey);
+        await this.evolutionService.applyInstanceSettings(instanceName, apiKey, {
+          readMessages:
+            channel?.evolution_read_messages ??
+            this.evolutionService.getInstanceSettingsDefaults().readMessages,
+        });
         settingsApplied = true;
       } catch {
         settingsApplied = false;
