@@ -1061,6 +1061,8 @@ export class BotAdminService {
     remoteJid: string,
     instance: string,
     apikey: string,
+    page = 1,
+    limit = 150,
   ) {
     const jid = remoteJid.trim();
     let chats: Awaited<ReturnType<EvolutionService['findChats']>> = [];
@@ -1078,13 +1080,17 @@ export class BotAdminService {
 
     const allowedJids = new Set(relatedJids.map((value) => value.trim().toLowerCase()));
     const byId = new Map<string, EvolutionInboxMessage>();
+    let hasMore = false;
     for (const relatedJid of relatedJids) {
       try {
         const batch = await this.evolutionService.findMessages(
           instance,
           relatedJid,
           apikey,
+          limit,
+          page,
         );
+        const batchIds = new Set(batch.map((message) => message.id));
         for (const message of batch) {
           if (!allowedJids.has(message.remote_jid.trim().toLowerCase())) {
             continue;
@@ -1092,6 +1098,21 @@ export class BotAdminService {
           if (!byId.has(message.id)) {
             byId.set(message.id, message);
           }
+        }
+
+        if (!hasMore && batch.length >= limit) {
+          const nextBatch = await this.evolutionService.findMessages(
+            instance,
+            relatedJid,
+            apikey,
+            limit,
+            page + 1,
+          );
+          hasMore = nextBatch.some(
+            (message) =>
+              allowedJids.has(message.remote_jid.trim().toLowerCase()) &&
+              !batchIds.has(message.id),
+          );
         }
       } catch (error) {
         console.error(`Evolution findMessages failed for ${relatedJid}:`, error);
@@ -1109,6 +1130,9 @@ export class BotAdminService {
       remoteJid: this.preferredEvolutionJid(jid, relatedJids, phone),
       phone,
       messages,
+      hasMore,
+      page,
+      limit,
     };
   }
 
@@ -1750,7 +1774,14 @@ export class BotAdminService {
   async getEvolutionInboxMessages(
     user: AuthenticatedUser,
     remoteJid: string,
+    requestedPage = 1,
+    requestedLimit = 30,
   ) {
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+    const limit =
+      Number.isInteger(requestedLimit) && requestedLimit > 0
+        ? Math.min(requestedLimit, 50)
+        : 30;
     await this.assertAdminAccess(user);
     const jid = remoteJid.trim();
     if (!jid) {
@@ -1770,9 +1801,12 @@ export class BotAdminService {
       if (this.isMetaWhatsappChannel(channel)) {
         mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
       }
+      const end = Math.max(0, mergedMessages.length - (page - 1) * limit);
+      const start = Math.max(0, end - limit);
       return {
         remote_jid: jid.endsWith('@s.whatsapp.net') ? jid : `${phone}@s.whatsapp.net`,
-        messages: mergedMessages,
+        messages: mergedMessages.slice(start, end),
+        pagination: { page, limit, has_more: start > 0 },
       };
     }
 
@@ -1786,17 +1820,20 @@ export class BotAdminService {
       throw new BadRequestException('WhatsApp instance API key is missing.');
     }
 
-    const { remoteJid: resolvedJid, messages } =
+    const { remoteJid: resolvedJid, messages, hasMore } =
       await this.fetchEvolutionMessagesForJid(
         user.company_id,
         jid,
         instance,
         apikey,
+        page,
+        limit,
       );
 
     return {
       remote_jid: resolvedJid,
       messages: this.mergeConversationThreadMessages([], messages),
+      pagination: { page, limit, has_more: hasMore },
     };
   }
 
@@ -1896,7 +1933,21 @@ export class BotAdminService {
     return { remote_jid: jid, sent: true, text: trimmed };
   }
 
-  async getConversation(user: AuthenticatedUser, id: number) {
+  async getConversation(
+    user: AuthenticatedUser,
+    id: number,
+    requestedPage?: number,
+    requestedLimit?: number,
+  ) {
+    const paged = requestedPage != null;
+    const page =
+      Number.isInteger(requestedPage) && Number(requestedPage) > 0
+        ? Number(requestedPage)
+        : 1;
+    const limit =
+      Number.isInteger(requestedLimit) && Number(requestedLimit) > 0
+        ? Math.min(Number(requestedLimit), 50)
+        : 30;
     const company = await this.getCompanyForUser(user);
     if (!company) {
       throw new ForbiddenException('Company not found.');
@@ -1942,21 +1993,31 @@ export class BotAdminService {
               `${phone}@s.whatsapp.net`,
               instance,
               apikey,
+              page,
+              paged ? limit : 150,
             )
-          ).messages
-        : [];
+          )
+        : null;
 
     let mergedMessages = this.isMetaWhatsappChannel(channel)
       ? this.mergeConversationThreadMessages(messages, [])
-      : this.mergeConversationThreadMessages([], fetchedEvolution);
+      : this.mergeConversationThreadMessages([], fetchedEvolution?.messages ?? []);
+    let hasMore = fetchedEvolution?.hasMore ?? false;
     if (this.isMetaWhatsappChannel(channel)) {
       mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
+      if (paged) {
+        const end = Math.max(0, mergedMessages.length - (page - 1) * limit);
+        const start = Math.max(0, end - limit);
+        hasMore = start > 0;
+        mergedMessages = mergedMessages.slice(start, end);
+      }
     }
 
     const channelUserId = Number(conversation.bot_channel_user_id || 0);
     return {
       conversation,
       messages: mergedMessages,
+      ...(paged ? { pagination: { page, limit, has_more: hasMore } } : {}),
       labels: await this.listConversationLabels(id, user.company_id),
       customer_orders: await this.getOrdersForChannelUser(
         user.company_id,

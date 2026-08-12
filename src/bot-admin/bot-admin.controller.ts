@@ -93,8 +93,15 @@ export class BotAdminController {
   getEvolutionInboxMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Query('remoteJid') remoteJid: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.botAdminService.getEvolutionInboxMessages(user, remoteJid);
+    return this.botAdminService.getEvolutionInboxMessages(
+      user,
+      remoteJid,
+      Number(page ?? 1),
+      Number(limit ?? 30),
+    );
   }
 
   @Post('conversations/evolution/messages')
@@ -114,8 +121,15 @@ export class BotAdminController {
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.botAdminService.getConversation(user, Number(id));
+    return this.botAdminService.getConversation(
+      user,
+      Number(id),
+      page == null ? undefined : Number(page),
+      limit == null ? undefined : Number(limit),
+    );
   }
 
   @Get('conversations/:conversationId/messages/:messageId/media')

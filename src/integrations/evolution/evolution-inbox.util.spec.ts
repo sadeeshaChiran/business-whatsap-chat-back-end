@@ -116,6 +116,37 @@ describe('parseEvolutionFindMessages', () => {
     expect(result[0].media_url).toBeNull();
   });
 
+  it('normalizes audio messages to a friendly voice label', () => {
+    const result = parseEvolutionFindMessages(
+      {
+        messages: {
+          records: [
+            {
+              key: {
+                id: 'audio-1',
+                fromMe: false,
+                remoteJid: '94717467162@s.whatsapp.net',
+              },
+              messageType: 'audioMessage',
+              message: {
+                audioMessage: {
+                  mimetype: 'audio/ogg; codecs=opus',
+                  ptt: true,
+                },
+              },
+              messageTimestamp: 1710000150,
+            },
+          ],
+        },
+      },
+      '94717467162@s.whatsapp.net',
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message_type).toBe('voice');
+    expect(result[0].content).toBe('Voice message');
+  });
+
   it('renders revoked messages as deleted instead of media placeholders', () => {
     const result = parseEvolutionFindMessages(
       {

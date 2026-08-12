@@ -336,6 +336,17 @@ function extractMessageText(message: Record<string, unknown>): string {
   }
 
   const nested = unwrapMessageContainer(message);
+  const rawType = pickString(message, ['messageType', 'message_type']).toLowerCase();
+  if (
+    rawType.includes('audio') ||
+    rawType.includes('ptt') ||
+    rawType.includes('voice') ||
+    asRecord(nested.audioMessage) != null ||
+    asRecord(nested.pttMessage) != null ||
+    asRecord(nested.voiceMessage) != null
+  ) {
+    return 'Voice message';
+  }
   const direct =
     pickString(nested, [
       'conversation',

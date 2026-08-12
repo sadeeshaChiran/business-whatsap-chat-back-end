@@ -42,11 +42,21 @@ export class CompanyService {
 
   private async deleteCompanyWhatsappConversationHistory(companyId: number) {
     await this.dataSource.transaction(async (manager) => {
-      const conversationIds = `SELECT c.id FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND cu.platform = 'whatsapp'`;
+      const conversationIds = `SELECT c.id FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND LOWER(TRIM(COALESCE(cu.platform, ''))) = 'whatsapp'`;
       await manager.query(`DELETE FROM bot_conversation_label WHERE conversation_id IN (${conversationIds})`, [companyId]);
       await manager.query(`DELETE FROM bot_flag WHERE conversation_id IN (${conversationIds})`, [companyId]);
       await manager.query(`DELETE FROM bot_message WHERE conversation_id IN (${conversationIds})`, [companyId]);
       await manager.query(`DELETE FROM bot_conversation WHERE id IN (${conversationIds})`, [companyId]);
+
+      const remaining = await manager.query(
+        `SELECT COUNT(*)::int AS count FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND LOWER(TRIM(COALESCE(cu.platform, ''))) = 'whatsapp'`,
+        [companyId],
+      );
+      if (Number(remaining?.[0]?.count ?? 0) > 0) {
+        throw new BadRequestException(
+          'WhatsApp provider was not changed because previous Admin/Agent conversations could not be completely removed.',
+        );
+      }
     });
   }
 
@@ -350,14 +360,14 @@ export class CompanyService {
       }
     }
 
+    if (whatsappAccountChanged && updateCompanyDto.delete_previous_whatsapp_chats === true) {
+      await this.deleteCompanyWhatsappConversationHistory(Number(company.id));
+    }
+
     await this.companyRepository.save(company);
 
     if (Object.keys(whatsappPatch).length > 0) {
       await this.upsertWhatsappChannel(Number(company.id), nextCompanyName, whatsappPatch);
-    }
-
-    if (whatsappAccountChanged && updateCompanyDto.delete_previous_whatsapp_chats === true) {
-      await this.deleteCompanyWhatsappConversationHistory(Number(company.id));
     }
 
     const refreshed = await this.reloadCompany(Number(company.id));
