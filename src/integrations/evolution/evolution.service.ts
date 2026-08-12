@@ -117,10 +117,29 @@ export class EvolutionService {
           'Evolution base URL points to the Manager UI (HTML). Please set EVOLUTION_API_BASE to the Evolution API server base URL that supports /instance and /message/sendText.',
         );
       }
-      let message = this.evolutionErrorMessage(json, res.status);
-      if (/already exists|already in use|duplicate/i.test(message)) {
+      const upstreamMessage = this.evolutionErrorMessage(json, res.status);
+      const operation = String(init.method ?? 'GET').toUpperCase() + ' ' + path;
+      let message =
+        'Evolution API request failed (HTTP ' +
+        res.status +
+        ') during ' +
+        operation +
+        ': ' +
+        upstreamMessage;
+      if (res.status === 401 || res.status === 403) {
         message =
-          'An Evolution instance with this name already exists. Choose a different instance name, or delete the old instance in Evolution Manager before trying again.';
+          'Evolution API rejected ' +
+          operation +
+          ' with HTTP ' +
+          res.status +
+          ' (' +
+          upstreamMessage +
+          '). The configured Evolution API key is missing, invalid, expired, or does not have permission for this operation. Check EVOLUTION_API_KEY / EVOLUTION_SECURE_KEY on the API server and the key configured in Evolution Manager.';
+      } else if (/already exists|already in use|duplicate/i.test(upstreamMessage)) {
+        message =
+          'Evolution API rejected ' +
+          operation +
+          ' because this instance name already exists. Choose a different instance name, or delete the old instance in Evolution Manager before trying again.';
       }
       if (res.status === 404 && message === 'Not Found') {
         throw new BadRequestException(
@@ -321,10 +340,11 @@ export class EvolutionService {
     remoteJid: string,
     overrideApiKey?: string,
     limit = 150,
+    page = 1,
   ): Promise<EvolutionInboxMessage[]> {
     const body = {
       where: { key: { remoteJid } },
-      page: 1,
+      page,
       offset: limit,
       limit,
     };
@@ -350,7 +370,7 @@ export class EvolutionService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           where: { remoteJid },
-          page: 1,
+          page,
           limit,
         }),
       },
