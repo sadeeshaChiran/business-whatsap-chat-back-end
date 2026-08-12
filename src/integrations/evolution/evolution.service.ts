@@ -32,6 +32,34 @@ export type EvolutionInstanceSettings = {
 
 @Injectable()
 export class EvolutionService {
+  private evolutionErrorMessage(value: unknown, status: number): string {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    if (Array.isArray(value)) {
+      const parts = value
+        .map((item) => this.evolutionErrorMessage(item, status))
+        .filter(Boolean);
+      return parts.join(', ') || 'Evolution API error (' + status + ')';
+    }
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      for (const key of ['message', 'error', 'details', 'response']) {
+        if (record[key] != null) {
+          const nested = this.evolutionErrorMessage(record[key], status);
+          if (nested && nested !== 'Evolution API error (' + status + ')') {
+            return nested;
+          }
+        }
+      }
+      try {
+        return JSON.stringify(value);
+      } catch {
+        // Fall through to the status-based message.
+      }
+    }
+    return 'Evolution API error (' + status + ')';
+  }
   private getConfig(): EvolutionConfig {
     const rawBase =
       (process.env.EVOLUTION_API_BASE ?? process.env.EVOLUTION_BASE_URL ?? '').trim();
@@ -59,13 +87,20 @@ export class EvolutionService {
     const url = `${cfg.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
     const apikey = (overrideApiKey ?? cfg.apiKey).trim();
 
-    const res = await fetch(url, {
-      ...init,
-      headers: {
-        apikey,
-        ...(init.headers ?? {}),
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: {
+          apikey,
+          ...(init.headers ?? {}),
+        },
+      });
+    } catch {
+      throw new BadRequestException(
+        'Cannot reach Evolution API at ' + cfg.baseUrl + '. Check the Evolution API URL and confirm the Evolution server is running.',
+      );
+    }
 
     const contentType = res.headers.get('content-type') ?? '';
     const text = await res.text();
@@ -82,12 +117,11 @@ export class EvolutionService {
           'Evolution base URL points to the Manager UI (HTML). Please set EVOLUTION_API_BASE to the Evolution API server base URL that supports /instance and /message/sendText.',
         );
       }
-      const message =
-        typeof json === 'string'
-          ? json
-          : json?.message ??
-            json?.error ??
-            `Evolution API error (${res.status})`;
+      let message = this.evolutionErrorMessage(json, res.status);
+      if (/already exists|already in use|duplicate/i.test(message)) {
+        message =
+          'An Evolution instance with this name already exists. Choose a different instance name, or delete the old instance in Evolution Manager before trying again.';
+      }
       if (res.status === 404 && message === 'Not Found') {
         throw new BadRequestException(
           'Evolution API returned 404 for this base URL. EVOLUTION_API_BASE must be the Evolution API server base URL (not just the Manager UI). Ask your Evolution provider for the API base that supports /instance and /message/sendText.',

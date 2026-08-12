@@ -277,7 +277,64 @@ function extractMessageMedia(
   return { mediaUrl: '', caption: '', mediaKind: '' };
 }
 
+function isDeletedEvolutionMessage(message: Record<string, unknown>): boolean {
+  const nested = unwrapMessageContainer(message);
+  const protocol =
+    asRecord(nested.protocolMessage) ?? asRecord(message.protocolMessage);
+  const rawType = pickString(message, ['messageType', 'message_type']).toLowerCase();
+  const protocolType = protocol?.type;
+  const protocolTypeName = String(protocolType ?? '').toLowerCase();
+  if (
+    protocol &&
+    (protocolType === 0 ||
+      protocolTypeName.includes('revoke') ||
+      protocolTypeName.includes('delete'))
+  ) {
+    return true;
+  }
+
+  const stubType = message.messageStubType ?? message.message_stub_type;
+  const stubTypeName = String(stubType ?? '').toLowerCase();
+  if (
+    stubType === 1 ||
+    stubTypeName.includes('revoke') ||
+    stubTypeName.includes('delete') ||
+    rawType.includes('revoke') ||
+    rawType.includes('deleted')
+  ) {
+    return true;
+  }
+
+  if (
+    message.deleted === true ||
+    message.isDeleted === true ||
+    message.is_deleted === true
+  ) {
+    return true;
+  }
+
+  if (rawType === 'protocolmessage' && (!protocol || protocolType == null)) {
+    return true;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(message, 'message') &&
+    (message.message == null ||
+      (asRecord(message.message) != null &&
+        Object.keys(asRecord(message.message) ?? {}).length === 0 &&
+        !rawType))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function extractMessageText(message: Record<string, unknown>): string {
+  if (isDeletedEvolutionMessage(message)) {
+    return 'This message was deleted';
+  }
+
   const nested = unwrapMessageContainer(message);
   const direct =
     pickString(nested, [
@@ -443,7 +500,7 @@ export function parseEvolutionFindChats(payload: unknown): EvolutionInboxChat[] 
 
 export function parseEvolutionFindMessages(
   payload: unknown,
-  fallbackJid: string,
+  _fallbackJid: string,
 ): EvolutionInboxMessage[] {
   const list = extractMessageRecords(payload);
 
@@ -456,8 +513,10 @@ export function parseEvolutionFindMessages(
     const key = asRecord(record.key) ?? {};
     const remoteJidRaw =
       pickString(key, ['remoteJid', 'remote_jid']) ||
-      pickString(record, ['remoteJid', 'remote_jid']) ||
-      fallbackJid;
+      pickString(record, ['remoteJid', 'remote_jid']);
+    if (!remoteJidRaw) {
+      continue;
+    }
     const remoteJidAlt = pickAlternateJid(record, { key });
     const remoteJid =
       remoteJidRaw.endsWith('@lid') && remoteJidAlt && isPhoneJid(remoteJidAlt)
@@ -480,18 +539,20 @@ export function parseEvolutionFindMessages(
       extractTimestamp(record.message_timestamp) ??
       extractTimestamp(record.created_at) ??
       new Date().toISOString();
+    const deleted = isDeletedEvolutionMessage(record);
     const media = extractMessageMedia(record);
-    let content = media.caption || extractMessageText(record);
+    let content = deleted
+      ? 'This message was deleted'
+      : media.caption || extractMessageText(record);
     const rawType = pickString(record, ['messageType', 'message_type']);
-    const mediaUrl = isBrowserDisplayableImageUrl(media.mediaUrl)
-      ? media.mediaUrl
-      : '';
-    const messageType = mapEvolutionMessageType(
-      rawType,
-      content,
-      media.mediaKind,
-      mediaUrl,
-    );
+    const mediaUrl = deleted
+      ? ''
+      : isBrowserDisplayableImageUrl(media.mediaUrl)
+        ? media.mediaUrl
+        : '';
+    const messageType = deleted
+      ? 'system'
+      : mapEvolutionMessageType(rawType, content, media.mediaKind, mediaUrl);
     if (messageType === 'image' && isMediaTypePlaceholder(content)) {
       content = '[image]';
     }

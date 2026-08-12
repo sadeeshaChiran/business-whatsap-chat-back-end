@@ -37,3 +37,32 @@ describe('WhatsApp inbound adapter batches', () => {
     expect(result.map((item) => item.phone)).toEqual(['94750000001', '94750000002']);
   });
 });
+
+describe('Meta deleted messages', () => {
+  it('normalizes explicit deleted events as system messages', () => {
+    const adapter = new MetaAdapter();
+    const result = adapter.normalizeInboundWebhooks({
+      object: 'whatsapp_business_account',
+      entry: [{ changes: [{ value: {
+        metadata: { phone_number_id: '123456789012' },
+        messages: [
+          {
+            id: 'wamid.deleted.1',
+            from: '94750000001',
+            type: 'deleted',
+            timestamp: '1700000002',
+          },
+        ],
+      } }] }],
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      message: 'This message was deleted',
+      input_type: 'system',
+      message_type: 'system',
+      has_image: false,
+      has_voice: false,
+    });
+  });
+});

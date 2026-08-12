@@ -175,6 +175,19 @@ export class EvolutionController {
     const company = await this.assertAdmin(user);
 
     const instanceName = body.whatsapp_instance_name.trim();
+    const existingChannel = await this.whatsappChannelService.getForCompany(user.company_id);
+    const savedInstance =
+      existingChannel?.evolution_instance_name?.trim() ||
+      existingChannel?.instance_name?.trim() ||
+      '';
+    if (
+      existingChannel &&
+      (existingChannel.provider_type !== 'evolution' || savedInstance !== instanceName)
+    ) {
+      throw new BadRequestException(
+        'Save and confirm the WhatsApp account reset before creating a different Evolution instance.',
+      );
+    }
 
     const phoneDigits = this.resolveCompanyPhone(company);
 
