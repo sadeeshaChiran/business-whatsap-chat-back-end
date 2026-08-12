@@ -91,9 +91,6 @@ function phoneKeysEquivalent(left: string, right: string): boolean {
   if (sa === sb) {
     return true;
   }
-  if (sa.length >= 9 && sb.length >= 9) {
-    return sa.endsWith(sb) || sb.endsWith(sa);
-  }
   return false;
 }
 

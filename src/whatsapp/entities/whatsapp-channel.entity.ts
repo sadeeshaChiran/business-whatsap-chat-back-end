@@ -56,5 +56,8 @@ export class WhatsappChannel {
 
   @Column({ type: 'text', nullable: true })
   meta_webhook_base_url: string | null;
+
+  @Column({ type: 'boolean', nullable: true })
+  evolution_read_messages: boolean | null;
 }
 

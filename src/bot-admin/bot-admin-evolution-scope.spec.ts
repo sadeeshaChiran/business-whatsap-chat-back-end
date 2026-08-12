@@ -42,4 +42,27 @@ describe('BotAdminService Evolution conversation scope', () => {
     expect(service.evolutionService.findChats).toHaveBeenCalledWith('current-instance', 'instance-key');
     expect(result.map((item: any) => item.customer.customer_phone)).toEqual(['94750000001']);
   });
+  it('rejects messages for a different JID even if Evolution returns them', async () => {
+    const service = Object.create(BotAdminService.prototype) as any;
+    service.evolutionService = {
+      findChats: jest.fn().mockResolvedValue([
+        { remote_jid: '94750000001@s.whatsapp.net', alternate_jid: null, phone: '94750000001' },
+        { remote_jid: '94750000002@s.whatsapp.net', alternate_jid: null, phone: '94750000002' },
+      ]),
+      findMessages: jest.fn().mockResolvedValue([
+        { id: 'wanted', remote_jid: '94750000001@s.whatsapp.net', direction: 'inbound', message_type: 'text', content: 'Correct chat', media_url: null, created_at: '2026-08-10T00:00:00.000Z' },
+        { id: 'foreign', remote_jid: '94750000002@s.whatsapp.net', direction: 'inbound', message_type: 'text', content: 'Wrong user chat', media_url: null, created_at: '2026-08-10T00:00:01.000Z' },
+      ]),
+    };
+    service.enrichEvolutionImageMessages = jest.fn(async (_instance: string, _key: string, messages: unknown[]) => messages);
+
+    const result = await service.fetchEvolutionMessagesForJid(
+      7,
+      '94750000001@s.whatsapp.net',
+      'current-instance',
+      'instance-key',
+    );
+
+    expect(result.messages.map((message: any) => message.id)).toEqual(['wanted']);
+  });
 });
