@@ -154,7 +154,7 @@ export class CompanyService {
           : (channel?.instance_name ?? null),
       whatsapp_evaluation_key: channel?.evaluation_whatsapp_key ?? null,
       whatsapp_status: channel?.status ?? null,
-      whatsapp_provider_type: channel?.provider_type ?? 'evolution',
+      whatsapp_provider_type: channel?.provider_type ?? 'meta',
       meta_phone_number_id: channel?.meta_phone_number_id ?? null,
       meta_waba_id: channel?.meta_waba_id ?? null,
       meta_verify_token: channel?.meta_verify_token ?? null,
@@ -309,7 +309,7 @@ export class CompanyService {
     const existingChannel = await this.whatsappChannelService.getForCompany(
       Number(company.id),
     );
-    const previousProvider = existingChannel?.provider_type ?? 'evolution';
+    const previousProvider = existingChannel?.provider_type ?? 'meta';
     const nextProvider = updateCompanyDto.whatsapp_provider_type ?? previousProvider;
     const whatsappAccountChanged =
       nextProvider !== previousProvider ||

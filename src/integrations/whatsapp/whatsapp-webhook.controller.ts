@@ -65,7 +65,7 @@ export class WhatsappWebhookController {
         ? await this.whatsappService.resolveMetaDisplayPhoneNumber(channel)
         : null;
     return {
-      provider_type: channel?.provider_type ?? 'evolution',
+      provider_type: channel?.provider_type ?? 'meta',
       meta_webhook_base_url: channel?.meta_webhook_base_url ?? null,
       ...webhooks,
       meta_phone_number_id: channel?.meta_phone_number_id ?? null,
