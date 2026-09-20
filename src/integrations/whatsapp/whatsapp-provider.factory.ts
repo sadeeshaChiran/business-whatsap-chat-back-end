@@ -4,6 +4,7 @@ import type {
   WhatsappProviderType,
   WhatsappServiceInterface,
 } from './interfaces/whatsapp-service.interface';
+// Evolution remains available for legacy webhook/runtime support, but is disabled as a selectable provider.
 import { EvolutionAdapter } from './adapters/evolution.adapter';
 import { MetaAdapter } from './adapters/meta.adapter';
 
@@ -15,11 +16,13 @@ export class WhatsappProviderFactory {
   ) {}
 
   getAdapter(provider: WhatsappProviderType): WhatsappServiceInterface {
-    return provider === 'meta' ? this.metaAdapter : this.evolutionAdapter;
+    // Evolution provider selection is intentionally disabled; Meta is the only active provider.
+    // return provider === 'meta' ? this.metaAdapter : this.evolutionAdapter;
+    return this.metaAdapter;
   }
 
   getAdapterForChannel(channel: WhatsappChannel): WhatsappServiceInterface {
-    const provider = (channel.provider_type ?? 'evolution') as WhatsappProviderType;
+    const provider = (channel.provider_type ?? 'meta') as WhatsappProviderType;
     return this.getAdapter(provider);
   }
 
@@ -29,14 +32,15 @@ export class WhatsappProviderFactory {
     if (payload.object === 'whatsapp_business_account') {
       return 'meta';
     }
-    if (
-      payload.instance ||
-      payload.data ||
-      payload.message ||
-      (payload.key as Record<string, unknown>)?.remoteJid
-    ) {
-      return 'evolution';
-    }
+    // Evolution webhook detection is disabled while Meta Cloud API is the only active provider.
+    // if (
+    //   payload.instance ||
+    //   payload.data ||
+    //   payload.message ||
+    //   (payload.key as Record<string, unknown>)?.remoteJid
+    // ) {
+    //   return 'evolution';
+    // }
     return null;
   }
 

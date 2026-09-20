@@ -3,6 +3,7 @@ import {
   IsBoolean,
   IsEmail,
   IsInt,
+  IsIn,
   IsOptional,
   IsString,
   MaxLength,
@@ -79,6 +80,7 @@ export class UpdateCompanyDto extends PartialType(
   })
   @IsOptional()
   @IsString()
+  @IsIn(['meta'])
   @MaxLength(20)
   whatsapp_provider_type?: 'evolution' | 'meta';
 

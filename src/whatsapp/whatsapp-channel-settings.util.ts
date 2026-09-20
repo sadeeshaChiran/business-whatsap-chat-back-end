@@ -17,13 +17,14 @@ function slugifyInstanceName(value: string): string {
   );
 }
 
-function defaultEvolutionInstanceName(
-  companyId: number,
-  companyName: string,
-): string {
-  const slug = slugifyInstanceName(companyName);
-  return `${slug}-${companyId}`;
-}
+// Legacy Evolution instance naming is retained for restoration, but is disabled for Meta-only settings.
+// function defaultEvolutionInstanceName(
+//   companyId: number,
+//   companyName: string,
+// ): string {
+//   const slug = slugifyInstanceName(companyName);
+//   return `${slug}-${companyId}`;
+// }
 
 /** Build whatsapp_channels patch from Settings save — one active provider at a time. */
 export function buildWhatsappChannelPatch(
@@ -59,10 +60,11 @@ export function buildWhatsappChannelPatch(
     whatsappPatch.meta_verify_token =
       updateCompanyDto.meta_verify_token.trim() || null;
   }
-  if (updateCompanyDto.evolution_api_base !== undefined) {
-    whatsappPatch.evolution_api_base =
-      updateCompanyDto.evolution_api_base.trim() || null;
-  }
+  // Evolution API base configuration is intentionally disabled.
+  // if (updateCompanyDto.evolution_api_base !== undefined) {
+  //   whatsappPatch.evolution_api_base =
+  //     updateCompanyDto.evolution_api_base.trim() || null;
+  // }
   if (updateCompanyDto.meta_webhook_base_url !== undefined) {
     whatsappPatch.meta_webhook_base_url =
       updateCompanyDto.meta_webhook_base_url.trim().replace(/\/+$/, '') || null;
@@ -71,7 +73,7 @@ export function buildWhatsappChannelPatch(
   const nextProvider =
     updateCompanyDto.whatsapp_provider_type ??
     existingChannel?.provider_type ??
-    'evolution';
+    'meta';
 
   if (nextProvider === 'meta') {
     whatsappPatch.provider_type = 'meta';
@@ -91,64 +93,34 @@ export function buildWhatsappChannelPatch(
 
     const explicitInstance = updateCompanyDto.whatsapp_instance_name?.trim() || '';
     const existingInstance = existingChannel?.instance_name?.trim() || '';
-    const rawEvolutionAlias =
-      existingChannel?.evolution_instance_name?.trim() || '';
-    const existingEvolutionAlias =
-      rawEvolutionAlias &&
-      rawEvolutionAlias !== metaPhoneNumberId &&
-      !looksLikeMetaPhoneNumberId(rawEvolutionAlias)
-        ? rawEvolutionAlias
-        : '';
-
-    let evolutionAlias =
-      explicitInstance ||
-      existingEvolutionAlias ||
-      (existingInstance &&
-      existingInstance !== metaPhoneNumberId &&
-      !looksLikeMetaPhoneNumberId(existingInstance)
-        ? existingInstance
-        : '');
-
-    if (!evolutionAlias) {
-      evolutionAlias = defaultEvolutionInstanceName(companyId, companyName);
-    }
-
-    whatsappPatch.evolution_instance_name = evolutionAlias;
-
-    if (
-      explicitInstance &&
-      !looksLikeMetaPhoneNumberId(explicitInstance) &&
-      explicitInstance !== metaPhoneNumberId
-    ) {
-      whatsappPatch.instance_name = explicitInstance;
-    } else if (
-      existingInstance &&
-      !looksLikeMetaPhoneNumberId(existingInstance) &&
-      existingInstance !== metaPhoneNumberId
-    ) {
-      whatsappPatch.instance_name = existingInstance;
-    } else {
-      whatsappPatch.instance_name = evolutionAlias;
-    }
+    // Evolution alias preservation is intentionally disabled for Meta-only settings.
+    // const rawEvolutionAlias = existingChannel?.evolution_instance_name?.trim() || '';
+    // const existingEvolutionAlias =
+    //   rawEvolutionAlias && rawEvolutionAlias !== metaPhoneNumberId &&
+    //   !looksLikeMetaPhoneNumberId(rawEvolutionAlias) ? rawEvolutionAlias : '';
+    // const evolutionAlias = explicitInstance || existingEvolutionAlias ||
+    //   (existingInstance && existingInstance !== metaPhoneNumberId &&
+    //   !looksLikeMetaPhoneNumberId(existingInstance) ? existingInstance : '');
+    // whatsappPatch.evolution_instance_name = evolutionAlias ||
+    //   defaultEvolutionInstanceName(companyId, companyName);
+    whatsappPatch.instance_name = metaPhoneNumberId || existingInstance || `meta-${companyId}`;
 
     if (metaPhoneNumberId && metaAccessToken) {
       whatsappPatch.status = 'CONNECTED';
     } else if (updateCompanyDto.whatsapp_provider_type === 'meta') {
       whatsappPatch.status = 'DISCONNECTED';
     }
-  } else if (updateCompanyDto.whatsapp_provider_type === 'evolution') {
-    whatsappPatch.provider_type = 'evolution';
-
-    const evolutionInstance =
-      whatsappPatch.instance_name?.trim() ||
-      existingChannel?.instance_name?.trim() ||
-      '';
-    if (evolutionInstance && !looksLikeMetaPhoneNumberId(evolutionInstance)) {
-      whatsappPatch.instance_name = evolutionInstance;
-      whatsappPatch.evolution_instance_name = evolutionInstance;
-      whatsappPatch.status =
-        existingChannel?.status === 'CONNECTED' ? 'CONNECTED' : 'DISCONNECTED';
-    }
+  // Legacy Evolution settings branch retained for restoration.
+  // } else if (updateCompanyDto.whatsapp_provider_type === 'evolution') {
+  //   whatsappPatch.provider_type = 'evolution';
+  //   const evolutionInstance = whatsappPatch.instance_name?.trim() ||
+  //     existingChannel?.instance_name?.trim() || '';
+  //   if (evolutionInstance && !looksLikeMetaPhoneNumberId(evolutionInstance)) {
+  //     whatsappPatch.instance_name = evolutionInstance;
+  //     whatsappPatch.evolution_instance_name = evolutionInstance;
+  //     whatsappPatch.status = existingChannel?.status === 'CONNECTED'
+  //       ? 'CONNECTED' : 'DISCONNECTED';
+  //   }
   }
 
   if (updateCompanyDto.name !== undefined) {
