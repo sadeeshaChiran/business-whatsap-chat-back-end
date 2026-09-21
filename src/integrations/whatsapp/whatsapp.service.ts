@@ -100,7 +100,7 @@ export class WhatsappService {
     const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(
       Number(channel.company_id),
       normalized.phone,
-      undefined,
+      normalized.display_name,
       normalized.message?.trim()
         ? {
             content: normalized.message.trim(),

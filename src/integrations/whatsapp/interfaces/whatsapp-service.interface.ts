@@ -6,6 +6,7 @@ export type NormalizedWhatsAppInbound = {
   provider: WhatsappProviderType;
   routing_key: string;
   phone: string;
+  display_name?: string;
   remote_jid: string;
   message: string;
   message_id: string;

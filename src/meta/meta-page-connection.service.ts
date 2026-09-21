@@ -26,7 +26,7 @@ export class MetaPageConnectionService {
   async getForCompany(companyId: number): Promise<MetaPageConnection | null> {
     return this.connectionRepository.findOne({
       where: { company_id: companyId, status: 'CONNECTED' },
-      order: { id: 'DESC' },
+      order: { updated_at: 'DESC', id: 'DESC' },
     });
   }
 

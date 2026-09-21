@@ -25,6 +25,7 @@ describe('WhatsApp inbound adapter batches', () => {
       object: 'whatsapp_business_account',
       entry: [{ changes: [{ value: {
         metadata: { phone_number_id: '123456789012' },
+        contacts: [{ wa_id: '94750000001', profile: { name: 'Saved Customer One' } }, { wa_id: '94750000002', profile: { name: 'Saved Customer Two' } }],
         messages: [
           { id: 'wamid.1', from: '94750000001', type: 'text', text: { body: 'First' }, timestamp: '1700000000' },
           { id: 'wamid.2', from: '94750000002', type: 'text', text: { body: 'Second' }, timestamp: '1700000001' },
@@ -35,6 +36,7 @@ describe('WhatsApp inbound adapter batches', () => {
     expect(result).toHaveLength(2);
     expect(result.map((item) => item.message_id)).toEqual(['wamid.1', 'wamid.2']);
     expect(result.map((item) => item.phone)).toEqual(['94750000001', '94750000002']);
+    expect(result.map((item) => item.display_name)).toEqual(['Saved Customer One', 'Saved Customer Two']);
   });
 });
 
