@@ -22,6 +22,8 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { BotAdminService } from './bot-admin.service';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
+import { CreateContactDto } from './dto/create-contact.dto';
+import { UpdateContactDto } from './dto/update-contact.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
@@ -55,6 +57,20 @@ export class BotAdminController {
     return this.botAdminService.getUsers(user, query);
   }
 
+  @Post('contacts')
+  createContact(@CurrentUser() user: AuthenticatedUser, @Body() payload: CreateContactDto) {
+    return this.botAdminService.createContact(user, payload);
+  }
+
+  @Patch('contacts/:id')
+  updateContact(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() payload: UpdateContactDto) {
+    return this.botAdminService.updateContact(user, id, payload);
+  }
+
+  @Delete('contacts/:id')
+  deleteContact(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.botAdminService.deleteContact(user, id);
+  }
   @Post('user/:id/toggle')
   toggleUser(
     @CurrentUser() user: AuthenticatedUser,

@@ -12,6 +12,8 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { Company } from '../company/entities/company.entity';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
+import { CreateContactDto } from './dto/create-contact.dto';
+import { UpdateContactDto } from './dto/update-contact.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
@@ -1261,6 +1263,52 @@ export class BotAdminService {
     };
   }
 
+  async createContact(user: AuthenticatedUser, payload: CreateContactDto) {
+    await this.assertAdminAccess(user);
+    const phone = this.normalizePhoneKey(payload.phone);
+    const displayName = payload.display_name.trim();
+    if (!phone || !displayName) throw new BadRequestException('Name and phone are required.');
+    const existing = await this.channelUserRepository.find({
+      where: { company_id: user.company_id, platform: 'whatsapp' },
+    });
+    if (this.findChannelUserForPhone(existing, phone)) {
+      throw new BadRequestException('This WhatsApp contact already exists.');
+    }
+    const contact = await this.channelUserRepository.save(this.channelUserRepository.create({
+      company_id: user.company_id,
+      platform: 'whatsapp',
+      external_user_id: phone,
+      display_name: displayName,
+      bot_enabled: false,
+      manual_mode: false,
+    }));
+    return { id: contact.id, display_name: contact.display_name, external_user_id: contact.external_user_id };
+  }
+
+  async updateContact(user: AuthenticatedUser, id: number, payload: UpdateContactDto) {
+    await this.assertAdminAccess(user);
+    const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
+    if (!contact) throw new NotFoundException('Contact not found.');
+    const displayName = payload.display_name.trim();
+    if (!displayName) throw new BadRequestException('Name is required.');
+    contact.display_name = displayName;
+    await this.channelUserRepository.save(contact);
+    return { id: contact.id, display_name: contact.display_name };
+  }
+
+  async deleteContact(user: AuthenticatedUser, id: number) {
+    await this.assertAdminAccess(user);
+    const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
+    if (!contact) throw new NotFoundException('Contact not found.');
+    const hasConversation = await this.conversationRepository.exist({ where: { bot_channel_user_id: id } });
+    if (hasConversation) throw new BadRequestException('This contact has chat history and cannot be deleted.');
+    const hasCustomer = contact.platform === 'whatsapp' && await this.customerRepository.exist({
+      where: { company_id: user.company_id, customer_phone: contact.external_user_id },
+    });
+    if (hasCustomer) throw new BadRequestException('This contact is linked to a customer record and cannot be deleted.');
+    await this.channelUserRepository.remove(contact);
+    return { id, removed: true };
+  }
   private findChannelUserForPhone(
     channelUsers: BotChannelUser[],
     phone: string,
