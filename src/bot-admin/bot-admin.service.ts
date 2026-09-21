@@ -1302,6 +1302,11 @@ export class BotAdminService {
     if (!contact) throw new NotFoundException('Contact not found.');
     const hasConversation = await this.conversationRepository.exist({ where: { bot_channel_user_id: id } });
     if (hasConversation) throw new BadRequestException('This contact has chat history and cannot be deleted.');
+    const [hasOrder, hasNote] = await Promise.all([
+      this.orderRepository.exist({ where: { bot_channel_user_id: id, company_id: user.company_id } }),
+      this.customerNoteRepository.exist({ where: { bot_channel_user_id: id, company_id: user.company_id } }),
+    ]);
+    if (hasOrder || hasNote) throw new BadRequestException('This contact has orders or notes and cannot be deleted.');
     const hasCustomer = contact.platform === 'whatsapp' && await this.customerRepository.exist({
       where: { company_id: user.company_id, customer_phone: contact.external_user_id },
     });
