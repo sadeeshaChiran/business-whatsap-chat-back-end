@@ -29,6 +29,9 @@ export class BotChannelUser {
   @Column({ type: 'varchar', length: 255 })
   external_user_id: string;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  source_account_id: string | null;
+
   @Column({ type: 'varchar', length: 255, default: '' })
   display_name: string;
 

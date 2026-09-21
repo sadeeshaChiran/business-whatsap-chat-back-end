@@ -9,6 +9,10 @@ import { MetaPageConnectionService } from '../../meta/meta-page-connection.servi
 import { MetaController } from './meta.controller';
 import { MetaGraphService } from './meta-graph.service';
 import { MetaOAuthController } from './meta-oauth.controller';
+import { MetaMessagesController } from './meta-messages.controller';
+import { BotChannelUser } from '../../bot-admin/entities/bot-channel-user.entity';
+import { BotConversation } from '../../bot-admin/entities/bot-conversation.entity';
+import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 
 @Module({
   imports: [
@@ -16,11 +20,14 @@ import { MetaOAuthController } from './meta-oauth.controller';
       Company,
       MetaPageConnection,
       MetaOauthPending,
+      BotChannelUser,
+      BotConversation,
+      BotMessage,
     ]),
     AuthModule,
     CompanyModule,
   ],
-  controllers: [MetaController, MetaOAuthController],
+  controllers: [MetaController, MetaOAuthController, MetaMessagesController],
   providers: [MetaGraphService, MetaPageConnectionService],
   exports: [MetaPageConnectionService, MetaGraphService],
 })

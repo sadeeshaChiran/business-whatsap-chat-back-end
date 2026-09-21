@@ -26,6 +26,13 @@ type GraphErrorBody = {
 
 @Injectable()
 export class MetaGraphService {
+  async fetchMessagingProfile(senderId: string, pageAccessToken: string, platform: 'messenger' | 'instagram'): Promise<{ name?: string; username?: string }> {
+    return this.graphGet<{ name?: string; username?: string }>(
+      '/'+encodeURIComponent(senderId), pageAccessToken,
+      { fields: platform === 'instagram' ? 'username' : 'name' },
+    );
+  }
+
   getConfig(): MetaGraphConfig {
     const appId = process.env.META_APP_ID?.trim() ?? '';
     const appSecret = process.env.META_APP_SECRET?.trim() ?? '';
@@ -34,7 +41,7 @@ export class MetaGraphService {
       process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
     const scopes =
       process.env.META_OAUTH_SCOPES?.trim() ||
-      'pages_show_list,pages_read_engagement,instagram_business_basic';
+      'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,instagram_basic,instagram_manage_messages';
     const configId = process.env.META_OAUTH_CONFIG_ID?.trim() ?? '';
 
     if (!appId || !appSecret || !redirectUri) {
@@ -68,7 +75,7 @@ export class MetaGraphService {
   frontendSuccessRedirect(query = ''): string {
     const base =
       process.env.META_OAUTH_SUCCESS_REDIRECT?.trim() ||
-      'http://localhost:5173/settings';
+      'http://localhost:5173/channels/messenger';
     return query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base;
   }
 

@@ -983,7 +983,7 @@ export class AgentRoutingService {
       );
     } else {
       channelUser.last_seen_at = new Date();
-      if (displayName?.trim() && !channelUser.display_name?.trim()) {
+      if (displayName?.trim() && (!channelUser.display_name?.trim() || channelUser.display_name === normalizedPhone)) {
         channelUser.display_name = displayName.trim();
       }
       await this.channelUserRepository.save(channelUser);

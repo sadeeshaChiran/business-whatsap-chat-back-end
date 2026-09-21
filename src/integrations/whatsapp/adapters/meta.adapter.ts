@@ -52,6 +52,10 @@ export class MetaAdapter implements WhatsappServiceInterface {
           }
           const message = rawMessage as Record<string, unknown>;
           const phone = String(message.from ?? '').replace(/\D/g, '');
+          const contacts = Array.isArray(value.contacts) ? value.contacts as Array<Record<string, unknown>> : [];
+          const contact = contacts.find((item) => String(item.wa_id ?? '').replace(/\D/g, '') === phone);
+          const profile = (contact?.profile as Record<string, unknown> | undefined) ?? {};
+          const displayName = String(profile.name ?? '').trim();
           const messageType = String(message.type ?? 'text').toLowerCase();
           const isDeletedMessage =
             ['deleted', 'revoked', 'revoke'].includes(messageType) ||
@@ -91,6 +95,7 @@ export class MetaAdapter implements WhatsappServiceInterface {
             provider: 'meta',
             routing_key: phoneNumberId,
             phone,
+            display_name: displayName || undefined,
             remote_jid: `${phone}@s.whatsapp.net`,
             message: text,
             message_id: messageId,

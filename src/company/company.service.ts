@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -31,33 +31,12 @@ export class CompanyService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly whatsappChannelService: WhatsappChannelService,
-    private readonly dataSource: DataSource,
   ) {}
 
   private whatsappAccountIdentity(provider: 'evolution' | 'meta', channel: WhatsappChannel | null, update?: UpdateCompanyDto): string {
     return provider === 'meta'
       ? (update?.meta_phone_number_id ?? channel?.meta_phone_number_id ?? '').trim()
       : (update?.whatsapp_instance_name ?? channel?.evolution_instance_name ?? channel?.instance_name ?? '').trim();
-  }
-
-  private async deleteCompanyWhatsappConversationHistory(companyId: number) {
-    await this.dataSource.transaction(async (manager) => {
-      const conversationIds = `SELECT c.id FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND LOWER(TRIM(COALESCE(cu.platform, ''))) = 'whatsapp'`;
-      await manager.query(`DELETE FROM bot_conversation_label WHERE conversation_id IN (${conversationIds})`, [companyId]);
-      await manager.query(`DELETE FROM bot_flag WHERE conversation_id IN (${conversationIds})`, [companyId]);
-      await manager.query(`DELETE FROM bot_message WHERE conversation_id IN (${conversationIds})`, [companyId]);
-      await manager.query(`DELETE FROM bot_conversation WHERE id IN (${conversationIds})`, [companyId]);
-
-      const remaining = await manager.query(
-        `SELECT COUNT(*)::int AS count FROM bot_conversation c INNER JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1 AND LOWER(TRIM(COALESCE(cu.platform, ''))) = 'whatsapp'`,
-        [companyId],
-      );
-      if (Number(remaining?.[0]?.count ?? 0) > 0) {
-        throw new BadRequestException(
-          'WhatsApp provider was not changed because previous Admin/Agent conversations could not be completely removed.',
-        );
-      }
-    });
   }
 
   private async getIndustryOrFail(id: number): Promise<Industry> {
@@ -323,9 +302,12 @@ export class CompanyService {
     );
 
     if (whatsappAccountChanged) {
-      if (updateCompanyDto.delete_previous_whatsapp_chats !== true) {
+      if (existingChannel?.status === 'CONNECTED' && previousProvider !== nextProvider) {
+        throw new BadRequestException('This workspace supports one WhatsApp account. Switching providers would mix existing chats; the current account and history were kept.');
+      }
+      if (existingChannel?.meta_phone_number_id && existingChannel.meta_phone_number_id !== updateCompanyDto.meta_phone_number_id?.trim()) {
         throw new BadRequestException(
-          'Confirm removal of the previous WhatsApp setup and conversations before changing the provider or account.',
+          'A different WhatsApp number cannot replace the connected number in this workspace. Existing chats and contacts were kept.',
         );
       }
 
@@ -358,10 +340,6 @@ export class CompanyService {
         whatsappPatch.meta_verify_token = null;
         whatsappPatch.meta_webhook_base_url = null;
       }
-    }
-
-    if (whatsappAccountChanged && updateCompanyDto.delete_previous_whatsapp_chats === true) {
-      await this.deleteCompanyWhatsappConversationHistory(Number(company.id));
     }
 
     await this.companyRepository.save(company);

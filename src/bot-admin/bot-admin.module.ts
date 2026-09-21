@@ -20,6 +20,7 @@ import { BotOrder } from './entities/bot-order.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity';
 import { EvolutionModule } from '../integrations/evolution/evolution.module';
 import { AgentRoutingModule } from '../agent-routing/agent-routing.module';
 import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.module';
@@ -32,6 +33,7 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
       Company,
       SupabaseCustomer,
       WhatsappChannel,
+      MetaPageConnection,
       BotChannelUser,
       BotConversation,
       BotConversationLabel,

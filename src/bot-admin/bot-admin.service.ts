@@ -12,6 +12,8 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { Company } from '../company/entities/company.entity';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
+import { CreateContactDto } from './dto/create-contact.dto';
+import { UpdateContactDto } from './dto/update-contact.dto';
 import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
@@ -29,6 +31,7 @@ import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotTrainingData } from './entities/bot-training-data.entity';
 import { SupabaseCustomer } from '../supabase/entities/supabase-customer.entity';
 import { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity';
 import { EvolutionService } from '../integrations/evolution/evolution.service';
 import {
   isBrowserDisplayableImageUrl,
@@ -102,6 +105,8 @@ export class BotAdminService {
     private readonly orderStatusTemplateRepository: Repository<BotOrderStatusTemplate>,
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
+    @InjectRepository(MetaPageConnection)
+    private readonly metaPageConnectionRepository: Repository<MetaPageConnection>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly evolutionService: EvolutionService,
@@ -1168,7 +1173,9 @@ export class BotAdminService {
         continue;
       }
 
-      const existingIndex = merged.findIndex((item) => this.rowMatchesPhone(item, phone));
+      const existingIndex = merged.findIndex((item) =>
+        item.channelUser?.platform === row.channelUser?.platform && this.rowMatchesPhone(item, phone),
+      );
 
       if (existingIndex < 0) {
         merged.push(row);
@@ -1256,6 +1263,57 @@ export class BotAdminService {
     };
   }
 
+  async createContact(user: AuthenticatedUser, payload: CreateContactDto) {
+    await this.assertAdminAccess(user);
+    const phone = this.normalizePhoneKey(payload.phone);
+    const displayName = payload.display_name.trim();
+    if (!phone || !displayName) throw new BadRequestException('Name and phone are required.');
+    const existing = await this.channelUserRepository.find({
+      where: { company_id: user.company_id, platform: 'whatsapp' },
+    });
+    if (this.findChannelUserForPhone(existing, phone)) {
+      throw new BadRequestException('This WhatsApp contact already exists.');
+    }
+    const contact = await this.channelUserRepository.save(this.channelUserRepository.create({
+      company_id: user.company_id,
+      platform: 'whatsapp',
+      external_user_id: phone,
+      display_name: displayName,
+      bot_enabled: false,
+      manual_mode: false,
+    }));
+    return { id: contact.id, display_name: contact.display_name, external_user_id: contact.external_user_id };
+  }
+
+  async updateContact(user: AuthenticatedUser, id: number, payload: UpdateContactDto) {
+    await this.assertAdminAccess(user);
+    const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
+    if (!contact) throw new NotFoundException('Contact not found.');
+    const displayName = payload.display_name.trim();
+    if (!displayName) throw new BadRequestException('Name is required.');
+    contact.display_name = displayName;
+    await this.channelUserRepository.save(contact);
+    return { id: contact.id, display_name: contact.display_name };
+  }
+
+  async deleteContact(user: AuthenticatedUser, id: number) {
+    await this.assertAdminAccess(user);
+    const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
+    if (!contact) throw new NotFoundException('Contact not found.');
+    const hasConversation = await this.conversationRepository.exist({ where: { bot_channel_user_id: id } });
+    if (hasConversation) throw new BadRequestException('This contact has chat history and cannot be deleted.');
+    const [hasOrder, hasNote] = await Promise.all([
+      this.orderRepository.exist({ where: { bot_channel_user_id: id, company_id: user.company_id } }),
+      this.customerNoteRepository.exist({ where: { bot_channel_user_id: id, company_id: user.company_id } }),
+    ]);
+    if (hasOrder || hasNote) throw new BadRequestException('This contact has orders or notes and cannot be deleted.');
+    const hasCustomer = contact.platform === 'whatsapp' && await this.customerRepository.exist({
+      where: { company_id: user.company_id, customer_phone: contact.external_user_id },
+    });
+    if (hasCustomer) throw new BadRequestException('This contact is linked to a customer record and cannot be deleted.');
+    await this.channelUserRepository.remove(contact);
+    return { id, removed: true };
+  }
   private findChannelUserForPhone(
     channelUsers: BotChannelUser[],
     phone: string,
@@ -1602,7 +1660,7 @@ export class BotAdminService {
 
     const rows: CompanyContactRow[] = customers.map((customer) => {
       const channelUser = this.findChannelUserForPhone(
-        channelUsers,
+        channelUsers.filter((item) => item.platform === 'whatsapp'),
         customer.customer_phone,
       );
       const conversation = latestConversation(channelUser);
@@ -1632,10 +1690,10 @@ export class BotAdminService {
       const alreadyListed = rows.some(
         (row) =>
           row.channelUser?.id === channelUser.id ||
-          this.phoneKeysEquivalent(
+          (channelUser.platform === 'whatsapp' && row.channelUser?.platform === 'whatsapp' && this.phoneKeysEquivalent(
             row.customer.customer_phone,
             channelUser.external_user_id,
-          ),
+          )),
       );
       if (alreadyListed) {
         continue;
@@ -1678,12 +1736,12 @@ export class BotAdminService {
     }
     const instance = this.resolveEvolutionInstanceName(channel);
     if (!instance) {
-      return [];
+      return rows.filter((row) => Number(row.conversation?.id ?? 0) > 0);
     }
 
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     if (!apikey) {
-      return [];
+      return rows.filter((row) => Number(row.conversation?.id ?? 0) > 0);
     }
 
     try {
@@ -1764,10 +1822,11 @@ export class BotAdminService {
         });
       }
 
-      return this.dedupeConversationRows(instanceRows);
+      const otherChannels = rows.filter((row) => row.channelUser?.platform !== 'whatsapp' && Number(row.conversation?.id ?? 0) > 0);
+      return this.dedupeConversationRows([...instanceRows, ...otherChannels]);
     } catch (error) {
       console.error('Evolution findChats failed:', error);
-      return [];
+      return rows.filter((row) => Number(row.conversation?.id ?? 0) > 0);
     }
   }
 
@@ -2142,6 +2201,28 @@ export class BotAdminService {
     }
   }
 
+  private async sendSocialConversationText(companyId: number, platform: string, accountId: string | null, recipientId: string, text: string): Promise<string | null> {
+    if (!accountId) throw new BadRequestException('This legacy conversation is not linked to a Meta account. Wait for a new incoming message before replying.');
+    const connection = await this.metaPageConnectionRepository.findOne({
+      where: platform === 'instagram'
+        ? { company_id: companyId, instagram_business_account_id: accountId, status: 'CONNECTED' }
+        : { company_id: companyId, page_id: accountId, status: 'CONNECTED' },
+      order: { updated_at: 'DESC' },
+    });
+    if (!connection?.page_access_token) throw new BadRequestException('Connect a Meta Page before replying to this conversation.');
+    if (platform === 'instagram' && !connection.instagram_business_account_id) throw new BadRequestException('Link an Instagram Business account before replying.');
+    const sendAccountId = platform === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
+    const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
+    const response = await fetch(`https://graph.facebook.com/${version}/${sendAccountId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${connection.page_access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: recipientId }, message: { text }, messaging_type: 'RESPONSE' }),
+    });
+    const result = await response.json() as { message_id?: string; error?: { message?: string } };
+    if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected the message. Check messaging permissions and the reply window.');
+    return result.message_id ?? null;
+  }
+
   async sendConversationMessage(
     user: AuthenticatedUser,
     conversationId: number,
@@ -2177,12 +2258,15 @@ export class BotAdminService {
       throw new BadRequestException('Conversation has no linked channel user.');
     }
 
-    const phone = this.normalizePhoneKey(channelUser.external_user_id);
-    if (!phone) {
-      throw new BadRequestException('Invalid customer phone on this conversation.');
+    const socialPlatform = channelUser.platform?.toLowerCase();
+    let providerMessageId: string | null = null;
+    if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
+      providerMessageId = await this.sendSocialConversationText(user.company_id, socialPlatform === 'facebook' ? 'messenger' : socialPlatform, channelUser.source_account_id, channelUser.external_user_id, trimmed);
+    } else {
+      const phone = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phone) throw new BadRequestException('Invalid customer phone on this conversation.');
+      await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
     }
-
-    await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
 
     channelUser.manual_mode = true;
     channelUser.last_seen_at = new Date();
@@ -2195,6 +2279,7 @@ export class BotAdminService {
       platform: channelUser.platform || 'whatsapp',
       content: trimmed,
       source: isAdmin ? 'admin' : 'agent',
+      provider_message_id: providerMessageId,
     });
     const saved = await this.messageRepository.save(message);
 
@@ -2287,6 +2372,10 @@ export class BotAdminService {
     const channelUser = conversation.channelUser;
     if (!channelUser) {
       throw new BadRequestException('Conversation has no linked channel user.');
+    }
+
+    if (['messenger', 'facebook', 'instagram'].includes(channelUser.platform?.toLowerCase() || '')) {
+      throw new BadRequestException('Media replies for this Meta channel are not yet supported. Send a text reply instead.');
     }
 
     const phone = this.normalizePhoneKey(channelUser.external_user_id);

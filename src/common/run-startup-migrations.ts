@@ -20,6 +20,7 @@ const MIGRATION_FILES = [
   'supabase_whatsapp_message_dedup.sql',
   'supabase_evolution_read_messages.sql',
   'supabase_bot_channel_user_company_scope.sql',
+  'supabase_meta_message_account_scope.sql',
   'supabase_bot_order_note_labels.sql',
   'supabase_bot_customer_notes.sql',
   'supabase_bot_customer_note_checked.sql',
@@ -99,6 +100,9 @@ export async function runStartupMigrations(): Promise<void> {
     for (const filename of MIGRATION_FILES) {
       const filePath = resolve(dir, filename);
       if (!existsSync(filePath)) {
+        if (filename === 'supabase_meta_message_account_scope.sql') {
+          throw new Error(`Required migration missing: ${filename}`);
+        }
         console.warn(`[migrations] missing file: ${filename}`);
         continue;
       }
@@ -113,6 +117,9 @@ export async function runStartupMigrations(): Promise<void> {
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
+          if (filename === 'supabase_meta_message_account_scope.sql') {
+            throw error;
+          }
           console.warn(
             `[migrations] skipped statement in ${filename}: ${message}`,
           );
@@ -123,6 +130,7 @@ export async function runStartupMigrations(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[migrations] startup migrations failed: ${message}`);
+    throw error;
   } finally {
     await client.end().catch(() => undefined);
   }
