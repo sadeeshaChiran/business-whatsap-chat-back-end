@@ -31,6 +31,10 @@ export class BotConversation {
   status: 'open' | 'pending' | 'active' | 'manual' | 'closed';
 
   @Column({ type: 'bigint', nullable: true })
+  @Column({ type: 'varchar', length: 30, default: 'new' })
+  lead_stage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
+
+  @Column({ type: 'bigint', nullable: true })
   assigned_agent_id: number | null;
 
   @Column({ type: 'timestamptz', nullable: true })
