@@ -152,6 +152,30 @@ export class UsersService {
     return result as any;
   }
 
+  async updateAgentWorkStatus(
+    companyId: number,
+    agentId: number,
+    status: 'online' | 'offline' | 'no_need',
+  ): Promise<User & { auto_assigned: number }> {
+    const user = await this.userRepository.findOne({ where: { id: agentId, company_id: companyId } });
+    if (!user) throw new NotFoundException('Agent not found.');
+    user.is_active = status !== 'no_need';
+    user.is_agent_active = status === 'online';
+    const saved = await this.userRepository.save(user);
+    let autoAssigned = 0;
+    if (saved.is_agent_active) {
+      autoAssigned = await this.agentRoutingService.assignOpenQueueForCompany(companyId);
+    } else {
+      await this.agentRoutingService.releasePendingChatsWhenNoOnlineAgents(companyId);
+    }
+    this.pusherService.trigger(`company-${companyId}`, 'agent_status_changed', {
+      agent_id: saved.id,
+      is_active: saved.is_active,
+      is_agent_active: saved.is_agent_active,
+      status,
+    });
+    return Object.assign(saved, { auto_assigned: autoAssigned });
+  }
   async toggleAgent(
     companyId: number,
     agentId: number,

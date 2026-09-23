@@ -11,6 +11,7 @@ const MIGRATION_FILES = [
   'supabase_product_variant_price_match.sql',
   'supabase_meta_page_connections.sql',
   'supabase_agent_routing.sql',
+  'supabase_conversation_lead_stage.sql',
   'supabase_agent_last_read_at.sql',
   'supabase_agent_accept_sticky.sql',
   'supabase_agent_routing_company_settings.sql',

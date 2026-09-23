@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   UseGuards,
@@ -15,6 +16,7 @@ import { UsersService } from './users.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Company } from '../company/entities/company.entity';
 import { Repository } from 'typeorm';
+import { UpdateAgentWorkStatusDto } from './dto/update-agent-work-status.dto';
 
 @Controller('users')
 @ApiTags('Users / Agents')
@@ -64,6 +66,15 @@ export class UsersController {
     );
   }
 
+  @Patch('agents/:id/work-status')
+  async updateAgentWorkStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() body: UpdateAgentWorkStatusDto,
+  ) {
+    await this.assertAdmin(user);
+    return this.usersService.updateAgentWorkStatus(user.company_id, Number(id), body.status);
+  }
   @Post('agents/:id/toggle')
   async toggleAgent(
     @CurrentUser() user: AuthenticatedUser,

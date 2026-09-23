@@ -21,6 +21,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { BotAdminService } from './bot-admin.service';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
+import { UpdateBotTrainingDto } from './dto/update-bot-training.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
@@ -30,6 +31,7 @@ import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
+import { UpdateLeadStageDto } from './dto/update-lead-stage.dto';
 import { AssignConversationLabelsDto } from './dto/assign-conversation-labels.dto';
 import { CreateBotCustomerLabelDto } from './dto/create-bot-customer-label.dto';
 import { CreateBotCustomerNoteDto } from './dto/create-bot-customer-note.dto';
@@ -85,6 +87,14 @@ export class BotAdminController {
     return this.botAdminService.getConversations(user);
   }
 
+  @Patch('conversations/:id/lead-stage')
+  updateLeadStage(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: UpdateLeadStageDto,
+  ) {
+    return this.botAdminService.updateLeadStage(user, id, payload.lead_stage);
+  }
   /** Admin: conversations waiting in the open/unassigned queue */
   @Get('conversations/unassigned')
   getUnassignedConversations(@CurrentUser() user: AuthenticatedUser) {
@@ -275,6 +285,14 @@ export class BotAdminController {
     return this.botAdminService.getTrainingHistory(user);
   }
 
+  @Patch('train/:id')
+  updateTraining(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: UpdateBotTrainingDto,
+  ) {
+    return this.botAdminService.updateTraining(user, id, payload);
+  }
   @Delete('train/:id')
   deleteTraining(
     @CurrentUser() user: AuthenticatedUser,

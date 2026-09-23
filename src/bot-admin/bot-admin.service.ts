@@ -11,6 +11,7 @@ import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Company } from '../company/entities/company.entity';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
+import { UpdateBotTrainingDto } from './dto/update-bot-training.dto';
 import { BotUsersQueryDto } from './dto/bot-users-query.dto';
 import { CreateContactDto } from './dto/create-contact.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
@@ -521,6 +522,18 @@ export class BotAdminService {
     };
   }
 
+  async updateLeadStage(
+    user: AuthenticatedUser,
+    conversationId: number,
+    leadStage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost',
+  ) {
+    await this.assertAdminAccess(user);
+    const conversation = await this.findConversationForCompany(conversationId, user.company_id);
+    if (!conversation) throw new NotFoundException('Conversation not found.');
+    conversation.lead_stage = leadStage;
+    const saved = await this.conversationRepository.save(conversation);
+    return { id: saved.id, lead_stage: saved.lead_stage };
+  }
   async getUnassignedConversations(user: AuthenticatedUser) {
     await this.assertAdminAccess(user);
     return this.agentRoutingService.getUnassignedConversations(user.company_id);
@@ -2528,6 +2541,18 @@ export class BotAdminService {
     return builder.getMany();
   }
 
+  async updateTraining(user: AuthenticatedUser, id: number, payload: UpdateBotTrainingDto) {
+    await this.assertCompanyAccess(user);
+    const item = await this.trainingRepository.findOne({
+      where: { id, company_id: user.company_id, is_active: true },
+    });
+    if (!item) throw new NotFoundException('Training item not found.');
+    item.question = payload.question.trim();
+    item.answer = payload.answer.trim();
+    item.category = payload.category?.trim() ?? item.category;
+    item.language = payload.language?.trim() ?? item.language;
+    return this.trainingRepository.save(item);
+  }
   async deleteTraining(user: AuthenticatedUser, id: number) {
     await this.assertCompanyAccess(user);
     const item = await this.trainingRepository.findOne({
