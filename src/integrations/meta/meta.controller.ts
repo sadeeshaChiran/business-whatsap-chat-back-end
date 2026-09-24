@@ -120,9 +120,12 @@ export class MetaController {
     };
   }
   @Get('auth-url')
-  async getAuthUrl(@CurrentUser() user: AuthenticatedUser) {
+  async getAuthUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('return_path') returnPath?: string,
+  ) {
     await this.assertAdmin(user);
-    const state = buildMetaOAuthState(user.company_id, user.id);
+    const state = buildMetaOAuthState(user.company_id, user.id, returnPath);
     return {
       url: this.metaGraphService.buildAuthUrl(state),
     };

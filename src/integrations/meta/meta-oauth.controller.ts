@@ -25,14 +25,25 @@ export class MetaOAuthController {
     @Query('error_description') errorDescription: string | undefined,
     @Res() res: Response,
   ) {
+    let returnPath: string | undefined;
+    if (state) {
+      try {
+        returnPath = parseMetaOAuthState(state.trim()).r;
+      } catch {
+        returnPath = undefined;
+      }
+    }
     if (error) {
       const message = errorDescription?.trim() || error;
-      return res.redirect(this.metaGraphService.frontendErrorRedirect(message));
+      return res.redirect(
+        this.metaGraphService.frontendErrorRedirect(message, returnPath),
+      );
     }
     if (!code?.trim() || !state?.trim()) {
       return res.redirect(
         this.metaGraphService.frontendErrorRedirect(
           'Missing authorization code from Meta.',
+          returnPath,
         ),
       );
     }
@@ -55,7 +66,10 @@ export class MetaOAuthController {
         meta: 'connected',
       });
       return res.redirect(
-        this.metaGraphService.frontendSuccessRedirect(redirectParams.toString()),
+        this.metaGraphService.frontendSuccessRedirect(
+          redirectParams.toString(),
+          payload.r,
+        ),
       );
     } catch (err) {
       const message =
@@ -64,7 +78,9 @@ export class MetaOAuthController {
           : err instanceof Error
             ? err.message
             : 'Facebook authorization failed.';
-      return res.redirect(this.metaGraphService.frontendErrorRedirect(message));
+      return res.redirect(
+        this.metaGraphService.frontendErrorRedirect(message, returnPath),
+      );
     }
   }
 }

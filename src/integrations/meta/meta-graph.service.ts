@@ -72,15 +72,19 @@ export class MetaGraphService {
     return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
   }
 
-  frontendSuccessRedirect(query = ''): string {
-    const base =
+  frontendSuccessRedirect(query = '', returnPath?: string): string {
+    const configured =
       process.env.META_OAUTH_SUCCESS_REDIRECT?.trim() ||
-      'http://localhost:5173/channels/messenger';
+      'http://localhost:3000/channels/messenger';
+    const base =
+      returnPath === '/channels/messenger' || returnPath === '/channels/instagram'
+        ? new URL(configured).origin + returnPath
+        : configured;
     return query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base;
   }
 
-  frontendErrorRedirect(message: string): string {
-    const base = this.frontendSuccessRedirect();
+  frontendErrorRedirect(message: string, returnPath?: string): string {
+    const base = this.frontendSuccessRedirect('', returnPath);
     const params = new URLSearchParams({ meta: 'error', message });
     return `${base}${base.includes('?') ? '&' : '?'}${params.toString()}`;
   }
