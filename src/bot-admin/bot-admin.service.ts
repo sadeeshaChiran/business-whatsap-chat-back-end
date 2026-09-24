@@ -69,6 +69,8 @@ type CompanyContactRow = {
   conversation: {
     id: number;
     status: string;
+    lead_stage?: string;
+    assigned_agent_id?: number | null;
     last_message_at: Date | string | null;
   } | null;
   evolution_remote_jid: string | null;
@@ -658,7 +660,7 @@ export class BotAdminService {
     if (!mediaUrl) {
       return true;
     }
-    if (mediaUrl.startsWith('data:image/')) {
+    if (mediaUrl.startsWith('data:')) {
       return false;
     }
     return isWhatsAppHostedMediaUrl(mediaUrl) || !isBrowserDisplayableImageUrl(mediaUrl);
@@ -1691,6 +1693,8 @@ export class BotAdminService {
           ? {
               id: conversation.id,
               status: conversation.status,
+              lead_stage: conversation.lead_stage || 'new',
+              assigned_agent_id: conversation.assigned_agent_id,
               last_message_at: conversation.last_message_at,
             }
           : null,
@@ -1726,6 +1730,8 @@ export class BotAdminService {
           ? {
               id: conversation.id,
               status: conversation.status,
+              lead_stage: conversation.lead_stage || 'new',
+              assigned_agent_id: conversation.assigned_agent_id,
               last_message_at: conversation.last_message_at,
             }
           : null,
@@ -2139,7 +2145,7 @@ export class BotAdminService {
       }
     }
 
-    if (mediaUrl.startsWith('data:image/')) {
+    if (mediaUrl.startsWith('data:')) {
       const parsed = this.parseDataImageUrl(mediaUrl);
       if (parsed) {
         return parsed;
@@ -2415,7 +2421,8 @@ export class BotAdminService {
 
     // Keep a displayable preview for images; avoid huge base64 for other files.
     const mediaUrl =
-      mediaType === 'image' && uploaded.buffer.length <= 2 * 1024 * 1024
+      (mediaType === 'image' || mediaType === 'audio') &&
+      uploaded.buffer.length <= 4 * 1024 * 1024
         ? `data:${mimetype};base64,${uploaded.buffer.toString('base64')}`
         : null;
     const content =

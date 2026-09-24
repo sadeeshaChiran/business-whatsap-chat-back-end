@@ -153,6 +153,61 @@ export class MetaGraphService {
     return longToken;
   }
 
+  getEmbeddedSignupConfig() {
+    const cfg = this.getConfig();
+    const whatsappConfigId = process.env.META_WHATSAPP_CONFIG_ID?.trim() ?? '';
+    if (!whatsappConfigId) {
+      throw new BadRequestException('WhatsApp automatic setup requires META_WHATSAPP_CONFIG_ID on the API server.');
+    }
+    return { app_id: cfg.appId, config_id: whatsappConfigId, graph_version: cfg.graphVersion };
+  }
+
+  async exchangeEmbeddedSignupCode(code: string): Promise<string> {
+    const cfg = this.getConfig();
+    const body = new URLSearchParams({
+      client_id: cfg.appId,
+      client_secret: cfg.appSecret,
+      code: code.trim(),
+    });
+    const response = await fetch(this.graphUrl('/oauth/access_token', cfg), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const payload = (await response.json()) as { access_token?: string } & GraphErrorBody;
+    if (!response.ok || !payload.access_token?.trim()) {
+      throw new BadRequestException(payload.error?.message ?? 'Meta did not return a WhatsApp access token.');
+    }
+    return payload.access_token.trim();
+  }
+
+  async subscribeWhatsappApp(wabaId: string, accessToken: string): Promise<void> {
+    const cfg = this.getConfig();
+    const url = this.graphUrl(`/${encodeURIComponent(wabaId)}/subscribed_apps`, cfg);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const payload = (await response.json()) as { success?: boolean } & GraphErrorBody;
+    if (!response.ok || payload.success !== true) {
+      throw new BadRequestException(payload.error?.message ?? 'Meta could not subscribe the WhatsApp webhook.');
+    }
+  }
+
+  async fetchWhatsappPhoneNumber(phoneNumberId: string, accessToken: string) {
+    const result = await this.graphGet<{ id?: string; display_phone_number?: string; verified_name?: string }>(
+      `/${encodeURIComponent(phoneNumberId)}`,
+      accessToken,
+      { fields: 'id,display_phone_number,verified_name' },
+    );
+    if (String(result.id ?? '') !== phoneNumberId.trim()) {
+      throw new BadRequestException('The selected WhatsApp phone number was not returned by Meta.');
+    }
+    return {
+      display_phone_number: String(result.display_phone_number ?? '').trim(),
+      verified_name: String(result.verified_name ?? '').trim(),
+    };
+  }
   async fetchMetaUserId(userToken: string): Promise<string> {
     const me = await this.graphGet<{ id?: string }>('/me', userToken, {
       fields: 'id',

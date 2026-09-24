@@ -26,6 +26,7 @@ const MIGRATION_FILES = [
   'supabase_bot_customer_notes.sql',
   'supabase_bot_customer_note_checked.sql',
   'supabase_company_extensions.sql',
+  'supabase_automation_flows.sql',
   'supabase_packages_bot_off.sql',
 ] as const;
 
