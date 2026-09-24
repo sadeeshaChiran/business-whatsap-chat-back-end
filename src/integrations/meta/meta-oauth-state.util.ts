@@ -4,6 +4,7 @@ export type MetaOAuthStatePayload = {
   c: number;
   u: number;
   t: number;
+  r?: '/channels/messenger' | '/channels/instagram';
 };
 
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -23,12 +24,16 @@ function signPayload(encoded: string): string {
 export function buildMetaOAuthState(
   companyId: number,
   userId: number,
+  returnPath?: string,
 ): string {
   const payload: MetaOAuthStatePayload = {
     c: companyId,
     u: userId,
     t: Date.now(),
   };
+  if (returnPath === '/channels/messenger' || returnPath === '/channels/instagram') {
+    payload.r = returnPath;
+  }
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = signPayload(encoded);
   return `${encoded}.${signature}`;

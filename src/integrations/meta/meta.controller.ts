@@ -19,6 +19,9 @@ import { Company } from '../../company/entities/company.entity';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
 import { MetaPageConnectionService } from '../../meta/meta-page-connection.service';
 import { ConnectMetaPageDto } from './dto/connect-meta-page.dto';
+import { ConnectWhatsappEmbeddedDto } from './dto/connect-whatsapp-embedded.dto';
+import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
+import { randomBytes } from 'crypto';
 import { MetaGraphService, type MetaSocialPost } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
 
@@ -31,6 +34,7 @@ export class MetaController {
     private readonly metaGraphService: MetaGraphService,
     private readonly metaPageConnectionService: MetaPageConnectionService,
     private readonly companyService: CompanyService,
+    private readonly whatsappChannelService: WhatsappChannelService,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(MetaPageConnection)
@@ -70,10 +74,58 @@ export class MetaController {
     return connection;
   }
 
-  @Get('auth-url')
-  async getAuthUrl(@CurrentUser() user: AuthenticatedUser) {
+  @Get('whatsapp/config')
+  async getWhatsappEmbeddedConfig(@CurrentUser() user: AuthenticatedUser) {
     await this.assertAdmin(user);
-    const state = buildMetaOAuthState(user.company_id, user.id);
+    return this.metaGraphService.getEmbeddedSignupConfig();
+  }
+
+  @Post('whatsapp/connect')
+  async connectWhatsappEmbedded(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() body: ConnectWhatsappEmbeddedDto,
+  ) {
+    const company = await this.assertAdmin(user);
+    const existing = await this.whatsappChannelService.getForCompany(user.company_id);
+    const phoneNumberId = body.phone_number_id.trim();
+    if (existing?.meta_phone_number_id && existing.meta_phone_number_id !== phoneNumberId) {
+      throw new BadRequestException('A different WhatsApp number cannot replace this workspace account. Existing chats and contacts were kept.');
+    }
+
+    const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code);
+    const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
+    await this.metaGraphService.subscribeWhatsappApp(body.waba_id.trim(), accessToken);
+
+    const verifyToken = existing?.meta_verify_token?.trim()
+      || process.env.META_WEBHOOK_VERIFY_TOKEN?.trim()
+      || randomBytes(24).toString('hex');
+    const webhookBase = existing?.meta_webhook_base_url?.trim()
+      || process.env.PUBLIC_API_BASE_URL?.trim()
+      || process.env.API_BASE_URL?.trim()
+      || '';
+    const savedCompany = await this.companyService.update(company.id, {
+      phone: phone.display_phone_number.replace(/\D/g, ''),
+      whatsapp_provider_type: 'meta',
+      meta_phone_number_id: phoneNumberId,
+      meta_waba_id: body.waba_id.trim(),
+      meta_access_token: accessToken,
+      meta_verify_token: verifyToken,
+      meta_webhook_base_url: webhookBase,
+    }, user);
+    return {
+      company: savedCompany,
+      display_phone_number: phone.display_phone_number,
+      verified_name: phone.verified_name,
+      subscribed: true,
+    };
+  }
+  @Get('auth-url')
+  async getAuthUrl(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('return_path') returnPath?: string,
+  ) {
+    await this.assertAdmin(user);
+    const state = buildMetaOAuthState(user.company_id, user.id, returnPath);
     return {
       url: this.metaGraphService.buildAuthUrl(state),
     };
