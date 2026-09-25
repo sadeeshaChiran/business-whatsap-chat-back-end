@@ -10,6 +10,7 @@ import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
 import { BotMessage } from './entities/bot-message.entity';
+import { BotMessageTemplate } from './entities/bot-message-template.entity';
 import { BotOrderItem } from './entities/bot-order-item.entity';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
@@ -40,6 +41,7 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
       BotCustomerLabel,
       BotCustomerNote,
       BotMessage,
+      BotMessageTemplate,
       BotTrainingData,
       BotFlag,
       BotOrder,
