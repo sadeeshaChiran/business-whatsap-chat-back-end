@@ -25,6 +25,8 @@ import { BotConversationLabel } from './entities/bot-conversation-label.entity';
 import { BotCustomerLabel } from './entities/bot-customer-label.entity';
 import { BotCustomerNote } from './entities/bot-customer-note.entity';
 import { BotMessage } from './entities/bot-message.entity';
+import { BotMessageTemplate, type BotTemplateButton } from './entities/bot-message-template.entity';
+import { SaveMessageTemplateDto, SendMessageTemplateDto } from './dto/save-message-template.dto';
 import { BotOrderStatusHistory } from './entities/bot-order-status-history.entity';
 import { BotOrderStatusTemplate } from './entities/bot-order-status-template.entity';
 import { BotOrder, type BotOrderStatus } from './entities/bot-order.entity';
@@ -96,6 +98,8 @@ export class BotAdminService {
     private readonly customerNoteRepository: Repository<BotCustomerNote>,
     @InjectRepository(BotMessage)
     private readonly messageRepository: Repository<BotMessage>,
+    @InjectRepository(BotMessageTemplate)
+    private readonly messageTemplateRepository: Repository<BotMessageTemplate>,
     @InjectRepository(BotTrainingData)
     private readonly trainingRepository: Repository<BotTrainingData>,
     @InjectRepository(BotOrder)
@@ -1477,8 +1481,11 @@ export class BotAdminService {
     };
   }
 
-  async getConversations(user: AuthenticatedUser) {
+  async getConversations(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
     await this.assertAdminAccess(user);
+    if (requestedPage != null || requestedLimit != null) {
+      return this.buildCompanyConversationRows(user.company_id, requestedPage, requestedLimit);
+    }
     return this.buildCompanyContactRows(user.company_id);
   }
 
@@ -1634,6 +1641,75 @@ export class BotAdminService {
       .execute();
   }
 
+  private async buildCompanyConversationRows(
+    companyId: number,
+    requestedPage?: number,
+    requestedLimit?: number,
+  ): Promise<CompanyContactRow[]> {
+    const page = Number.isInteger(requestedPage) && Number(requestedPage) > 0 ? Number(requestedPage) : 1;
+    const limit = Number.isInteger(requestedLimit) && Number(requestedLimit) > 0 ? Math.min(Number(requestedLimit), 100) : 60;
+    const offset = (page - 1) * limit;
+
+    const conversations = await this.conversationRepository
+      .createQueryBuilder('conversation')
+      .innerJoinAndSelect('conversation.channelUser', 'channelUser')
+      .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
+      .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
+      .addOrderBy('conversation.id', 'DESC')
+      .skip(offset)
+      .take(limit)
+      .getMany();
+
+    const conversationIds = conversations.map((conversation) => conversation.id);
+    const previewByConversation = new Map<number, string>();
+    if (conversationIds.length > 0) {
+      const latestMessages = await this.messageRepository
+        .createQueryBuilder('message')
+        .where('message.conversation_id IN (:...conversationIds)', { conversationIds })
+        .orderBy('message.conversation_id', 'ASC')
+        .addOrderBy('message.id', 'DESC')
+        .getMany();
+
+      for (const message of latestMessages) {
+        if (!previewByConversation.has(message.conversation_id)) {
+          previewByConversation.set(message.conversation_id, message.content?.trim() ?? '');
+        }
+      }
+    }
+
+    return conversations.map((conversation) => {
+      const channelUser = conversation.channelUser;
+      const seenAt = channelUser.last_seen_at ?? conversation.last_message_at ?? channelUser.created_at;
+      return {
+        customer: {
+          id: 0,
+          customer_phone: channelUser.external_user_id,
+          assigned_instance: null,
+          first_seen_at: channelUser.created_at,
+          last_seen_at: seenAt,
+        },
+        channelUser: {
+          id: channelUser.id,
+          platform: channelUser.platform,
+          external_user_id: channelUser.external_user_id,
+          display_name: channelUser.display_name,
+          language: channelUser.language,
+          bot_enabled: channelUser.bot_enabled,
+          manual_mode: channelUser.manual_mode,
+          last_seen_at: channelUser.last_seen_at,
+        },
+        conversation: {
+          id: conversation.id,
+          status: conversation.status,
+          lead_stage: conversation.lead_stage || 'new',
+          assigned_agent_id: conversation.assigned_agent_id,
+          last_message_at: conversation.last_message_at,
+        },
+        evolution_remote_jid: null,
+        last_message_preview: previewByConversation.get(conversation.id) || null,
+      };
+    });
+  }
 
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
     const [customers, channelUsers] = await Promise.all([
@@ -2054,17 +2130,16 @@ export class BotAdminService {
       );
     }
 
-    const messages = await this.messageRepository.find({
-      where: { conversation_id: id },
-      order: { id: 'ASC' },
-    });
-
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const isMetaChannel = this.isMetaWhatsappChannel(channel);
+    const dbMessages = isMetaChannel
+      ? await this.loadConversationDbMessagesPage(id, paged ? page : undefined, paged ? limit : 150)
+      : { messages: [] as BotMessage[], hasMore: false };
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
-      !this.isMetaWhatsappChannel(channel) && phone && instance && apikey
+      !isMetaChannel && phone && instance && apikey
         ? (
             await this.fetchEvolutionMessagesForJid(
               user.company_id,
@@ -2077,21 +2152,14 @@ export class BotAdminService {
           )
         : null;
 
-    let mergedMessages = this.isMetaWhatsappChannel(channel)
-      ? this.mergeConversationThreadMessages(messages, [])
+    let mergedMessages = isMetaChannel
+      ? this.mergeConversationThreadMessages(dbMessages.messages, [])
       : this.mergeConversationThreadMessages([], fetchedEvolution?.messages ?? []);
-    let hasMore = fetchedEvolution?.hasMore ?? false;
-    if (this.isMetaWhatsappChannel(channel)) {
+    let hasMore = isMetaChannel ? dbMessages.hasMore : fetchedEvolution?.hasMore ?? false;
+    if (isMetaChannel) {
       mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
-      if (paged) {
-        const end = Math.max(0, mergedMessages.length - (page - 1) * limit);
-        const start = Math.max(0, end - limit);
-        hasMore = start > 0;
-        mergedMessages = mergedMessages.slice(start, end);
-      }
     }
-
-    const channelUserId = Number(conversation.bot_channel_user_id || 0);
+const channelUserId = Number(conversation.bot_channel_user_id || 0);
     return {
       conversation,
       messages: mergedMessages,
@@ -2105,6 +2173,33 @@ export class BotAdminService {
         user.company_id,
         channelUserId,
       ),
+    };
+  }
+  private async loadConversationDbMessagesPage(
+    conversationId: number,
+    page?: number,
+    limit = 150,
+  ): Promise<{ messages: BotMessage[]; hasMore: boolean }> {
+    if (page == null) {
+      const messages = await this.messageRepository.find({
+        where: { conversation_id: conversationId },
+        order: { id: 'ASC' },
+        take: limit,
+      });
+      return { messages, hasMore: false };
+    }
+
+    const offset = Math.max(0, (page - 1) * limit);
+    const newestFirst = await this.messageRepository.find({
+      where: { conversation_id: conversationId },
+      order: { id: 'DESC' },
+      skip: offset,
+      take: limit + 1,
+    });
+
+    return {
+      messages: newestFirst.slice(0, limit).reverse(),
+      hasMore: newestFirst.length > limit,
     };
   }
 
@@ -2242,6 +2337,215 @@ export class BotAdminService {
     return result.message_id ?? null;
   }
 
+  private async getSocialReplyTarget(companyId: number, platform: string, accountId: string | null) {
+    if (!accountId) throw new BadRequestException('This conversation is not linked to a Meta account.');
+    const normalized = platform === 'facebook' ? 'messenger' : platform;
+    const connection = await this.metaPageConnectionRepository.findOne({
+      where: normalized === 'instagram'
+        ? { company_id: companyId, instagram_business_account_id: accountId, status: 'CONNECTED' }
+        : { company_id: companyId, page_id: accountId, status: 'CONNECTED' },
+      order: { updated_at: 'DESC' },
+    });
+    if (!connection?.page_access_token) throw new BadRequestException('Connect a Meta Page before replying.');
+    const sendAccountId = normalized === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
+    if (!sendAccountId) throw new BadRequestException('The selected Meta channel is not connected.');
+    return { connection, sendAccountId, platform: normalized };
+  }
+
+  private async postSocialMessage(companyId: number, platform: string, accountId: string | null, recipientId: string, message: Record<string, unknown>) {
+    const target = await this.getSocialReplyTarget(companyId, platform, accountId);
+    const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
+    const response = await fetch(`https://graph.facebook.com/${version}/${target.sendAccountId}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${target.connection.page_access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: recipientId }, message, messaging_type: 'RESPONSE' }),
+    });
+    const result = await response.json() as { message_id?: string; error?: { message?: string } };
+    if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected this message. Check channel permissions and the reply window.');
+    return result.message_id ?? null;
+  }
+
+  private async sendMessengerMedia(companyId: number, accountId: string | null, recipientId: string, file: { buffer: Buffer; mimetype: string; originalname: string }, caption?: string) {
+    const target = await this.getSocialReplyTarget(companyId, 'messenger', accountId);
+    const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
+    const attachmentType = file.mimetype.startsWith('image/') ? 'image' : file.mimetype.startsWith('video/') ? 'video' : file.mimetype.startsWith('audio/') ? 'audio' : 'file';
+    const form = new FormData();
+    form.append('recipient', JSON.stringify({ id: recipientId }));
+    form.append('messaging_type', 'RESPONSE');
+    form.append('message', JSON.stringify({ attachment: { type: attachmentType, payload: { is_reusable: true } } }));
+    form.append('filedata', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.originalname);
+    const response = await fetch(`https://graph.facebook.com/${version}/${target.sendAccountId}/messages`, {
+      method: 'POST', headers: { Authorization: `Bearer ${target.connection.page_access_token}` }, body: form,
+    });
+    const result = await response.json() as { message_id?: string; error?: { message?: string } };
+    if (!response.ok) throw new BadRequestException(result.error?.message || 'Messenger rejected this attachment.');
+    if (caption?.trim()) await this.postSocialMessage(companyId, 'messenger', accountId, recipientId, { text: caption.trim() });
+    return result.message_id ?? null;
+  }
+  async listMessageTemplates(user: AuthenticatedUser) {
+    await this.assertCompanyAccess(user);
+    return this.messageTemplateRepository.find({ where: { company_id: user.company_id }, order: { updated_at: 'DESC' } });
+  }
+
+  async createMessageTemplate(user: AuthenticatedUser, payload: SaveMessageTemplateDto) {
+    await this.assertAdminAccess(user);
+    const name = payload.name.trim();
+    if (!name || !payload.body.trim()) throw new BadRequestException('Template name and body are required.');
+    const existing = await this.messageTemplateRepository.findOne({ where: { company_id: user.company_id, name } });
+    const row = existing ?? this.messageTemplateRepository.create({ company_id: user.company_id });
+    row.name = name;
+    row.title = payload.title?.trim() || '';
+    row.body = payload.body.trim();
+    row.image_url = payload.image_url?.trim() || null;
+    row.buttons = (payload.buttons ?? []).map(button => ({ label: button.label.trim(), url: button.url?.trim(), payload: button.payload?.trim() })).filter(button => button.label) as BotTemplateButton[];
+    row.platforms = payload.platforms?.length ? payload.platforms : ['messenger', 'instagram'];
+    return this.messageTemplateRepository.save(row);
+  }
+
+  async deleteMessageTemplate(user: AuthenticatedUser, id: number) {
+    await this.assertAdminAccess(user);
+    const row = await this.messageTemplateRepository.findOne({ where: { id, company_id: user.company_id } });
+    if (!row) throw new NotFoundException('Message template not found.');
+    await this.messageTemplateRepository.remove(row);
+    return { id, removed: true };
+  }
+
+  private async resolveConversationTemplateLanguage(conversation: BotConversation): Promise<string> {
+    const savedLanguage = conversation.channelUser?.language?.trim();
+    if (savedLanguage && savedLanguage.toLowerCase() !== 'english') {
+      return savedLanguage;
+    }
+
+    const recentInbound = await this.messageRepository.find({
+      where: { conversation_id: conversation.id, direction: 'inbound' },
+      order: { id: 'DESC' },
+      take: 8,
+    });
+    const sample = recentInbound.map((message) => message.content || '').join('\n');
+    return this.detectConversationLanguage(sample) || savedLanguage || 'English';
+  }
+
+  private detectConversationLanguage(text: string): string | null {
+    if (!text.trim()) {
+      return null;
+    }
+    if (/[\u0D80-\u0DFF]/.test(text)) {
+      return 'Sinhala';
+    }
+    if (/[\u0B80-\u0BFF]/.test(text)) {
+      return 'Tamil';
+    }
+    const normalized = text.toLowerCase();
+    const sinhalaSignals = ['kohomada', 'oyage', 'mage', 'hari', 'puluwan', 'karanna', 'denna', 'epa', 'ow', 'ne'];
+    const tamilSignals = ['vanakkam', 'nandri', 'enna', 'epdi', 'ungal', 'venum', 'illai', 'seri'];
+    if (sinhalaSignals.some((word) => normalized.includes(word))) {
+      return 'Sinhala';
+    }
+    if (tamilSignals.some((word) => normalized.includes(word))) {
+      return 'Tamil';
+    }
+    return 'English';
+  }
+
+  private convertTemplateTextForLanguage(text: string, language: string): string {
+    const target = language.trim().toLowerCase();
+    if (!text.trim() || target === 'english' || target === 'en') {
+      return text;
+    }
+
+    const protectedValues: string[] = [];
+    const protect = (value: string) => {
+      const token = `__BT_SAFE_${protectedValues.length}__`;
+      protectedValues.push(value);
+      return token;
+    };
+    let converted = text
+      .replace(/{{\s*[^{}]+\s*}}/g, protect)
+      .replace(/https?:\/\/\S+/gi, protect);
+
+    converted = target.includes('sinhala') || target.includes('si')
+      ? this.convertCommonTemplatePhrases(converted, [
+          ['Your BizTalk demo', 'ඔබගේ BizTalk demo'],
+          ['Thanks for your interest in BizTalk!', 'BizTalk ගැන ඔබගේ උනන්දුවට ස්තුතියි!'],
+          ['Thanks for your interest', 'ඔබගේ උනන්දුවට ස්තුතියි'],
+          ['Your demo is booked for', 'ඔබගේ demo එක වෙන් කර ඇත'],
+          ['Please reply if you need to change the time.', 'වේලාව වෙනස් කිරීමට අවශ්‍ය නම් කරුණාකර reply කරන්න.'],
+          ['Shared inbox for your business', 'ඔබේ ව්‍යාපාරය සඳහා shared inbox'],
+          ['Confirm', 'තහවුරු කරන්න'],
+          ['Reschedule', 'නැවත වේලාවක් තෝරන්න'],
+          ['Visit website', 'වෙබ් අඩවිය බලන්න'],
+          ['Hi', 'ආයුබෝවන්'],
+          ['Hello', 'ආයුබෝවන්'],
+          ['Thank you', 'ස්තුතියි'],
+          ['Thank you.', 'ස්තුතියි.'],
+        ])
+      : target.includes('tamil') || target.includes('ta')
+        ? this.convertCommonTemplatePhrases(converted, [
+            ['Your BizTalk demo', 'உங்கள் BizTalk demo'],
+            ['Thanks for your interest in BizTalk!', 'BizTalk பற்றிய உங்கள் ஆர்வத்திற்கு நன்றி!'],
+            ['Thanks for your interest', 'உங்கள் ஆர்வத்திற்கு நன்றி'],
+            ['Your demo is booked for', 'உங்கள் demo பதிவு செய்யப்பட்டுள்ளது'],
+            ['Please reply if you need to change the time.', 'நேரத்தை மாற்ற வேண்டுமெனில் reply செய்யவும்.'],
+            ['Shared inbox for your business', 'உங்கள் வணிகத்திற்கான shared inbox'],
+            ['Confirm', 'உறுதிப்படுத்து'],
+            ['Reschedule', 'மீண்டும் திட்டமிடு'],
+            ['Visit website', 'வலைத்தளத்தைப் பாருங்கள்'],
+            ['Hi', 'வணக்கம்'],
+            ['Hello', 'வணக்கம்'],
+            ['Thank you', 'நன்றி'],
+            ['Thank you.', 'நன்றி.'],
+          ])
+        : converted;
+
+    protectedValues.forEach((value, index) => {
+      converted = converted.replace(new RegExp(`__BT_SAFE_${index}__`, 'g'), value);
+    });
+    return converted;
+  }
+
+  private convertCommonTemplatePhrases(text: string, dictionary: Array<[string, string]>): string {
+    return dictionary.reduce((current, [source, replacement]) => {
+      return current.replace(new RegExp(this.escapeRegExp(source), 'gi'), replacement);
+    }, text);
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  async sendConversationTemplate(user: AuthenticatedUser, conversationId: number, templateId: number, custom: SendMessageTemplateDto) {
+    await this.assertConversationAccess(user, conversationId);
+    const conversation = await this.findConversationForCompany(conversationId, user.company_id);
+    if (!conversation?.channelUser) throw new NotFoundException('Conversation not found.');
+    const channelUser = conversation.channelUser;
+    const platform = channelUser.platform?.toLowerCase() === 'facebook' ? 'messenger' : channelUser.platform?.toLowerCase();
+    if (platform !== 'messenger' && platform !== 'instagram') throw new BadRequestException('Social templates are only available for Messenger and Instagram.');
+    const template = await this.messageTemplateRepository.findOne({ where: { id: templateId, company_id: user.company_id } });
+    if (!template || !template.platforms.includes(platform)) throw new BadRequestException('This template is not available for the selected channel.');
+    const rawBody = custom.body?.trim() || template.body;
+    const rawTitle = custom.title?.trim() || template.title || template.name;
+    const imageUrl = custom.image_url?.trim() || template.image_url || undefined;
+    const targetLanguage = await this.resolveConversationTemplateLanguage(conversation);
+    const title = this.convertTemplateTextForLanguage(rawTitle, targetLanguage);
+    const body = this.convertTemplateTextForLanguage(rawBody, targetLanguage);
+    const buttons = (custom.buttons?.length ? custom.buttons : template.buttons).slice(0, 3).map((button) => ({
+      ...button,
+      label: this.convertTemplateTextForLanguage(button.label, targetLanguage),
+    }));
+    const element: Record<string, unknown> = { title, subtitle: body };
+    if (imageUrl) element.image_url = imageUrl;
+    if (buttons.length) element.buttons = buttons.map(button => button.url
+      ? { type: 'web_url', title: button.label, url: button.url }
+      : { type: 'postback', title: button.label, payload: button.payload || button.label });
+    const providerMessageId = await this.postSocialMessage(user.company_id, platform, channelUser.source_account_id, channelUser.external_user_id, {
+      attachment: { type: 'template', payload: { template_type: 'generic', elements: [element] } },
+    });
+    const saved = await this.messageRepository.save(this.messageRepository.create({
+      conversation_id: conversationId, direction: 'outbound', message_type: imageUrl ? 'image' : 'text', platform,
+      provider_message_id: providerMessageId, content: `${title}\n${body}`, media_url: imageUrl || null, source: 'template',
+    }));
+    conversation.last_message_at = new Date(); await this.conversationRepository.save(conversation);
+    return { message: saved };
+  }
   async sendConversationMessage(
     user: AuthenticatedUser,
     conversationId: number,
@@ -2393,8 +2697,23 @@ export class BotAdminService {
       throw new BadRequestException('Conversation has no linked channel user.');
     }
 
-    if (['messenger', 'facebook', 'instagram'].includes(channelUser.platform?.toLowerCase() || '')) {
-      throw new BadRequestException('Media replies for this Meta channel are not yet supported. Send a text reply instead.');
+    const socialPlatform = channelUser.platform?.toLowerCase() || '';
+    if (socialPlatform === 'instagram') {
+      throw new BadRequestException('Instagram requires a public image/video URL. Use a social template with an Image URL.');
+    }
+    if (socialPlatform === 'messenger' || socialPlatform === 'facebook') {
+      const uploadedSocial = this.normalizeUploadedMediaFile(file);
+      const providerMessageId = await this.sendMessengerMedia(user.company_id, channelUser.source_account_id, channelUser.external_user_id, uploadedSocial, caption);
+      const socialMediaType = this.resolveOutboundMediaType(uploadedSocial.mimetype);
+      const socialMediaUrl = socialMediaType === 'image' && uploadedSocial.buffer.length <= 2 * 1024 * 1024
+        ? `data:${uploadedSocial.mimetype};base64,${uploadedSocial.buffer.toString('base64')}` : null;
+      const saved = await this.messageRepository.save(this.messageRepository.create({
+        conversation_id: conversationId, direction: 'outbound', message_type: this.resolveOutboundMessageType(socialMediaType),
+        platform: 'messenger', provider_message_id: providerMessageId, content: caption?.trim() || `[file: ${uploadedSocial.originalname}]`, media_url: socialMediaUrl, source: isAdmin ? 'admin' : 'agent',
+      }));
+      channelUser.manual_mode = true; channelUser.last_seen_at = new Date(); await this.channelUserRepository.save(channelUser);
+      conversation.last_message_at = new Date(); await this.conversationRepository.save(conversation);
+      return { message: saved };
     }
 
     const phone = this.normalizePhoneKey(channelUser.external_user_id);

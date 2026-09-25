@@ -38,6 +38,7 @@ import { CreateBotCustomerNoteDto } from './dto/create-bot-customer-note.dto';
 import { UpdateOrderNoteDto } from './dto/update-order-note.dto';
 import { UpdateBotOrderDto } from './dto/update-bot-order.dto';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
+import { SaveMessageTemplateDto, SendMessageTemplateDto } from './dto/save-message-template.dto';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
@@ -83,8 +84,16 @@ export class BotAdminController {
   }
 
   @Get('conversations')
-  getConversations(@CurrentUser() user: AuthenticatedUser) {
-    return this.botAdminService.getConversations(user);
+  getConversations(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.botAdminService.getConversations(
+      user,
+      page == null ? undefined : Number(page),
+      limit == null ? undefined : Number(limit),
+    );
   }
 
   @Patch('conversations/:id/lead-stage')
@@ -143,6 +152,30 @@ export class BotAdminController {
     );
   }
 
+  @Get('message-templates')
+  listMessageTemplates(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.listMessageTemplates(user);
+  }
+
+  @Post('message-templates')
+  createMessageTemplate(@CurrentUser() user: AuthenticatedUser, @Body() payload: SaveMessageTemplateDto) {
+    return this.botAdminService.createMessageTemplate(user, payload);
+  }
+
+  @Delete('message-templates/:id')
+  deleteMessageTemplate(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.botAdminService.deleteMessageTemplate(user, id);
+  }
+
+  @Post('conversations/:id/messages/template/:templateId')
+  sendConversationTemplate(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('templateId', ParseIntPipe) templateId: number,
+    @Body() payload: SendMessageTemplateDto,
+  ) {
+    return this.botAdminService.sendConversationTemplate(user, id, templateId, payload);
+  }
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
