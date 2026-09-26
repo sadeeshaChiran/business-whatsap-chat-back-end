@@ -95,8 +95,12 @@ export class WhatsappService {
         const rich = contentFromMetaMessage(raw);
         if ('skip' in rich) return rich;
         return {
-          // voice notes: keep the adapter's text (it may be a transcript) for the chat-list preview
-          content: rich.message_type === 'voice' && adapterText ? adapterText : rich.content || adapterText,
+          // voice notes: keep the adapter's text only if it is a real transcript,
+          // not a placeholder like "[voice note]" (those show as a voice player anyway)
+          content:
+            rich.message_type === 'voice' && adapterText && !/^\[[^\]]*\]$/.test(adapterText)
+              ? adapterText
+              : rich.content || adapterText,
           message_type: rich.message_type,
           media_url: rich.media_url ?? adapterMediaUrl,
         };

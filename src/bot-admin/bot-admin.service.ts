@@ -2092,21 +2092,29 @@ export class BotAdminService {
     return { remote_jid: jid, sent: true, text: trimmed };
   }
 
+  /**
+   * Opens a chat fast:
+   *  - first call:  newest `limit` messages
+   *  - scroll up:   before_id = oldest loaded id  → the page before it
+   *  - polling:     after_id  = newest loaded id + light=true → only new messages, no labels/orders/notes
+   * Media is never sent inline – the inbox loads each file from /messages/:id/media when it is shown.
+   */
   async getConversation(
     user: AuthenticatedUser,
     id: number,
     requestedPage?: number,
     requestedLimit?: number,
+    options: { beforeId?: number; afterId?: number; light?: boolean } = {},
   ) {
-    const paged = requestedPage != null;
+    const paged = requestedPage != null || options.beforeId != null || options.afterId != null;
     const page =
       Number.isInteger(requestedPage) && Number(requestedPage) > 0
         ? Number(requestedPage)
         : 1;
     const limit =
       Number.isInteger(requestedLimit) && Number(requestedLimit) > 0
-        ? Math.min(Number(requestedLimit), 50)
-        : 30;
+        ? Math.min(Number(requestedLimit), 100)
+        : 40;
     const company = await this.getCompanyForUser(user);
     if (!company) {
       throw new ForbiddenException('Company not found.');
@@ -2127,21 +2135,21 @@ export class BotAdminService {
       throw new ForbiddenException('You do not have access to this conversation.');
     }
 
-    // Opening (or polling) the newest page = the team has read it. Admin or assigned agent.
-    if (page === 1) {
-      void this.markConversationRead(conversation, user.company_id).catch((error) =>
-        console.warn(`Mark read failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error),
-      );
-    }
-
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     const platform = String(conversation.channelUser?.platform ?? 'whatsapp').toLowerCase();
     // Messenger / Instagram always live in our DB, even when WhatsApp uses Evolution.
     const readFromDb = this.isMetaWhatsappChannel(channel) || platform !== 'whatsapp';
+
     const dbMessages = readFromDb
-      ? await this.loadConversationDbMessagesPage(id, paged ? page : undefined, paged ? limit : 150)
+      ? await this.loadConversationDbMessagesPage(id, {
+          page: paged ? page : undefined,
+          limit: paged ? limit : 150,
+          beforeId: options.beforeId,
+          afterId: options.afterId,
+        })
       : { messages: [] as BotMessage[], hasMore: false };
+
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
@@ -2156,48 +2164,135 @@ export class BotAdminService {
           )
         : null;
 
-    // Media is NOT inlined any more: the inbox loads each file on demand from
-    // GET conversations/:id/messages/:messageId/media (much smaller polling responses).
     const mergedMessages = readFromDb
       ? this.mergeConversationThreadMessages(dbMessages.messages, [])
       : this.mergeConversationThreadMessages([], fetchedEvolution?.messages ?? []);
     const hasMore = readFromDb ? dbMessages.hasMore : fetchedEvolution?.hasMore ?? false;
+
+    // Opening the newest page (or receiving new customer messages while open) = read.
+    const isNewestView = options.beforeId == null && page === 1;
+    const gotNewInbound = dbMessages.messages.some((message) => message.direction === 'inbound');
+    if (isNewestView && (!options.light || gotNewInbound)) {
+      void this.markConversationRead(conversation, user.company_id).catch((error) =>
+        console.warn(`Mark read failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error),
+      );
+    }
+
     const channelUserId = Number(conversation.bot_channel_user_id || 0);
+    // Light polls skip the side data (labels / orders / notes) – the inbox keeps what it already has.
+    const [labels, customerOrders, customerNotes] = options.light
+      ? [undefined, undefined, undefined]
+      : await Promise.all([
+          this.listConversationLabels(id, user.company_id),
+          this.getOrdersForChannelUser(user.company_id, channelUserId),
+          this.listNotesForChannelUser(user.company_id, channelUserId),
+        ]);
+
     return {
       conversation,
       messages: mergedMessages,
       ...(paged ? { pagination: { page, limit, has_more: hasMore } } : {}),
-      labels: await this.listConversationLabels(id, user.company_id),
-      customer_orders: await this.getOrdersForChannelUser(user.company_id, channelUserId),
-      customer_notes: await this.listNotesForChannelUser(user.company_id, channelUserId),
+      ...(options.light ? {} : { labels, customer_orders: customerOrders, customer_notes: customerNotes }),
     };
   }
 
+  /**
+   * Loads a page of messages WITHOUT the heavy inline media.
+   * Old rows store images/voice as "data:…;base64,…" (MBs each). Those are replaced by
+   * "inline:<mime>" here, so the list stays tiny; the file itself is served by /media.
+   */
   private async loadConversationDbMessagesPage(
     conversationId: number,
-    page?: number,
-    limit = 150,
+    options: { page?: number; limit?: number; beforeId?: number; afterId?: number },
   ): Promise<{ messages: BotMessage[]; hasMore: boolean }> {
-    if (page == null) {
-      const messages = await this.messageRepository.find({
-        where: { conversation_id: conversationId },
-        order: { id: 'ASC' },
-        take: limit,
+    const limit = options.limit ?? 150;
+    const qb = this.messageRepository
+      .createQueryBuilder('m')
+      .select([
+        'm.id',
+        'm.conversation_id',
+        'm.direction',
+        'm.message_type',
+        'm.platform',
+        'm.provider_message_id',
+        'm.content',
+        'm.transcript',
+        'm.source',
+        'm.created_at',
+      ])
+      .addSelect(
+        `CASE WHEN m.media_url LIKE 'data:%'
+              THEN 'inline:' || split_part(split_part(substr(m.media_url, 6), ',', 1), ';', 1)
+              ELSE m.media_url END`,
+        'media_light',
+      )
+      .where('m.conversation_id = :conversationId', { conversationId });
+
+    const run = async () => {
+      const { entities, raw } = await qb.getRawAndEntities<{ media_light: string | null }>();
+      return entities.map((entity, index) => {
+        entity.media_url = raw[index]?.media_light ?? null;
+        return entity;
       });
-      return { messages, hasMore: false };
+    };
+
+    // polling: only messages newer than what the inbox already has
+    if (options.afterId != null) {
+      qb.andWhere('m.id > :afterId', { afterId: options.afterId }).orderBy('m.id', 'ASC').take(200);
+      return { messages: await run(), hasMore: false };
     }
 
-    const offset = Math.max(0, (page - 1) * limit);
-    const newestFirst = await this.messageRepository.find({
-      where: { conversation_id: conversationId },
-      order: { id: 'DESC' },
-      skip: offset,
-      take: limit + 1,
-    });
+    // scrolling up: the page just before the oldest loaded message (stable even when new messages arrive)
+    if (options.beforeId != null) {
+      qb.andWhere('m.id < :beforeId', { beforeId: options.beforeId }).orderBy('m.id', 'DESC').take(limit + 1);
+      const newestFirst = await run();
+      return { messages: newestFirst.slice(0, limit).reverse(), hasMore: newestFirst.length > limit };
+    }
 
+    if (options.page == null) {
+      qb.orderBy('m.id', 'ASC').take(limit);
+      return { messages: await run(), hasMore: false };
+    }
+
+    const offset = Math.max(0, (options.page - 1) * limit);
+    qb.orderBy('m.id', 'DESC').skip(offset).take(limit + 1);
+    const newestFirst = await run();
     return {
       messages: newestFirst.slice(0, limit).reverse(),
       hasMore: newestFirst.length > limit,
+    };
+  }
+
+  /** Search the WHOLE chat history on the server (not only the loaded messages). */
+  async searchConversationMessages(
+    user: AuthenticatedUser,
+    conversationId: number,
+    query: string,
+    requestedLimit = 50,
+  ) {
+    await this.assertConversationAccess(user, conversationId);
+    const text = String(query ?? '').trim();
+    if (text.length < 2) {
+      return { results: [] };
+    }
+    const limit = Math.min(Math.max(Number(requestedLimit) || 50, 1), 100);
+    const pattern = `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    const rows = await this.messageRepository
+      .createQueryBuilder('m')
+      .select(['m.id', 'm.direction', 'm.message_type', 'm.content', 'm.created_at'])
+      .where('m.conversation_id = :conversationId', { conversationId })
+      .andWhere('(m.content ILIKE :pattern OR m.transcript ILIKE :pattern)', { pattern })
+      .orderBy('m.id', 'DESC')
+      .take(limit)
+      .getMany();
+    return {
+      results: rows.map((row) => ({
+        id: row.id,
+        direction: row.direction,
+        message_type: row.message_type,
+        content: String(row.content ?? '').slice(0, 300),
+        created_at: row.created_at,
+      })),
     };
   }
 
