@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AgentRoutingService } from '../../agent-routing/agent-routing.service';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
+import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
 import { MetaAdapter } from './adapters/meta.adapter';
@@ -16,6 +17,8 @@ export class WhatsappService {
   constructor(
     @InjectRepository(WhatsappChannel)
     private readonly whatsappChannelRepository: Repository<WhatsappChannel>,
+    @InjectRepository(BotMessage)
+    private readonly messageRepository: Repository<BotMessage>,
     private readonly whatsappChannelService: WhatsappChannelService,
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly metaAdapter: MetaAdapter,
@@ -65,9 +68,10 @@ export class WhatsappService {
   }
 
   async processInboundWebhook(body: unknown) {
+    const statusResult = await this.processMetaStatusCallbacks(body);
     const normalizedMessages = this.providerFactory.normalizeInboundWebhooks(body);
     if (!normalizedMessages.length) {
-      return { accepted: false, reason: 'unsupported_payload' };
+      return statusResult ?? { accepted: false, reason: 'unsupported_payload' };
     }
 
     const results: Awaited<ReturnType<WhatsappService['processNormalizedInbound']>>[] = [];
@@ -80,6 +84,45 @@ export class WhatsappService {
       : { accepted: true, processed: results.length, results };
   }
 
+  private async processMetaStatusCallbacks(body: unknown) {
+    const payload = ((body as Record<string, unknown>)?.body as Record<string, unknown>) ?? (body as Record<string, unknown>) ?? {};
+    if (payload.object !== 'whatsapp_business_account') return null;
+    const entries = Array.isArray(payload.entry) ? payload.entry : [];
+    let updated = 0;
+    for (const rawEntry of entries) {
+      const entry = rawEntry as Record<string, unknown>;
+      const changes = Array.isArray(entry.changes) ? entry.changes : [];
+      for (const rawChange of changes) {
+        const value = (rawChange as Record<string, unknown>)?.value as Record<string, unknown> | undefined;
+        const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+        for (const rawStatus of statuses) {
+          const item = rawStatus as Record<string, unknown>;
+          const messageId = String(item.id ?? '').trim();
+          const nextStatus = this.normalizeDeliveryStatus(String(item.status ?? '').trim());
+          if (!messageId || !nextStatus) continue;
+          const result = await this.messageRepository
+            .createQueryBuilder()
+            .update(BotMessage)
+            .set({ delivery_status: nextStatus })
+            .where('provider_message_id = :messageId', { messageId })
+            .andWhere("platform = 'whatsapp'")
+            .andWhere("direction::text = 'outbound'")
+            .execute();
+          updated += Number(result.affected ?? 0);
+        }
+      }
+    }
+    return updated > 0 ? { accepted: true, status_updates: updated } : null;
+  }
+
+  private normalizeDeliveryStatus(status: string): 'sent' | 'delivered' | 'read' | 'failed' | null {
+    const normalized = status.toLowerCase();
+    if (normalized === 'sent') return 'sent';
+    if (normalized === 'delivered') return 'delivered';
+    if (normalized === 'read') return 'read';
+    if (normalized === 'failed') return 'failed';
+    return null;
+  }
   /**
    * Builds the chat row for an inbound message.
    * Meta: read the full message from the raw webhook (location, contact, document name,

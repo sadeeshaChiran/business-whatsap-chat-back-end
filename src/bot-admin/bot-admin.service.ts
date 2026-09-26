@@ -1473,8 +1473,9 @@ export class BotAdminService {
       }
     }
 
-    channelUser.bot_enabled = false;
-    channelUser.manual_mode = true;
+    const freePlanCanUseBot = String(company.plan ?? '').trim().toLowerCase() === 'free' && company.bot_enabled !== false;
+    channelUser.bot_enabled = freePlanCanUseBot ? payload.manual_mode !== true : false;
+    channelUser.manual_mode = !channelUser.bot_enabled;
 
     const saved = await this.channelUserRepository.save(channelUser);
     return {
@@ -2761,6 +2762,7 @@ export class BotAdminService {
       content: trimmed,
       source: isAdmin ? 'admin' : 'agent',
       provider_message_id: providerMessageId,
+      delivery_status: providerMessageId ? 'sent' : null,
     });
     const saved = await this.messageRepository.save(message);
 

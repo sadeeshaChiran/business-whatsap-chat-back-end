@@ -19,6 +19,7 @@ const MIGRATION_FILES = [
   'supabase_whatsapp_meta_verify_token.sql',
   'supabase_whatsapp_meta_webhook_base.sql',
   'supabase_whatsapp_message_dedup.sql',
+  'supabase_bot_message_delivery_status.sql',
   'supabase_evolution_read_messages.sql',
   'supabase_bot_channel_user_company_scope.sql',
   'supabase_meta_message_account_scope.sql',
