@@ -47,6 +47,15 @@ import { User } from '../users/entities/user.entity';
 import { PusherService } from '../common/pusher.service';
 import { AgentRoutingService } from '../agent-routing/agent-routing.service';
 import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
+import { SendLocationDto } from './dto/send-location.dto';
+import { SendContactDto } from './dto/send-contact.dto';
+import {
+  chatMediaCompanyId,
+  isChatMediaKey,
+  publicChatMediaUrl,
+  readChatMedia,
+  saveChatMedia,
+} from './chat-media.store';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -77,6 +86,9 @@ type CompanyContactRow = {
   } | null;
   evolution_remote_jid: string | null;
   last_message_preview: string | null;
+  unread_count?: number;
+  last_message_direction?: 'inbound' | 'outbound' | null;
+  labels?: Array<{ id: number; name: string; color_code: string }>;
 };
 
 @Injectable()
@@ -263,15 +275,6 @@ export class BotAdminService {
     if (mime.startsWith('video/')) return 'video';
     if (mime.startsWith('audio/')) return 'audio';
     return 'document';
-  }
-
-  private resolveOutboundMessageType(
-    mediaType: 'image' | 'document' | 'audio' | 'video',
-  ): 'text' | 'image' | 'voice' | 'system' {
-    if (mediaType === 'image') return 'image';
-    if (mediaType === 'audio') return 'voice';
-    // Documents/videos are stored as image rows with media_url for thread display.
-    return 'image';
   }
 
   private readonly defaultStatusTemplates: Record<BotOrderStatus, string> = {
@@ -656,8 +659,9 @@ export class BotAdminService {
     return isBrowserDisplayableImageUrl(String(value ?? '').trim());
   }
 
+  /** Images AND voice notes from Evolution get their media inlined (the inbox can't fetch Evolution ids). */
   private needsEvolutionImageEnrichment(message: EvolutionInboxMessage): boolean {
-    if (message.message_type !== 'image') {
+    if (message.message_type !== 'image' && message.message_type !== 'voice') {
       return false;
     }
     const mediaUrl = String(message.media_url ?? '').trim();
@@ -667,7 +671,7 @@ export class BotAdminService {
     if (mediaUrl.startsWith('data:')) {
       return false;
     }
-    return isWhatsAppHostedMediaUrl(mediaUrl) || !isBrowserDisplayableImageUrl(mediaUrl);
+    return isWhatsAppHostedMediaUrl(mediaUrl) || !/^https?:\/\//.test(mediaUrl) || message.message_type === 'voice';
   }
 
   private hydrateThreadMessage<
@@ -748,7 +752,9 @@ export class BotAdminService {
       return trimmed;
     }
     const cleaned = trimmed.includes(',') ? trimmed.split(',').pop() ?? trimmed : trimmed;
-    return `data:${mimetype || 'image/jpeg'};base64,${cleaned}`;
+    // "audio/ogg; codecs=opus" → "audio/ogg" (parameters break data URLs and our parser)
+    const mime = (mimetype || 'image/jpeg').split(';')[0].trim() || 'image/jpeg';
+    return `data:${mime};base64,${cleaned}`;
   }
 
   private static readonly META_MEDIA_PREFIX = 'meta-media:';
@@ -780,26 +786,22 @@ export class BotAdminService {
     return '';
   }
 
+  /** Only real images. Voice notes / documents / videos must keep their type and are loaded by the inbox on demand. */
   private needsMetaImageEnrichment(message: {
     message_type?: string;
     content?: string;
     media_url?: string | null;
   }): boolean {
-    if (this.isDisplayableImageUrl(message.media_url)) {
+    if (this.isDisplayableImageUrl(message.media_url) || isChatMediaKey(message.media_url)) {
       return false;
     }
-    if (this.extractMetaMediaId(message)) {
-      return true;
-    }
-    if (isWhatsAppHostedMediaUrl(String(message.media_url ?? ''))) {
-      return true;
-    }
     const messageType = String(message.message_type ?? '').toLowerCase();
-    if (messageType === 'image') {
-      return true;
-    }
     const content = String(message.content ?? '').trim();
-    return content === '[image]' || /\[customer image:/i.test(content);
+    const looksLikeImage = messageType === 'image' || content === '[image]' || /\[customer image:/i.test(content);
+    if (!looksLikeImage) {
+      return false;
+    }
+    return Boolean(this.extractMetaMediaId(message)) || isWhatsAppHostedMediaUrl(String(message.media_url ?? '')) || messageType === 'image';
   }
 
   private async fetchMetaMediaAsDataUrl(
@@ -907,7 +909,8 @@ export class BotAdminService {
           token,
         );
       }
-      if (!dataUrl) {
+      // only real images are inlined – never turn audio/documents into image rows
+      if (!dataUrl || !dataUrl.startsWith('data:image/')) {
         continue;
       }
       const key =
@@ -1616,31 +1619,6 @@ export class BotAdminService {
     return qb.getCount();
   }
 
-  private async markConversationReadByAgent(
-    conversationId: number,
-    agentId: number,
-    companyId: number,
-  ): Promise<void> {
-    await this.conversationRepository
-      .createQueryBuilder()
-      .update(BotConversation)
-      .set({ agent_last_read_at: new Date() })
-      .where('id = :conversationId', { conversationId })
-      .andWhere('CAST(assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', {
-        agentId: Number(agentId),
-      })
-      .andWhere(
-        `id IN (
-          SELECT c.id
-          FROM bot_conversation c
-          INNER JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
-          WHERE CAST(u.company_id AS BIGINT) = CAST(:companyId AS BIGINT)
-        )`,
-        { companyId: Number(companyId) },
-      )
-      .execute();
-  }
-
   private async buildCompanyConversationRows(
     companyId: number,
     requestedPage?: number,
@@ -1660,26 +1638,74 @@ export class BotAdminService {
       .take(limit)
       .getMany();
 
-    const conversationIds = conversations.map((conversation) => conversation.id);
-    const previewByConversation = new Map<number, string>();
-    if (conversationIds.length > 0) {
-      const latestMessages = await this.messageRepository
-        .createQueryBuilder('message')
-        .where('message.conversation_id IN (:...conversationIds)', { conversationIds })
-        .orderBy('message.conversation_id', 'ASC')
-        .addOrderBy('message.id', 'DESC')
-        .getMany();
+    const conversationIds = conversations.map((conversation) => Number(conversation.id));
+    const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound' }>();
+    const unreadByConversation = new Map<number, number>();
+    const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
 
-      for (const message of latestMessages) {
-        if (!previewByConversation.has(message.conversation_id)) {
-          previewByConversation.set(message.conversation_id, message.content?.trim() ?? '');
-        }
+    if (conversationIds.length > 0) {
+      // Only the newest message per conversation (was: every message of every conversation).
+      const latest: Array<{ conversation_id: number; content: string | null; direction: 'inbound' | 'outbound' }> =
+        await this.messageRepository.query(
+          `SELECT DISTINCT ON (conversation_id) conversation_id, content, direction::text AS direction
+             FROM bot_message
+            WHERE conversation_id = ANY($1)
+            ORDER BY conversation_id, id DESC`,
+          [conversationIds],
+        );
+      for (const row of latest) {
+        previewByConversation.set(Number(row.conversation_id), {
+          content: String(row.content ?? '').trim(),
+          direction: row.direction,
+        });
+      }
+
+      // Unread = customer messages after the later of: last time the team opened the chat,
+      // or the last reply sent to the customer (by an agent, admin or the bot).
+      const unread: Array<{ conversation_id: number; unread: number }> = await this.messageRepository.query(
+        `SELECT m.conversation_id, COUNT(*)::int AS unread
+           FROM bot_message m
+           JOIN bot_conversation c ON c.id = m.conversation_id
+          WHERE m.conversation_id = ANY($1)
+            AND m.direction::text = 'inbound'
+            AND m.created_at > GREATEST(
+                  COALESCE(c.agent_last_read_at::timestamp, 'epoch'::timestamp),
+                  COALESCE((SELECT MAX(o.created_at) FROM bot_message o
+                             WHERE o.conversation_id = m.conversation_id
+                               AND o.direction::text = 'outbound'), 'epoch'::timestamp))
+          GROUP BY m.conversation_id`,
+        [conversationIds],
+      );
+      for (const row of unread) {
+        unreadByConversation.set(Number(row.conversation_id), Number(row.unread) || 0);
+      }
+
+      // Tags on each chat – used by the tag filter and the chips in the chat list.
+      const labelRows = await this.conversationLabelRepository
+        .createQueryBuilder('cl')
+        .innerJoin(BotCustomerLabel, 'l', 'l.id = cl.label_id')
+        .where('cl.conversation_id IN (:...conversationIds)', { conversationIds })
+        .andWhere('CAST(l.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
+        .select([
+          'cl.conversation_id AS conversation_id',
+          'l.id AS id',
+          'l.name AS name',
+          'l.color_code AS color_code',
+        ])
+        .orderBy('l.name', 'ASC')
+        .getRawMany<{ conversation_id: string | number; id: string | number; name: string; color_code: string }>();
+      for (const row of labelRows) {
+        const key = Number(row.conversation_id);
+        const list = labelsByConversation.get(key) ?? [];
+        list.push({ id: Number(row.id), name: row.name, color_code: row.color_code });
+        labelsByConversation.set(key, list);
       }
     }
 
     return conversations.map((conversation) => {
       const channelUser = conversation.channelUser;
       const seenAt = channelUser.last_seen_at ?? conversation.last_message_at ?? channelUser.created_at;
+      const preview = previewByConversation.get(Number(conversation.id));
       return {
         customer: {
           id: 0,
@@ -1706,7 +1732,10 @@ export class BotAdminService {
           last_message_at: conversation.last_message_at,
         },
         evolution_remote_jid: null,
-        last_message_preview: previewByConversation.get(conversation.id) || null,
+        last_message_preview: preview?.content || null,
+        last_message_direction: preview?.direction ?? null,
+        unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
+        labels: labelsByConversation.get(Number(conversation.id)) ?? [],
       };
     });
   }
@@ -2087,21 +2116,29 @@ export class BotAdminService {
     return { remote_jid: jid, sent: true, text: trimmed };
   }
 
+  /**
+   * Opens a chat fast:
+   *  - first call:  newest `limit` messages
+   *  - scroll up:   before_id = oldest loaded id  → the page before it
+   *  - polling:     after_id  = newest loaded id + light=true → only new messages, no labels/orders/notes
+   * Media is never sent inline – the inbox loads each file from /messages/:id/media when it is shown.
+   */
   async getConversation(
     user: AuthenticatedUser,
     id: number,
     requestedPage?: number,
     requestedLimit?: number,
+    options: { beforeId?: number; afterId?: number; light?: boolean } = {},
   ) {
-    const paged = requestedPage != null;
+    const paged = requestedPage != null || options.beforeId != null || options.afterId != null;
     const page =
       Number.isInteger(requestedPage) && Number(requestedPage) > 0
         ? Number(requestedPage)
         : 1;
     const limit =
       Number.isInteger(requestedLimit) && Number(requestedLimit) > 0
-        ? Math.min(Number(requestedLimit), 50)
-        : 30;
+        ? Math.min(Number(requestedLimit), 100)
+        : 40;
     const company = await this.getCompanyForUser(user);
     if (!company) {
       throw new ForbiddenException('Company not found.');
@@ -2122,84 +2159,164 @@ export class BotAdminService {
       throw new ForbiddenException('You do not have access to this conversation.');
     }
 
-    if (Number(conversation.assigned_agent_id) === Number(user.id)) {
-      await this.markConversationReadByAgent(
-        conversation.id,
-        user.id,
-        user.company_id,
-      );
-    }
-
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
-    const isMetaChannel = this.isMetaWhatsappChannel(channel);
-    const dbMessages = isMetaChannel
-      ? await this.loadConversationDbMessagesPage(id, paged ? page : undefined, paged ? limit : 150)
+    const platform = String(conversation.channelUser?.platform ?? 'whatsapp').toLowerCase();
+    // Messenger / Instagram always live in our DB, even when WhatsApp uses Evolution.
+    const readFromDb = this.isMetaWhatsappChannel(channel) || platform !== 'whatsapp';
+
+    const dbMessages = readFromDb
+      ? await this.loadConversationDbMessagesPage(id, {
+          page: paged ? page : undefined,
+          limit: paged ? limit : 150,
+          beforeId: options.beforeId,
+          afterId: options.afterId,
+        })
       : { messages: [] as BotMessage[], hasMore: false };
+
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
-      !isMetaChannel && phone && instance && apikey
-        ? (
-            await this.fetchEvolutionMessagesForJid(
-              user.company_id,
-              `${phone}@s.whatsapp.net`,
-              instance,
-              apikey,
-              page,
-              paged ? limit : 150,
-            )
+      !readFromDb && phone && instance && apikey
+        ? await this.fetchEvolutionMessagesForJid(
+            user.company_id,
+            `${phone}@s.whatsapp.net`,
+            instance,
+            apikey,
+            page,
+            paged ? limit : 150,
           )
         : null;
 
-    let mergedMessages = isMetaChannel
+    const mergedMessages = readFromDb
       ? this.mergeConversationThreadMessages(dbMessages.messages, [])
       : this.mergeConversationThreadMessages([], fetchedEvolution?.messages ?? []);
-    let hasMore = isMetaChannel ? dbMessages.hasMore : fetchedEvolution?.hasMore ?? false;
-    if (isMetaChannel) {
-      mergedMessages = await this.enrichMetaDbImageMessages(mergedMessages, channel);
+    const hasMore = readFromDb ? dbMessages.hasMore : fetchedEvolution?.hasMore ?? false;
+
+    // Opening the newest page (or receiving new customer messages while open) = read.
+    const isNewestView = options.beforeId == null && page === 1;
+    const gotNewInbound = dbMessages.messages.some((message) => message.direction === 'inbound');
+    if (isNewestView && (!options.light || gotNewInbound)) {
+      void this.markConversationRead(conversation, user.company_id).catch((error) =>
+        console.warn(`Mark read failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error),
+      );
     }
-const channelUserId = Number(conversation.bot_channel_user_id || 0);
+
+    const channelUserId = Number(conversation.bot_channel_user_id || 0);
+    // Light polls skip the side data (labels / orders / notes) – the inbox keeps what it already has.
+    const [labels, customerOrders, customerNotes] = options.light
+      ? [undefined, undefined, undefined]
+      : await Promise.all([
+          this.listConversationLabels(id, user.company_id),
+          this.getOrdersForChannelUser(user.company_id, channelUserId),
+          this.listNotesForChannelUser(user.company_id, channelUserId),
+        ]);
+
     return {
       conversation,
       messages: mergedMessages,
       ...(paged ? { pagination: { page, limit, has_more: hasMore } } : {}),
-      labels: await this.listConversationLabels(id, user.company_id),
-      customer_orders: await this.getOrdersForChannelUser(
-        user.company_id,
-        channelUserId,
-      ),
-      customer_notes: await this.listNotesForChannelUser(
-        user.company_id,
-        channelUserId,
-      ),
+      ...(options.light ? {} : { labels, customer_orders: customerOrders, customer_notes: customerNotes }),
     };
   }
+
+  /**
+   * Loads a page of messages WITHOUT the heavy inline media.
+   * Old rows store images/voice as "data:…;base64,…" (MBs each). Those are replaced by
+   * "inline:<mime>" here, so the list stays tiny; the file itself is served by /media.
+   */
   private async loadConversationDbMessagesPage(
     conversationId: number,
-    page?: number,
-    limit = 150,
+    options: { page?: number; limit?: number; beforeId?: number; afterId?: number },
   ): Promise<{ messages: BotMessage[]; hasMore: boolean }> {
-    if (page == null) {
-      const messages = await this.messageRepository.find({
-        where: { conversation_id: conversationId },
-        order: { id: 'ASC' },
-        take: limit,
+    const limit = options.limit ?? 150;
+    const qb = this.messageRepository
+      .createQueryBuilder('m')
+      .select([
+        'm.id',
+        'm.conversation_id',
+        'm.direction',
+        'm.message_type',
+        'm.platform',
+        'm.provider_message_id',
+        'm.content',
+        'm.transcript',
+        'm.source',
+        'm.created_at',
+      ])
+      .addSelect(
+        `CASE WHEN m.media_url LIKE 'data:%'
+              THEN 'inline:' || split_part(split_part(substr(m.media_url, 6), ',', 1), ';', 1)
+              ELSE m.media_url END`,
+        'media_light',
+      )
+      .where('m.conversation_id = :conversationId', { conversationId });
+
+    const run = async () => {
+      const { entities, raw } = await qb.getRawAndEntities<{ media_light: string | null }>();
+      return entities.map((entity, index) => {
+        entity.media_url = raw[index]?.media_light ?? null;
+        return entity;
       });
-      return { messages, hasMore: false };
+    };
+
+    // polling: only messages newer than what the inbox already has
+    if (options.afterId != null) {
+      qb.andWhere('m.id > :afterId', { afterId: options.afterId }).orderBy('m.id', 'ASC').take(200);
+      return { messages: await run(), hasMore: false };
     }
 
-    const offset = Math.max(0, (page - 1) * limit);
-    const newestFirst = await this.messageRepository.find({
-      where: { conversation_id: conversationId },
-      order: { id: 'DESC' },
-      skip: offset,
-      take: limit + 1,
-    });
+    // scrolling up: the page just before the oldest loaded message (stable even when new messages arrive)
+    if (options.beforeId != null) {
+      qb.andWhere('m.id < :beforeId', { beforeId: options.beforeId }).orderBy('m.id', 'DESC').take(limit + 1);
+      const newestFirst = await run();
+      return { messages: newestFirst.slice(0, limit).reverse(), hasMore: newestFirst.length > limit };
+    }
 
+    if (options.page == null) {
+      qb.orderBy('m.id', 'ASC').take(limit);
+      return { messages: await run(), hasMore: false };
+    }
+
+    const offset = Math.max(0, (options.page - 1) * limit);
+    qb.orderBy('m.id', 'DESC').skip(offset).take(limit + 1);
+    const newestFirst = await run();
     return {
       messages: newestFirst.slice(0, limit).reverse(),
       hasMore: newestFirst.length > limit,
+    };
+  }
+
+  /** Search the WHOLE chat history on the server (not only the loaded messages). */
+  async searchConversationMessages(
+    user: AuthenticatedUser,
+    conversationId: number,
+    query: string,
+    requestedLimit = 50,
+  ) {
+    await this.assertConversationAccess(user, conversationId);
+    const text = String(query ?? '').trim();
+    if (text.length < 2) {
+      return { results: [] };
+    }
+    const limit = Math.min(Math.max(Number(requestedLimit) || 50, 1), 100);
+    const pattern = `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    const rows = await this.messageRepository
+      .createQueryBuilder('m')
+      .select(['m.id', 'm.direction', 'm.message_type', 'm.content', 'm.created_at'])
+      .where('m.conversation_id = :conversationId', { conversationId })
+      .andWhere('(m.content ILIKE :pattern OR m.transcript ILIKE :pattern)', { pattern })
+      .orderBy('m.id', 'DESC')
+      .take(limit)
+      .getMany();
+    return {
+      results: rows.map((row) => ({
+        id: row.id,
+        direction: row.direction,
+        message_type: row.message_type,
+        content: String(row.content ?? '').slice(0, 300),
+        created_at: row.created_at,
+      })),
     };
   }
 
@@ -2217,99 +2334,140 @@ const channelUserId = Number(conversation.bot_channel_user_id || 0);
       throw new NotFoundException('Message not found.');
     }
 
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
-    const hydrated = this.hydrateThreadMessage({
-      id: message.id,
-      direction: message.direction,
-      message_type: message.message_type,
-      platform: message.platform,
-      content: message.content,
-      media_url: message.media_url,
-      transcript: message.transcript,
-      created_at: message.created_at,
-    });
+    const stored = String(message.media_url ?? '').trim();
 
-    let mediaUrl = String(hydrated.media_url ?? message.media_url ?? '').trim();
-    if (!this.isDisplayableImageUrl(mediaUrl)) {
-      const embedded = String(message.content ?? '')
-        .match(BotAdminService.THREAD_IMAGE_URL_RE)
-        ?.find((url) => this.isDisplayableImageUrl(url))
-        ?.trim();
-      if (embedded) {
-        mediaUrl = embedded;
+    // 1. Files we stored ourselves (agent uploads, Messenger/Instagram downloads)
+    if (isChatMediaKey(stored)) {
+      if (chatMediaCompanyId(stored) !== Number(user.company_id)) {
+        throw new ForbiddenException('You do not have access to this file.');
       }
+      const file = readChatMedia(stored);
+      if (file) {
+        return { buffer: file.buffer, contentType: file.contentType };
+      }
+      throw new NotFoundException('This file is no longer stored on the server.');
     }
 
-    if (mediaUrl.startsWith('data:')) {
-      const parsed = this.parseDataImageUrl(mediaUrl);
+    // 2. Inline data URLs (older rows)
+    if (stored.startsWith('data:')) {
+      const parsed = this.parseDataImageUrl(stored);
       if (parsed) {
         return parsed;
       }
     }
 
-    const metaMediaId = this.extractMetaMediaId(message);
+    // 3. WhatsApp Cloud API media id ("meta-media:<id>") – images, voice, video, documents
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     const metaToken = channel?.meta_access_token?.trim() ?? '';
+    const metaMediaId = this.extractMetaMediaId(message);
     if (metaMediaId && metaToken) {
-      const dataUrl = await this.fetchMetaMediaAsDataUrl(metaMediaId, metaToken);
+      const file = await this.fetchMetaMediaBuffer(metaMediaId, metaToken);
+      if (file) {
+        return file;
+      }
+    }
+
+    // 4. WhatsApp-hosted URL (needs the token)
+    if (isWhatsAppHostedMediaUrl(stored) && metaToken) {
+      const dataUrl = await this.fetchWhatsAppHostedMediaAsDataUrl(stored, metaToken);
       const parsed = dataUrl ? this.parseDataImageUrl(dataUrl) : null;
       if (parsed) {
         return parsed;
       }
     }
 
-    if (this.isDisplayableImageUrl(mediaUrl)) {
-      const proxied = await this.fetchRemoteImageBuffer(mediaUrl);
+    // 5. Any public link (Messenger/Instagram CDN, images inside text…)
+    const remoteUrl = /^https?:\/\//i.test(stored)
+      ? stored
+      : String(message.content ?? '').match(BotAdminService.THREAD_IMAGE_URL_RE)?.[0] ?? '';
+    if (remoteUrl) {
+      const proxied = await this.fetchRemoteMediaBuffer(remoteUrl);
       if (proxied) {
         return proxied;
-      }
-    }
-
-    if (isWhatsAppHostedMediaUrl(mediaUrl) && metaToken) {
-      const dataUrl = await this.fetchWhatsAppHostedMediaAsDataUrl(mediaUrl, metaToken);
-      const parsed = dataUrl ? this.parseDataImageUrl(dataUrl) : null;
-      if (parsed) {
-        return parsed;
       }
     }
 
     throw new NotFoundException('Message media is not available.');
   }
 
-  private parseDataImageUrl(
-    dataUrl: string,
-  ): { buffer: Buffer; contentType: string } | null {
-    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/i);
-    if (!match?.[2]) {
-      return null;
-    }
+  /** Download a WhatsApp Cloud API media id as raw bytes (any type). */
+  private async fetchMetaMediaBuffer(
+    mediaId: string,
+    accessToken: string,
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
     try {
-      const buffer = Buffer.from(match[2], 'base64');
+      const metaRes = await fetch(
+        `https://graph.facebook.com/${this.metaGraphVersion()}/${encodeURIComponent(mediaId.trim())}`,
+        { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(12000) },
+      );
+      if (!metaRes.ok) {
+        console.warn(`Meta media lookup failed for ${mediaId}: ${metaRes.status}`);
+        return null;
+      }
+      const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
+      if (!meta.url) {
+        return null;
+      }
+      const binRes = await fetch(meta.url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!binRes.ok) {
+        console.warn(`Meta media download failed for ${mediaId}: ${binRes.status}`);
+        return null;
+      }
+      const buffer = Buffer.from(await binRes.arrayBuffer());
       if (!buffer.length) {
         return null;
       }
-      return { buffer, contentType: match[1].trim() || 'image/jpeg' };
+      const contentType = (meta.mime_type || binRes.headers.get('content-type') || 'application/octet-stream')
+        .split(';')[0]
+        .trim();
+      return { buffer, contentType };
+    } catch (error) {
+      console.warn('Meta media fetch error:', error instanceof Error ? error.message : error);
+      return null;
+    }
+  }
+
+  /** Download any public media URL (no type restriction – voice, video and files too). */
+  private async fetchRemoteMediaBuffer(
+    url: string,
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        return null;
+      }
+      const contentType = (res.headers.get('content-type') || 'application/octet-stream').split(';')[0].trim();
+      if (/text\/html|application\/json/i.test(contentType)) {
+        return null; // an error page, not a file
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return buffer.length ? { buffer, contentType } : null;
     } catch {
       return null;
     }
   }
 
-  private async fetchRemoteImageBuffer(
-    url: string,
-  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+  /** Works for any data URL, including "data:audio/ogg; codecs=opus;base64,…". */
+  private parseDataImageUrl(
+    dataUrl: string,
+  ): { buffer: Buffer; contentType: string } | null {
+    if (!dataUrl.startsWith('data:')) {
+      return null;
+    }
+    const comma = dataUrl.indexOf(',');
+    if (comma < 0) {
+      return null;
+    }
+    const header = dataUrl.slice(5, comma);
+    const body = dataUrl.slice(comma + 1);
+    const isBase64 = /;\s*base64/i.test(header);
+    const contentType = header.split(';')[0].trim() || 'application/octet-stream';
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) {
-        return null;
-      }
-      const contentType = res.headers.get('content-type')?.trim() || 'image/jpeg';
-      if (!contentType.startsWith('image/')) {
-        return null;
-      }
-      const buffer = Buffer.from(await res.arrayBuffer());
-      if (!buffer.length) {
-        return null;
-      }
-      return { buffer, contentType };
+      const buffer = isBase64 ? Buffer.from(body, 'base64') : Buffer.from(decodeURIComponent(body));
+      return buffer.length ? { buffer, contentType } : null;
     } catch {
       return null;
     }
@@ -2671,98 +2829,299 @@ const channelUserId = Number(conversation.bot_channel_user_id || 0);
     } | null | undefined,
     caption?: string,
   ) {
-    await this.assertConversationAccess(user, conversationId);
+    const { conversation, channelUser, isAdmin } = await this.loadWritableConversation(user, conversationId);
     const uploaded = this.normalizeUploadedMediaFile(file);
-
-    const conversation = await this.findConversationForCompany(
-      conversationId,
-      user.company_id,
-    );
-    if (!conversation) {
-      throw new NotFoundException('Conversation not found.');
-    }
-
-    const company = await this.getCompanyForUser(user);
-    const isAdmin =
-      company != null && Number(company.admin_user_id) === Number(user.id);
-    if (
-      !isAdmin &&
-      Number(conversation.assigned_agent_id) !== Number(user.id)
-    ) {
-      throw new ForbiddenException('You do not have access to this conversation.');
-    }
-
-    const channelUser = conversation.channelUser;
-    if (!channelUser) {
-      throw new BadRequestException('Conversation has no linked channel user.');
-    }
-
-    const socialPlatform = channelUser.platform?.toLowerCase() || '';
-    if (socialPlatform === 'instagram') {
-      throw new BadRequestException('Instagram requires a public image/video URL. Use a social template with an Image URL.');
-    }
-    if (socialPlatform === 'messenger' || socialPlatform === 'facebook') {
-      const uploadedSocial = this.normalizeUploadedMediaFile(file);
-      const providerMessageId = await this.sendMessengerMedia(user.company_id, channelUser.source_account_id, channelUser.external_user_id, uploadedSocial, caption);
-      const socialMediaType = this.resolveOutboundMediaType(uploadedSocial.mimetype);
-      const socialMediaUrl = socialMediaType === 'image' && uploadedSocial.buffer.length <= 2 * 1024 * 1024
-        ? `data:${uploadedSocial.mimetype};base64,${uploadedSocial.buffer.toString('base64')}` : null;
-      const saved = await this.messageRepository.save(this.messageRepository.create({
-        conversation_id: conversationId, direction: 'outbound', message_type: this.resolveOutboundMessageType(socialMediaType),
-        platform: 'messenger', provider_message_id: providerMessageId, content: caption?.trim() || `[file: ${uploadedSocial.originalname}]`, media_url: socialMediaUrl, source: isAdmin ? 'admin' : 'agent',
-      }));
-      channelUser.manual_mode = true; channelUser.last_seen_at = new Date(); await this.channelUserRepository.save(channelUser);
-      conversation.last_message_at = new Date(); await this.conversationRepository.save(conversation);
-      return { message: saved };
-    }
-
-    const phone = this.normalizePhoneKey(channelUser.external_user_id);
-    if (!phone) {
-      throw new BadRequestException('Invalid customer phone on this conversation.');
-    }
-
-    const mimetype = uploaded.mimetype;
+    const mimetype = uploaded.mimetype.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
     const fileName = uploaded.originalname;
     const mediaType = this.resolveOutboundMediaType(mimetype);
     const trimmedCaption = caption?.trim() || '';
+    const platform = this.normalizeChannelPlatform(channelUser.platform);
 
-    await this.sendCompanyWhatsappMedia(user.company_id, phone, {
-      buffer: uploaded.buffer,
-      mimetype,
-      fileName,
-      caption: trimmedCaption || undefined,
-      mediaType,
-    });
+    // Keep our own copy: the inbox can always show/download it, and Instagram needs a public URL.
+    const storedKey = saveChatMedia(user.company_id, uploaded.buffer, mimetype, fileName);
+
+    let providerMessageId: string | null = null;
+    if (platform === 'instagram') {
+      providerMessageId = await this.sendInstagramMedia(
+        user.company_id, channelUser.source_account_id, channelUser.external_user_id, storedKey, mediaType, trimmedCaption,
+      );
+    } else if (platform === 'messenger') {
+      providerMessageId = await this.sendMessengerMedia(
+        user.company_id, channelUser.source_account_id, channelUser.external_user_id,
+        { buffer: uploaded.buffer, mimetype, originalname: fileName }, trimmedCaption,
+      );
+    } else {
+      const phone = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phone) {
+        throw new BadRequestException('Invalid customer phone on this conversation.');
+      }
+      await this.sendCompanyWhatsappMedia(user.company_id, phone, {
+        buffer: uploaded.buffer,
+        mimetype,
+        fileName,
+        caption: trimmedCaption || undefined,
+        mediaType,
+      });
+    }
 
     channelUser.manual_mode = true;
     channelUser.last_seen_at = new Date();
     await this.channelUserRepository.save(channelUser);
 
-    // Keep a displayable preview for images; avoid huge base64 for other files.
-    const mediaUrl =
-      (mediaType === 'image' || mediaType === 'audio') &&
-      uploaded.buffer.length <= 4 * 1024 * 1024
-        ? `data:${mimetype};base64,${uploaded.buffer.toString('base64')}`
-        : null;
-    const content =
-      trimmedCaption ||
-      (mediaType === 'image' ? '[image]' : `[file: ${fileName}]`);
-
-    const message = this.messageRepository.create({
-      conversation_id: conversationId,
-      direction: 'outbound',
-      message_type: this.resolveOutboundMessageType(mediaType),
-      platform: channelUser.platform || 'whatsapp',
-      content,
-      media_url: mediaUrl,
-      source: isAdmin ? 'admin' : 'agent',
-    });
-    const saved = await this.messageRepository.save(message);
+    // Row format the inbox understands:
+    //   image → image,  audio → voice,  video/document → text row with the file
+    //   documents keep their file name as content so a document card is shown.
+    const saved = await this.messageRepository.save(
+      this.messageRepository.create({
+        conversation_id: conversationId,
+        direction: 'outbound',
+        message_type: mediaType === 'image' ? 'image' : mediaType === 'audio' ? 'voice' : 'text',
+        platform: channelUser.platform || 'whatsapp',
+        provider_message_id: providerMessageId,
+        content: mediaType === 'document' ? fileName : trimmedCaption || `[${mediaType}]`,
+        media_url: storedKey,
+        source: isAdmin ? 'admin' : 'agent',
+      }),
+    );
 
     conversation.last_message_at = new Date();
     await this.conversationRepository.save(conversation);
-
     return { message: saved };
+  }
+
+  /* ════════════════ New helpers (add inside BotAdminService) ════════════════ */
+
+  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' {
+    const platform = String(value ?? '').toLowerCase();
+    if (platform.includes('instagram')) return 'instagram';
+    if (platform.includes('messenger') || platform.includes('facebook')) return 'messenger';
+    return 'whatsapp';
+  }
+
+  /** Same access rules as sending a text message. */
+  private async loadWritableConversation(user: AuthenticatedUser, conversationId: number) {
+    await this.assertConversationAccess(user, conversationId);
+    const conversation = await this.findConversationForCompany(conversationId, user.company_id);
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found.');
+    }
+    const company = await this.getCompanyForUser(user);
+    const isAdmin = company != null && Number(company.admin_user_id) === Number(user.id);
+    if (!isAdmin && Number(conversation.assigned_agent_id) !== Number(user.id)) {
+      throw new ForbiddenException('You do not have access to this conversation.');
+    }
+    const channelUser = conversation.channelUser;
+    if (!channelUser) {
+      throw new BadRequestException('Conversation has no linked channel user.');
+    }
+    return { conversation, channelUser, isAdmin };
+  }
+
+  /** Instagram only accepts media by public URL → send a signed link to our stored copy. */
+  private async sendInstagramMedia(
+    companyId: number,
+    accountId: string | null,
+    recipientId: string,
+    storedKey: string,
+    mediaType: 'image' | 'document' | 'audio' | 'video',
+    caption: string,
+  ): Promise<string | null> {
+    if (mediaType === 'document') {
+      throw new BadRequestException('Instagram can only receive photos, videos and audio.');
+    }
+    const url = publicChatMediaUrl(storedKey, 60 * 60);
+    if (!url) {
+      throw new BadRequestException(
+        'Set PUBLIC_API_BASE_URL on the server (your public https API address) so Instagram can download the file.',
+      );
+    }
+    const messageId = await this.postSocialMessage(companyId, 'instagram', accountId, recipientId, {
+      attachment: { type: mediaType, payload: { url } },
+    });
+    if (caption) {
+      await this.postSocialMessage(companyId, 'instagram', accountId, recipientId, { text: caption });
+    }
+    return messageId;
+  }
+
+  /** Marks the chat read for the team and sends a read receipt (blue ticks) when something was unread. */
+  private async markConversationRead(conversation: BotConversation, companyId: number): Promise<void> {
+    const unreadBefore = await this.countUnreadInboundMessages(conversation);
+    await this.conversationRepository.update({ id: conversation.id }, { agent_last_read_at: new Date() });
+    if (unreadBefore > 0) {
+      await this.sendReadReceipt(conversation, companyId);
+    }
+  }
+
+  private async sendReadReceipt(conversation: BotConversation, companyId: number): Promise<void> {
+    const channelUser = conversation.channelUser;
+    if (!channelUser) return;
+    const platform = this.normalizeChannelPlatform(channelUser.platform);
+    try {
+      if (platform === 'whatsapp') {
+        const channel = await this.resolveCompanyWhatsappChannel(companyId);
+        const token = channel?.meta_access_token?.trim();
+        const phoneNumberId = channel?.meta_phone_number_id?.trim();
+        if (!this.isMetaWhatsappChannel(channel) || !token || !phoneNumberId) return;
+        const lastInbound = await this.messageRepository
+          .createQueryBuilder('m')
+          .where('m.conversation_id = :id', { id: conversation.id })
+          .andWhere("m.direction::text = 'inbound'")
+          .andWhere("m.provider_message_id LIKE 'wamid.%'")
+          .orderBy('m.id', 'DESC')
+          .getOne();
+        if (!lastInbound?.provider_message_id) return;
+        await fetch(`https://graph.facebook.com/${this.metaGraphVersion()}/${phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', status: 'read', message_id: lastInbound.provider_message_id }),
+          signal: AbortSignal.timeout(8000),
+        });
+        return;
+      }
+      // Messenger / Instagram: "seen"
+      const target = await this.getSocialReplyTarget(companyId, platform, channelUser.source_account_id);
+      const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
+      await fetch(`https://graph.facebook.com/${version}/${target.sendAccountId}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${target.connection.page_access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: { id: channelUser.external_user_id }, sender_action: 'mark_seen' }),
+        signal: AbortSignal.timeout(8000),
+      });
+    } catch (error) {
+      console.warn('Read receipt failed:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  /* ───── Location & contact: native WhatsApp cards, text fallback everywhere else ───── */
+
+  async sendConversationLocation(user: AuthenticatedUser, conversationId: number, dto: SendLocationDto) {
+    const name = dto.name?.trim() || 'Location';
+    const address = dto.address?.trim() || '';
+    // Stored in the format the inbox renders as a map card.
+    const text = [`📍 ${name}`, address, `https://maps.google.com/?q=${dto.latitude},${dto.longitude}`]
+      .filter(Boolean)
+      .join('\n');
+    return this.sendStructuredMessage(user, conversationId, text, {
+      type: 'location',
+      meta: { latitude: dto.latitude, longitude: dto.longitude, name, address: address || undefined },
+      evolutionPath: 'sendLocation',
+      evolutionBody: { name, address, latitude: dto.latitude, longitude: dto.longitude },
+    });
+  }
+
+  async sendConversationContact(user: AuthenticatedUser, conversationId: number, dto: SendContactDto) {
+    const digits = dto.phone.replace(/\D/g, '');
+    const name = dto.name.trim();
+    const text = `Contact: ${name}\nPhone: +${digits}${dto.company?.trim() ? `\nCompany: ${dto.company.trim()}` : ''}`;
+    return this.sendStructuredMessage(user, conversationId, text, {
+      type: 'contacts',
+      meta: [{
+        name: { formatted_name: name, first_name: name.split(' ')[0] || name },
+        phones: [{ phone: `+${digits}`, type: 'CELL', wa_id: digits }],
+        ...(dto.company?.trim() ? { org: { company: dto.company.trim() } } : {}),
+      }],
+      evolutionPath: 'sendContact',
+      evolutionBody: { contact: [{ fullName: name, wuid: digits, phoneNumber: `+${digits}`, organization: dto.company?.trim() || undefined }] },
+    });
+  }
+
+  private async sendStructuredMessage(
+    user: AuthenticatedUser,
+    conversationId: number,
+    text: string,
+    native: { type: 'location' | 'contacts'; meta: unknown; evolutionPath: string; evolutionBody: Record<string, unknown> },
+  ) {
+    const { conversation, channelUser, isAdmin } = await this.loadWritableConversation(user, conversationId);
+    const platform = this.normalizeChannelPlatform(channelUser.platform);
+    let providerMessageId: string | null = null;
+    let sentNative = false;
+
+    if (platform === 'whatsapp') {
+      const phone = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phone) {
+        throw new BadRequestException('Invalid customer phone on this conversation.');
+      }
+      const result = await this.trySendWhatsappNative(user.company_id, phone, native);
+      sentNative = result.ok;
+      providerMessageId = result.messageId;
+      if (!sentNative) {
+        await this.sendCompanyWhatsappText(user.company_id, phone, text); // fallback: customer gets the text version
+      }
+    } else {
+      providerMessageId = await this.sendSocialConversationText(
+        user.company_id, platform, channelUser.source_account_id, channelUser.external_user_id, text,
+      );
+    }
+
+    channelUser.manual_mode = true;
+    channelUser.last_seen_at = new Date();
+    await this.channelUserRepository.save(channelUser);
+
+    const saved = await this.messageRepository.save(
+      this.messageRepository.create({
+        conversation_id: conversationId,
+        direction: 'outbound',
+        message_type: 'text',
+        platform: channelUser.platform || 'whatsapp',
+        provider_message_id: providerMessageId,
+        content: text,
+        source: isAdmin ? 'admin' : 'agent',
+      }),
+    );
+    conversation.last_message_at = new Date();
+    await this.conversationRepository.save(conversation);
+    return { message: saved, native: sentNative };
+  }
+
+  /** Sends a real WhatsApp location/contact card (Meta Cloud API or Evolution). Never throws. */
+  private async trySendWhatsappNative(
+    companyId: number,
+    phone: string,
+    native: { type: 'location' | 'contacts'; meta: unknown; evolutionPath: string; evolutionBody: Record<string, unknown> },
+  ): Promise<{ ok: boolean; messageId: string | null }> {
+    try {
+      const channel = await this.resolveCompanyWhatsappChannel(companyId);
+      if (!channel) return { ok: false, messageId: null };
+
+      if (this.isMetaWhatsappChannel(channel)) {
+        const token = channel.meta_access_token?.trim();
+        const phoneNumberId = channel.meta_phone_number_id?.trim();
+        if (!token || !phoneNumberId) return { ok: false, messageId: null };
+        const res = await fetch(`https://graph.facebook.com/${this.metaGraphVersion()}/${phoneNumberId}/messages`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', to: phone, type: native.type, [native.type]: native.meta }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const json = (await res.json().catch(() => ({}))) as { messages?: Array<{ id?: string }>; error?: { message?: string } };
+        if (!res.ok) {
+          console.warn(`WhatsApp native ${native.type} failed:`, json.error?.message ?? res.status);
+          return { ok: false, messageId: null };
+        }
+        return { ok: true, messageId: json.messages?.[0]?.id ?? null };
+      }
+
+      const evolution = this.getEvolutionConfig();
+      const base = (channel.evolution_api_base?.trim() || evolution.base || '').replace(/\/+$/, '');
+      const instance = this.resolveEvolutionInstanceName(channel) || channel.instance_name?.trim() || '';
+      const apikey = (channel.evaluation_whatsapp_key ?? evolution.secureKey)?.trim();
+      if (!base || !instance || !apikey) return { ok: false, messageId: null };
+      const res = await fetch(`${base}/message/${native.evolutionPath}/${encodeURIComponent(instance)}`, {
+        method: 'POST',
+        headers: { apikey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: phone, ...native.evolutionBody }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        console.warn(`Evolution ${native.evolutionPath} failed:`, res.status, await res.text().catch(() => ''));
+        return { ok: false, messageId: null };
+      }
+      return { ok: true, messageId: null };
+    } catch (error) {
+      console.warn('Native WhatsApp send error:', error instanceof Error ? error.message : error);
+      return { ok: false, messageId: null };
+    }
   }
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {

@@ -7,6 +7,7 @@ import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service'
 import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
 import { MetaAdapter } from './adapters/meta.adapter';
 import { WhatsappProviderFactory } from './whatsapp-provider.factory';
+import { contentFromMetaMessage, findMetaRawMessage, type InboundRow } from './meta-inbound-content.util';
 
 @Injectable()
 export class WhatsappService {
@@ -79,6 +80,48 @@ export class WhatsappService {
       : { accepted: true, processed: results.length, results };
   }
 
+  /**
+   * Builds the chat row for an inbound message.
+   * Meta: read the full message from the raw webhook (location, contact, document name,
+   * video, sticker…) – the adapter alone only gives "[location]" / "[document]".
+   */
+  private buildInboundRow(body: unknown, normalized: NormalizedWhatsAppInbound): InboundRow | { skip: string } | null {
+    const adapterText = normalized.message?.trim() ?? '';
+    const adapterMediaUrl = normalized.meta_media_id?.trim() ? `meta-media:${normalized.meta_media_id.trim()}` : null;
+
+    if (normalized.provider === 'meta') {
+      const raw = findMetaRawMessage(body, normalized.message_id);
+      if (raw) {
+        const rich = contentFromMetaMessage(raw);
+        if ('skip' in rich) return rich;
+        return {
+          // voice notes: keep the adapter's text only if it is a real transcript,
+          // not a placeholder like "[voice note]" (those show as a voice player anyway)
+          content:
+            rich.message_type === 'voice' && adapterText && !/^\[[^\]]*\]$/.test(adapterText)
+              ? adapterText
+              : rich.content || adapterText,
+          message_type: rich.message_type,
+          media_url: rich.media_url ?? adapterMediaUrl,
+        };
+      }
+    }
+
+    if (!adapterText) return null;
+    return {
+      content: adapterText,
+      message_type:
+        normalized.input_type === 'voice'
+          ? 'voice'
+          : normalized.input_type === 'image'
+            ? 'image'
+            : normalized.input_type === 'system'
+              ? 'system'
+              : 'text',
+      media_url: adapterMediaUrl,
+    };
+  }
+
   private async processNormalizedInbound(
     body: unknown,
     normalized: NormalizedWhatsAppInbound,
@@ -86,6 +129,12 @@ export class WhatsappService {
   ) {
     if (normalized.from_me || !normalized.phone) {
       return { accepted: true, ignored: true, normalized };
+    }
+
+    const row = this.buildInboundRow(body, normalized);
+    if (row && 'skip' in row) {
+      // e.g. a reaction – nothing to show in the chat, and nothing for the bot to answer
+      return { accepted: true, ignored: true, reason: row.skip, normalized };
     }
 
     const channel = await this.resolveChannelForInbound(normalized);
@@ -101,17 +150,11 @@ export class WhatsappService {
       Number(channel.company_id),
       normalized.phone,
       normalized.display_name,
-      normalized.message?.trim()
+      row?.content
         ? {
-            content: normalized.message.trim(),
-            message_type: normalized.input_type === 'voice'
-              ? 'voice'
-              : normalized.input_type === 'image'
-                ? 'image'
-                : normalized.input_type === 'system'
-                  ? 'system'
-                  : 'text',
-            media_url: normalized.meta_media_id?.trim() ? `meta-media:${normalized.meta_media_id.trim()}` : null,
+            content: row.content,
+            message_type: row.message_type,
+            media_url: row.media_url,
             source: 'customer',
             provider_message_id: normalized.message_id?.trim() || undefined,
           }
