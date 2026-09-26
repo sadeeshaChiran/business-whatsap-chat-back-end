@@ -45,7 +45,7 @@ import { SaveMessageTemplateDto, SendMessageTemplateDto } from './dto/save-messa
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 export class BotAdminController {
-  constructor(private readonly botAdminService: BotAdminService) {}
+  constructor(private readonly botAdminService: BotAdminService) { }
 
   @Get('stats')
   getStats(@CurrentUser() user: AuthenticatedUser) {
@@ -176,18 +176,36 @@ export class BotAdminController {
   ) {
     return this.botAdminService.sendConversationTemplate(user, id, templateId, payload);
   }
+  @Get('conversations/:id/messages/search')
+  searchConversationMessages(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.botAdminService.searchConversationMessages(user, id, q ?? '', limit == null ? undefined : Number(limit));
+  }
+
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('before_id') beforeId?: string,
+    @Query('after_id') afterId?: string,
+    @Query('light') light?: string,
   ) {
     return this.botAdminService.getConversation(
       user,
       Number(id),
       page == null ? undefined : Number(page),
       limit == null ? undefined : Number(limit),
+      {
+        beforeId: beforeId ? Number(beforeId) : undefined,
+        afterId: afterId ? Number(afterId) : undefined,
+        light: light === '1' || light === 'true',
+      },
     );
   }
 
