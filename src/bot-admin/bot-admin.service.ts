@@ -88,6 +88,7 @@ type CompanyContactRow = {
   last_message_preview: string | null;
   unread_count?: number;
   last_message_direction?: 'inbound' | 'outbound' | null;
+  last_message_delivery_status?: 'sent' | 'delivered' | 'read' | 'failed' | null;
   labels?: Array<{ id: number; name: string; color_code: string }>;
 };
 
@@ -1640,15 +1641,15 @@ export class BotAdminService {
       .getMany();
 
     const conversationIds = conversations.map((conversation) => Number(conversation.id));
-    const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound' }>();
+    const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound'; delivery_status: 'sent' | 'delivered' | 'read' | 'failed' | null }>();
     const unreadByConversation = new Map<number, number>();
     const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
 
     if (conversationIds.length > 0) {
       // Only the newest message per conversation (was: every message of every conversation).
-      const latest: Array<{ conversation_id: number; content: string | null; direction: 'inbound' | 'outbound' }> =
+      const latest: Array<{ conversation_id: number; content: string | null; direction: 'inbound' | 'outbound'; delivery_status: 'sent' | 'delivered' | 'read' | 'failed' | null }> =
         await this.messageRepository.query(
-          `SELECT DISTINCT ON (conversation_id) conversation_id, content, direction::text AS direction
+          `SELECT DISTINCT ON (conversation_id) conversation_id, content, direction::text AS direction, delivery_status
              FROM bot_message
             WHERE conversation_id = ANY($1)
             ORDER BY conversation_id, id DESC`,
@@ -1658,6 +1659,7 @@ export class BotAdminService {
         previewByConversation.set(Number(row.conversation_id), {
           content: String(row.content ?? '').trim(),
           direction: row.direction,
+          delivery_status: row.delivery_status ?? null,
         });
       }
 
@@ -1735,6 +1737,7 @@ export class BotAdminService {
         evolution_remote_jid: null,
         last_message_preview: preview?.content || null,
         last_message_direction: preview?.direction ?? null,
+        last_message_delivery_status: preview?.delivery_status ?? null,
         unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
         labels: labelsByConversation.get(Number(conversation.id)) ?? [],
       };
@@ -2880,6 +2883,7 @@ export class BotAdminService {
         message_type: mediaType === 'image' ? 'image' : mediaType === 'audio' ? 'voice' : 'text',
         platform: channelUser.platform || 'whatsapp',
         provider_message_id: providerMessageId,
+        delivery_status: providerMessageId ? 'sent' : null,
         content: mediaType === 'document' ? fileName : trimmedCaption || `[${mediaType}]`,
         media_url: storedKey,
         source: isAdmin ? 'admin' : 'agent',
@@ -3067,6 +3071,7 @@ export class BotAdminService {
         message_type: 'text',
         platform: channelUser.platform || 'whatsapp',
         provider_message_id: providerMessageId,
+        delivery_status: providerMessageId ? 'sent' : null,
         content: text,
         source: isAdmin ? 'admin' : 'agent',
       }),
