@@ -88,6 +88,7 @@ type CompanyContactRow = {
   last_message_preview: string | null;
   unread_count?: number;
   last_message_direction?: 'inbound' | 'outbound' | null;
+  labels?: Array<{ id: number; name: string; color_code: string }>;
 };
 
 @Injectable()
@@ -1640,6 +1641,7 @@ export class BotAdminService {
     const conversationIds = conversations.map((conversation) => Number(conversation.id));
     const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound' }>();
     const unreadByConversation = new Map<number, number>();
+    const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
 
     if (conversationIds.length > 0) {
       // Only the newest message per conversation (was: every message of every conversation).
@@ -1677,6 +1679,27 @@ export class BotAdminService {
       for (const row of unread) {
         unreadByConversation.set(Number(row.conversation_id), Number(row.unread) || 0);
       }
+
+      // Tags on each chat – used by the tag filter and the chips in the chat list.
+      const labelRows = await this.conversationLabelRepository
+        .createQueryBuilder('cl')
+        .innerJoin(BotCustomerLabel, 'l', 'l.id = cl.label_id')
+        .where('cl.conversation_id IN (:...conversationIds)', { conversationIds })
+        .andWhere('CAST(l.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
+        .select([
+          'cl.conversation_id AS conversation_id',
+          'l.id AS id',
+          'l.name AS name',
+          'l.color_code AS color_code',
+        ])
+        .orderBy('l.name', 'ASC')
+        .getRawMany<{ conversation_id: string | number; id: string | number; name: string; color_code: string }>();
+      for (const row of labelRows) {
+        const key = Number(row.conversation_id);
+        const list = labelsByConversation.get(key) ?? [];
+        list.push({ id: Number(row.id), name: row.name, color_code: row.color_code });
+        labelsByConversation.set(key, list);
+      }
     }
 
     return conversations.map((conversation) => {
@@ -1712,6 +1735,7 @@ export class BotAdminService {
         last_message_preview: preview?.content || null,
         last_message_direction: preview?.direction ?? null,
         unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
+        labels: labelsByConversation.get(Number(conversation.id)) ?? [],
       };
     });
   }
