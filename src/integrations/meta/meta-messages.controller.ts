@@ -6,13 +6,25 @@ import type { Request } from 'express';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 import { RawResponse } from '../../common/decorators/raw-response.decorator';
+import { PusherService } from '../../common/pusher.service';
 import { BotChannelUser } from '../../bot-admin/entities/bot-channel-user.entity';
 import { BotConversation } from '../../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
+import { saveChatMedia } from '../../bot-admin/chat-media.store';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
 import { MetaGraphService } from './meta-graph.service';
 
-type Attachment = { type?: string; payload?: { url?: string } };
+type Attachment = {
+  type?: string; // image | video | audio | file | location | fallback | template | share | story_mention | ig_reel | reel
+  title?: string;
+  url?: string;
+  payload?: {
+    url?: string;
+    title?: string;
+    sticker_id?: number;
+    coordinates?: { lat?: number; long?: number };
+  };
+};
 type MessagingEvent = {
   sender?: { id?: string };
   recipient?: { id?: string };
@@ -21,14 +33,22 @@ type MessagingEvent = {
     mid?: string;
     text?: string;
     is_echo?: boolean;
+    is_deleted?: boolean;
     attachments?: Attachment[];
+    quick_reply?: { payload?: string };
   };
+  postback?: { mid?: string; title?: string; payload?: string };
 };
 type WebhookEntry = { id?: string; messaging?: MessagingEvent[] };
 type WebhookBody = { object?: string; entry?: WebhookEntry[] };
 
+type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'>;
+
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+
 @Controller('integrations/meta/messages')
 export class MetaMessagesController {
+  private readonly pusherService = new PusherService();
   constructor(
     @InjectRepository(MetaPageConnection)
     private readonly connectionRepository: Repository<MetaPageConnection>,
@@ -76,6 +96,7 @@ export class MetaMessagesController {
     let saved = 0;
     const platform = body?.object === 'instagram' ? 'instagram' : body?.object === 'page' ? 'messenger' : null;
     if (!platform) return { ok: true, saved };
+
     for (const entry of body.entry ?? []) {
       const accountId = String(entry.id ?? '').trim();
       if (!accountId) continue;
@@ -86,82 +107,190 @@ export class MetaMessagesController {
         order: { updated_at: 'DESC' },
       });
       if (!connection) continue;
+      const companyId = Number(connection.company_id);
+
       for (const event of entry.messaging ?? []) {
         const senderId = String(event.sender?.id ?? '').trim();
         const message = event.message;
-        if (!senderId || senderId === accountId || !message || message.is_echo) continue;
-        const providerId = String(message.mid ?? '').trim() || null;
+        const postback = event.postback;
+        if (!senderId || senderId === accountId) continue;
+        if (message?.is_echo || message?.is_deleted) continue;
+        if (!message && !postback) continue; // reads, deliveries, reactions… are ignored here
+
+        const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
         if (providerId) {
           const duplicate = await this.messageRepository.findOne({
             where: { platform, provider_message_id: providerId },
           });
           if (duplicate) continue;
         }
-        let user = await this.userRepository.findOne({
-          where: { company_id: Number(connection.company_id), platform, source_account_id: accountId, external_user_id: senderId },
-        });
-        if (!user) {
-          user = this.userRepository.create({
-            company_id: Number(connection.company_id),
-            app_user_id: null,
-            platform,
-            external_user_id: senderId,
-            source_account_id: accountId,
-            display_name: senderId,
-            language: 'English',
-            language_locked: false,
-            session_state: null,
-            bot_enabled: false,
-            manual_mode: true,
-            last_seen_at: new Date(),
-          });
-        }
-        if (!user.display_name || user.display_name === senderId) {
-          try {
-            const profile = await this.graphService.fetchMessagingProfile(
-              senderId, connection.page_access_token, platform,
-            );
-            user.display_name = (profile.username || profile.name || senderId).trim();
-          } catch {
-            user.display_name = user.display_name || senderId;
-          }
-        }
-        user.last_seen_at = new Date();
-        user = await this.userRepository.save(user);
 
-        let conversation = await this.conversationRepository.findOne({
-          where: { bot_channel_user_id: user.id },
-          order: { id: 'DESC' },
-        });
-        if (!conversation || conversation.status === 'closed') {
-          conversation = this.conversationRepository.create({
-            bot_channel_user_id: user.id,
-            status: 'open',
-            assigned_agent_id: null,
-            assigned_at: null,
-            timeout_at: null,
-            assignment_mode: 'unassigned',
-            agent_last_read_at: null,
-            last_message_at: new Date(),
-          });
+        const rows = await this.buildRows(companyId, message, postback);
+        if (!rows.length) continue;
+
+        const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
+        const conversation = await this.ensureConversation(user.id);
+
+        for (const [index, row] of rows.entries()) {
+          await this.messageRepository.save(this.messageRepository.create({
+            conversation_id: conversation.id,
+            direction: 'inbound',
+            message_type: row.message_type,
+            platform,
+            // one Meta message can carry several attachments → keep ids unique
+            provider_message_id: providerId ? (index === 0 ? providerId : `${providerId}:${index}`) : null,
+            content: row.content,
+            media_url: row.media_url,
+            source: 'meta-webhook',
+          }));
+          saved++;
         }
-        conversation.last_message_at = new Date();
-        conversation = await this.conversationRepository.save(conversation);
-        const attachment = message.attachments?.find((item) => item.payload?.url);
-        const image = attachment?.type === 'image';
-        await this.messageRepository.save(this.messageRepository.create({
+
+        // live update for the inbox (the chat list + open chat refresh instantly)
+        this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
           conversation_id: conversation.id,
-          direction: 'inbound',
-          message_type: image ? 'image' : 'text',
           platform,
-          provider_message_id: providerId,
-          content: message.text?.trim() || (image ? '[image]' : '[media]'),
-          media_url: image ? attachment?.payload?.url ?? null : null,
-          source: 'meta-webhook',
-        }));
-        saved++;
+          direction: 'inbound',
+        });
       }
     }
     return { ok: true, saved };
+  }
+
+  /* ───────── message → rows in the formats the inbox understands ───────── */
+
+  private async buildRows(companyId: number, message: MessagingEvent['message'], postback: MessagingEvent['postback']): Promise<SavedRow[]> {
+    if (postback) {
+      return [{ message_type: 'text', content: postback.title?.trim() || postback.payload?.trim() || '[button]', media_url: null }];
+    }
+    if (!message) return [];
+    const text = message.text?.trim() ?? '';
+    const attachments = message.attachments ?? [];
+    if (!attachments.length) {
+      return text ? [{ message_type: 'text', content: text, media_url: null }] : [];
+    }
+
+    const rows: SavedRow[] = [];
+    for (const [index, attachment] of attachments.entries()) {
+      const caption = index === 0 ? text : '';
+      const type = String(attachment.type ?? '').toLowerCase();
+      const url = attachment.payload?.url ?? attachment.url ?? '';
+
+      if (type === 'location') {
+        const lat = attachment.payload?.coordinates?.lat;
+        const lng = attachment.payload?.coordinates?.long;
+        const name = attachment.title?.trim() || attachment.payload?.title?.trim() || 'Location';
+        rows.push({
+          message_type: 'text',
+          content: lat != null && lng != null ? `📍 ${name}\nhttps://maps.google.com/?q=${lat},${lng}` : '[location]',
+          media_url: null,
+        });
+        continue;
+      }
+
+      if (['image', 'video', 'audio', 'file', 'ig_reel', 'reel', 'story_mention'].includes(type) && url) {
+        const stored = await this.downloadAndStore(companyId, url);
+        const mediaUrl = stored?.key ?? url; // keep the Meta link if download failed
+        if (type === 'image') {
+          rows.push({ message_type: 'image', content: caption || (attachment.payload?.sticker_id ? '[sticker]' : '[image]'), media_url: mediaUrl });
+        } else if (type === 'audio') {
+          rows.push({ message_type: 'voice', content: caption || '[audio]', media_url: mediaUrl });
+        } else if (type === 'file') {
+          rows.push({ message_type: 'text', content: stored?.fileName || caption || 'Document', media_url: mediaUrl });
+        } else {
+          rows.push({ message_type: 'text', content: caption || '[video]', media_url: mediaUrl });
+        }
+        continue;
+      }
+
+      // share / fallback / template / anything else → keep it readable
+      const title = attachment.title?.trim() || attachment.payload?.title?.trim();
+      const parts = [caption, title, url].filter(Boolean);
+      rows.push({ message_type: 'text', content: parts.join('\n') || '[unsupported]', media_url: null });
+    }
+    return rows;
+  }
+
+  /** Meta CDN links expire – keep our own copy so the chat can always show it. */
+  private async downloadAndStore(companyId: number, url: string): Promise<{ key: string; fileName: string } | null> {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) return null;
+      const size = Number(res.headers.get('content-length') ?? 0);
+      if (size > MAX_DOWNLOAD_BYTES) return null;
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (!buffer.length || buffer.length > MAX_DOWNLOAD_BYTES) return null;
+      const contentType = (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim();
+      const fileName = this.fileNameFromUrl(url, res.headers.get('content-disposition'));
+      return { key: saveChatMedia(companyId, buffer, contentType, fileName), fileName };
+    } catch {
+      return null;
+    }
+  }
+
+  private fileNameFromUrl(url: string, disposition: string | null): string {
+    const fromHeader = disposition?.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i)?.[1];
+    if (fromHeader) return decodeURIComponent(fromHeader).trim();
+    try {
+      const last = decodeURIComponent(new URL(url).pathname.split('/').pop() ?? '');
+      return /\.[a-z0-9]{1,5}$/i.test(last) ? last : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /* ───────── contact + conversation (same behaviour as before) ───────── */
+
+  private async ensureUser(companyId: number, platform: 'messenger' | 'instagram', accountId: string, senderId: string, pageToken: string) {
+    let user = await this.userRepository.findOne({
+      where: { company_id: companyId, platform, source_account_id: accountId, external_user_id: senderId },
+    });
+    if (!user) {
+      user = this.userRepository.create({
+        company_id: companyId,
+        app_user_id: null,
+        platform,
+        external_user_id: senderId,
+        source_account_id: accountId,
+        display_name: senderId,
+        language: 'English',
+        language_locked: false,
+        session_state: null,
+        bot_enabled: false,
+        manual_mode: true,
+        last_seen_at: new Date(),
+      });
+    }
+    if (!user.display_name || user.display_name === senderId) {
+      try {
+        const profile = await this.graphService.fetchMessagingProfile(senderId, pageToken, platform);
+        user.display_name = (profile.username || profile.name || senderId).trim();
+      } catch {
+        user.display_name = user.display_name || senderId;
+      }
+    }
+    user.last_seen_at = new Date();
+    return this.userRepository.save(user);
+  }
+
+  private async ensureConversation(channelUserId: number) {
+    let conversation = await this.conversationRepository.findOne({
+      where: { bot_channel_user_id: channelUserId },
+      order: { id: 'DESC' },
+    });
+    if (!conversation || conversation.status === 'closed') {
+      conversation = this.conversationRepository.create({
+        bot_channel_user_id: channelUserId,
+        status: 'open',
+        assigned_agent_id: null,
+        assigned_at: null,
+        timeout_at: null,
+        assignment_mode: 'unassigned',
+        agent_last_read_at: null,
+        last_message_at: new Date(),
+      });
+    }
+    conversation.last_message_at = new Date();
+    return this.conversationRepository.save(conversation);
   }
 }
