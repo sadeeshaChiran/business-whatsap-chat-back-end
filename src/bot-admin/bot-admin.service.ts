@@ -238,11 +238,12 @@ export class BotAdminService {
     companyId: number,
     phone: string,
     text: string,
-  ): Promise<void> {
+  ): Promise<string | null> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     await this.assertWhatsappSendReady(channel);
     try {
-      await this.whatsappService.sendText(companyId, phone, text);
+      const result = await this.whatsappService.sendText(companyId, phone, text);
+      return result.messageId;
     } catch (error) {
       this.throwWhatsappSendError(error);
     }
@@ -258,11 +259,12 @@ export class BotAdminService {
       caption?: string;
       mediaType: 'image' | 'document' | 'audio' | 'video';
     },
-  ): Promise<void> {
+  ): Promise<string | null> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     await this.assertWhatsappSendReady(channel);
     try {
-      await this.whatsappService.sendMedia(companyId, phone, media);
+      const result = await this.whatsappService.sendMedia(companyId, phone, media);
+      return result.messageId;
     } catch (error) {
       this.throwWhatsappSendError(error);
     }
@@ -1474,9 +1476,19 @@ export class BotAdminService {
       }
     }
 
-    const freePlanCanUseBot = String(company.plan ?? '').trim().toLowerCase() === 'free' && company.bot_enabled !== false;
-    channelUser.bot_enabled = freePlanCanUseBot ? payload.manual_mode !== true : false;
-    channelUser.manual_mode = !channelUser.bot_enabled;
+    const normalizedPlan = String(company.plan ?? '').trim().toLowerCase();
+    const freePlanCanUseBot = normalizedPlan === 'free' || normalizedPlan.startsWith('free ');
+    if (!freePlanCanUseBot) {
+      throw new ForbiddenException('AI replies are currently available on the Free package only.');
+    }
+    if (!company.bot_enabled) {
+      throw new ForbiddenException('Enable AI Bot Globally in Settings before enabling it for this chat.');
+    }
+    const nextBotEnabled = payload.manual_mode === undefined
+      ? !channelUser.bot_enabled
+      : !payload.manual_mode;
+    channelUser.bot_enabled = nextBotEnabled;
+    channelUser.manual_mode = !nextBotEnabled;
 
     const saved = await this.channelUserRepository.save(channelUser);
     return {
@@ -2750,7 +2762,7 @@ export class BotAdminService {
     } else {
       const phone = this.normalizePhoneKey(channelUser.external_user_id);
       if (!phone) throw new BadRequestException('Invalid customer phone on this conversation.');
-      await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
+      providerMessageId = await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
     }
 
     channelUser.manual_mode = true;
@@ -2860,7 +2872,7 @@ export class BotAdminService {
       if (!phone) {
         throw new BadRequestException('Invalid customer phone on this conversation.');
       }
-      await this.sendCompanyWhatsappMedia(user.company_id, phone, {
+      providerMessageId = await this.sendCompanyWhatsappMedia(user.company_id, phone, {
         buffer: uploaded.buffer,
         mimetype,
         fileName,

@@ -929,6 +929,7 @@ export class AgentRoutingService {
     conversationId: number | null;
     assignedAgentId: number | null;
     status: string;
+    duplicate?: boolean;
   }> {
     const normalizedPhone = this.normalizePhone(phone);
     if (!normalizedPhone) {
@@ -957,6 +958,7 @@ export class AgentRoutingService {
           conversationId: Number(duplicate.conversation_id),
           assignedAgentId: duplicate.assigned_agent_id ? Number(duplicate.assigned_agent_id) : null,
           status: duplicate.status,
+        duplicate: true,
         };
       }
     }
@@ -1138,6 +1140,15 @@ export class AgentRoutingService {
       }),
     );
 
+    // A customer reply proves preceding outbound messages in this conversation were read.
+    await this.messageRepository
+      .createQueryBuilder()
+      .update(BotMessage)
+      .set({ delivery_status: 'read' })
+      .where('conversation_id = :conversationId', { conversationId })
+      .andWhere("direction::text = 'outbound'")
+      .andWhere("delivery_status IS DISTINCT FROM 'read'")
+      .execute();
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
       conversation_id: conversationId,
       inbound: true,

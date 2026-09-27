@@ -33,6 +33,8 @@ export type WhatsappOutboundMedia = {
   mediaType: 'image' | 'document' | 'audio' | 'video';
 };
 
+export type WhatsappSendResult = { messageId: string | null };
+
 export interface WhatsappServiceInterface {
   readonly provider: WhatsappProviderType;
 
@@ -44,11 +46,11 @@ export interface WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
-  ): Promise<void>;
+  ): Promise<WhatsappSendResult>;
 
   sendMedia(
     channel: WhatsappChannel,
     toPhone: string,
     media: WhatsappOutboundMedia,
-  ): Promise<void>;
+  ): Promise<WhatsappSendResult>;
 }

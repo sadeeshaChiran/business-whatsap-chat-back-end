@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AgentRoutingModule } from '../../agent-routing/agent-routing.module';
 import { AuthModule } from '../../auth/auth.module';
+import { AutomationModule } from '../../automation/automation.module';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappModule } from '../../whatsapp/whatsapp.module';
@@ -15,7 +16,7 @@ import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 import { WhatsappService } from './whatsapp.service';
 
 @Module({
-  imports: [AuthModule, AgentRoutingModule, WhatsappModule, TypeOrmModule.forFeature([WhatsappChannel, BotMessage])],
+  imports: [AuthModule, AutomationModule, AgentRoutingModule, WhatsappModule, TypeOrmModule.forFeature([WhatsappChannel, BotMessage])],
   controllers: [WhatsappWebhookController],
   providers: [
     EvolutionAdapter,

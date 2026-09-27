@@ -148,7 +148,7 @@ export class CompanyService {
       order_collect_customer_info: company.order_collect_customer_info ?? true,
       order_collect_products: company.order_collect_products ?? true,
       order_allow_note: company.order_allow_note ?? true,
-      bot_enabled: false,
+      bot_enabled: String(company.plan ?? '').trim().toLowerCase() === 'free' && Boolean(company.bot_enabled),
       agent_assignment_timeout_minutes:
         company.agent_assignment_timeout_minutes ?? 1440,
       agent_offline_shift_minutes: company.agent_offline_shift_minutes ?? 0,
@@ -273,7 +273,8 @@ export class CompanyService {
       company.order_allow_note = updateCompanyDto.order_allow_note;
     }
     if (updateCompanyDto.bot_enabled !== undefined) {
-      company.bot_enabled = false;
+      const effectivePlan = String(company.plan ?? '').trim().toLowerCase();
+      company.bot_enabled = effectivePlan === 'free' && updateCompanyDto.bot_enabled;
     }
     if (updateCompanyDto.agent_assignment_timeout_minutes !== undefined) {
       company.agent_assignment_timeout_minutes = updateCompanyDto.agent_assignment_timeout_minutes;
@@ -282,7 +283,9 @@ export class CompanyService {
       company.agent_offline_shift_minutes = updateCompanyDto.agent_offline_shift_minutes;
     }
 
-    company.bot_enabled = false;
+    if (String(company.plan ?? '').trim().toLowerCase() !== 'free') {
+      company.bot_enabled = false;
+    }
 
     const nextCompanyName = company.name;
     const existingChannel = await this.whatsappChannelService.getForCompany(

@@ -9,5 +9,6 @@ import { AutomationFlow } from './entities/automation-flow.entity';
 	imports: [AuthModule, TypeOrmModule.forFeature([AutomationFlow])],
 	controllers: [AutomationController],
 	providers: [AutomationService],
+	exports: [AutomationService],
 })
 export class AutomationModule {}
