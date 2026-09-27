@@ -213,7 +213,7 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
-  ): Promise<void> {
+  ): Promise<{ messageId: string | null }> {
     const base = this.baseUrl(channel);
     const apiKey = channel.evaluation_whatsapp_key?.trim();
     const instance = channel.instance_name?.trim();
@@ -237,13 +237,15 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
       const body = await res.text();
       throw new Error(`Evolution sendText failed (${res.status}): ${body}`);
     }
+    const data = (await res.json()) as { key?: { id?: string }; id?: string };
+    return { messageId: String(data.key?.id ?? data.id ?? '').trim() || null };
   }
 
   async sendMedia(
     channel: WhatsappChannel,
     toPhone: string,
     media: WhatsappOutboundMedia,
-  ): Promise<void> {
+  ): Promise<{ messageId: string | null }> {
     const base = this.baseUrl(channel);
     const apiKey = channel.evaluation_whatsapp_key?.trim();
     const instance = channel.instance_name?.trim();
@@ -308,6 +310,8 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
       console.error(`Evolution sendMedia failed response:`, { status: res.status, body });
       throw new Error(`Evolution sendMedia failed (${res.status}): ${body}`);
     }
+    const data = (await res.json()) as { key?: { id?: string }; id?: string };
+    return { messageId: String(data.key?.id ?? data.id ?? '').trim() || null };
   }
 
   private extractText(value: unknown, depth = 0): string {

@@ -1,4 +1,4 @@
--- Package rollout: only Free is active for now, and bot automation is disabled globally.
+-- Package rollout: only Free is active for now. Preserve Free-plan bot preferences across restarts.
 ALTER TABLE companies
   ADD COLUMN IF NOT EXISTS plan TEXT DEFAULT '';
 
@@ -13,7 +13,8 @@ ALTER TABLE companies
 
 UPDATE companies
 SET bot_enabled = FALSE
-WHERE bot_enabled IS DISTINCT FROM FALSE;
+WHERE LOWER(TRIM(COALESCE(plan, ''))) <> 'free'
+  AND bot_enabled IS DISTINCT FROM FALSE;
 
 ALTER TABLE bot_channel_user
   ADD COLUMN IF NOT EXISTS bot_enabled BOOLEAN DEFAULT FALSE;
@@ -24,4 +25,8 @@ ALTER TABLE bot_channel_user
 UPDATE bot_channel_user
 SET bot_enabled = FALSE,
     manual_mode = TRUE
-WHERE bot_enabled IS DISTINCT FROM FALSE;
+WHERE company_id IN (
+  SELECT id FROM companies
+  WHERE LOWER(TRIM(COALESCE(plan, ''))) <> 'free'
+)
+  AND bot_enabled IS DISTINCT FROM FALSE;

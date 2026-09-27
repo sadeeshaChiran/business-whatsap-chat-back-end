@@ -185,7 +185,7 @@ export class MetaAdapter implements WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
-  ): Promise<void> {
+  ): Promise<{ messageId: string | null }> {
     const token = channel.meta_access_token?.trim() ?? '';
     const phoneNumberId = channel.meta_phone_number_id?.trim() ?? '';
     const phone = toPhone.replace(/\D/g, '');
@@ -213,13 +213,15 @@ export class MetaAdapter implements WhatsappServiceInterface {
       const body = await res.text();
       throw new Error(`Meta sendText failed (${res.status}): ${body}`);
     }
+    const data = (await res.json()) as { messages?: Array<{ id?: string }> };
+    return { messageId: String(data.messages?.[0]?.id ?? '').trim() || null };
   }
 
   async sendMedia(
     channel: WhatsappChannel,
     toPhone: string,
     media: WhatsappOutboundMedia,
-  ): Promise<void> {
+  ): Promise<{ messageId: string | null }> {
     const token = channel.meta_access_token?.trim() ?? '';
     const phoneNumberId = channel.meta_phone_number_id?.trim() ?? '';
     const phone = toPhone.replace(/\D/g, '');
@@ -270,6 +272,8 @@ export class MetaAdapter implements WhatsappServiceInterface {
       const body = await res.text();
       throw new Error(this.formatMetaError('send', res.status, body));
     }
+    const data = (await res.json()) as { messages?: Array<{ id?: string }> };
+    return { messageId: String(data.messages?.[0]?.id ?? '').trim() || null };
   }
 
   private normalizeMimeType(media: WhatsappOutboundMedia): string {

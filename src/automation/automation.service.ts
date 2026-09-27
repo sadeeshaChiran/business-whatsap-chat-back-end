@@ -56,6 +56,44 @@ export class AutomationService {
     return active.filter((flow) => this.flowMatchesMessage(flow, content, event));
   }
 
+
+  orderedNodes(flow: AutomationFlow): Array<{ id: string; type: string; config: Record<string, string> }> {
+    const definition = flow.definition as unknown as {
+      nodes?: Array<{ id?: unknown; type?: unknown; config?: unknown }>;
+      edges?: Array<{ from?: unknown; to?: unknown }>;
+    };
+    const nodes = (Array.isArray(definition.nodes) ? definition.nodes : [])
+      .filter((node) => node && typeof node.id === 'string' && typeof node.type === 'string')
+      .map((node) => ({
+        id: String(node.id),
+        type: String(node.type),
+        config: node.config && typeof node.config === 'object' ? node.config as Record<string, string> : {},
+      }));
+    if (nodes.length < 2) return nodes;
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const edges = Array.isArray(definition.edges) ? definition.edges : [];
+    const nextById = new Map<string, string>();
+    const incoming = new Set<string>();
+    for (const edge of edges) {
+      const from = String(edge?.from ?? '');
+      const to = String(edge?.to ?? '');
+      if (byId.has(from) && byId.has(to) && !nextById.has(from)) {
+        nextById.set(from, to);
+        incoming.add(to);
+      }
+    }
+    const first = nodes.find((node) => !incoming.has(node.id)) ?? nodes[0];
+    const ordered: typeof nodes = [];
+    const visited = new Set<string>();
+    let current: typeof first | undefined = first;
+    while (current && !visited.has(current.id)) {
+      ordered.push(current);
+      visited.add(current.id);
+      current = byId.get(nextById.get(current.id) ?? '');
+    }
+    for (const node of nodes) if (!visited.has(node.id)) ordered.push(node);
+    return ordered;
+  }
   private flowMatchesMessage(flow: AutomationFlow, message: string, event: 'new_message' | 'conversation_started'): boolean {
     const definition = flow.definition as FlowDefinition;
     const trigger = definition?.trigger ?? { type: flow.trigger_type, config: {} };
