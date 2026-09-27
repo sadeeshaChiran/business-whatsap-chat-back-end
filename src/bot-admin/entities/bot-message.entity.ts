@@ -29,6 +29,9 @@ export class BotMessage {
   @Column({ type: 'varchar', length: 255, nullable: true })
   provider_message_id: string | null;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  delivery_status: 'sent' | 'delivered' | 'read' | 'failed' | null;
+
   @Column({ type: 'text' })
   content: string;
 

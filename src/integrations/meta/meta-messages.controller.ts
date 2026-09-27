@@ -114,8 +114,13 @@ export class MetaMessagesController {
         const message = event.message;
         const postback = event.postback;
         if (!senderId || senderId === accountId) continue;
+        const statusHandled = await this.applyMessageStatus(companyId, platform, accountId, senderId, event);
+        if (statusHandled) {
+          saved++;
+          continue;
+        }
         if (message?.is_echo || message?.is_deleted) continue;
-        if (!message && !postback) continue; // reads, deliveries, reactions… are ignored here
+        if (!message && !postback) continue;
 
         const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
         if (providerId) {
@@ -241,6 +246,51 @@ export class MetaMessagesController {
 
   /* ───────── contact + conversation (same behaviour as before) ───────── */
 
+  private async applyMessageStatus(companyId: number, platform: 'messenger' | 'instagram', accountId: string, senderId: string, event: any): Promise<boolean> {
+    const delivery = event.delivery;
+    const read = event.read;
+    const status = read ? 'read' : delivery ? 'delivered' : null;
+    if (!status) return false;
+
+    const user = await this.userRepository.findOne({ where: { company_id: companyId, platform, source_account_id: accountId, external_user_id: senderId } });
+    if (!user) return true;
+    const conversation = await this.conversationRepository.findOne({ where: { bot_channel_user_id: user.id }, order: { id: 'DESC' } });
+    if (!conversation) return true;
+
+    const mids = Array.isArray(delivery?.mids) ? delivery.mids.map((mid: unknown) => String(mid).trim()).filter(Boolean) : [];
+    const watermark = Number(read?.watermark ?? delivery?.watermark ?? 0);
+    let affected = 0;
+
+    if (mids.length) {
+      const result = await this.messageRepository
+        .createQueryBuilder()
+        .update(BotMessage)
+        .set({ delivery_status: status })
+        .where('conversation_id = :conversationId', { conversationId: conversation.id })
+        .andWhere('platform = :platform', { platform })
+        .andWhere('provider_message_id IN (:...mids)', { mids })
+        .andWhere("direction::text = 'outbound'")
+        .execute();
+      affected = Number(result.affected ?? 0);
+    } else if (watermark > 0) {
+      const seenAt = new Date(watermark);
+      const result = await this.messageRepository
+        .createQueryBuilder()
+        .update(BotMessage)
+        .set({ delivery_status: status })
+        .where('conversation_id = :conversationId', { conversationId: conversation.id })
+        .andWhere('platform = :platform', { platform })
+        .andWhere("direction::text = 'outbound'")
+        .andWhere('created_at <= :seenAt', { seenAt })
+        .execute();
+      affected = Number(result.affected ?? 0);
+    }
+
+    if (affected > 0) {
+      this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversation.id, platform, message_status: status });
+    }
+    return true;
+  }
   private async ensureUser(companyId: number, platform: 'messenger' | 'instagram', accountId: string, senderId: string, pageToken: string) {
     let user = await this.userRepository.findOne({
       where: { company_id: companyId, platform, source_account_id: accountId, external_user_id: senderId },
