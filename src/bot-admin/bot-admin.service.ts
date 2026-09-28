@@ -1491,6 +1491,16 @@ export class BotAdminService {
     channelUser.manual_mode = !nextBotEnabled;
 
     const saved = await this.channelUserRepository.save(channelUser);
+    if (saved.bot_enabled) {
+      // bot is back on: the sales bot's "needs a person" reason no longer applies
+      await this.conversationRepository
+        .createQueryBuilder()
+        .update(BotConversation)
+        .set({ queue_reason: null, queue_note: null })
+        .where('bot_channel_user_id = :id', { id: saved.id })
+        .andWhere('queue_reason IS NOT NULL')
+        .execute();
+    }
     return {
       id: saved.id,
       bot_enabled: saved.bot_enabled,
