@@ -18,6 +18,8 @@ export type SalesBotOrder = {
   customer_phone?: string;
   address?: string;
   payment_method?: string;
+  /** Delivery zone area the customer is in (the backend calculates the fee) */
+  delivery_area?: string | null;
   delivery_fee?: number | null;
   summary_shown?: boolean;
   confirm_order?: boolean;

@@ -28,6 +28,18 @@ product price). The AI's prices are ignored. The delivery fee must exist in `bot
 An order is saved only when the customer agrees **after** the summary was shown; otherwise the customer
 gets "our team is checking your order" and the chat goes to the queue with reason `order_check`.
 
+**Delivery fee (optional weight rule per zone):** the bot calls its `delivery_fee` lookup and puts the
+zone in `order.delivery_area`; the backend then calculates the fee itself:
+`fee = base fee + max(0, order kg − included_kg) × per_extra_kg` (exact kg, e.g. 2.4 kg → 1.4 extra kg).
+Order kg = Σ (variant weight, else product weight) × quantity. Zones without `included_kg`/`per_extra_kg`
+keep a flat fee. The order stores `delivery_fee` and `total_weight_kg`. Products with no weight count as 0 kg
+(the bot tells the customer the team may adjust the fee).
+
+**Product data for the bot:** `product.selling_points` (recommendations, price doubts),
+`product.related_product_ids` (add-ons – only other products of the same company, max 10),
+`product.show_to_bot` (false = never mentioned or sold), variant weight in the variant JSON (`weight`, kg).
+Also in the CSV import: `selling_points`, `show_to_bot` (yes/no), `variant_weight`.
+
 **Handoff:** the bot switches itself off for that customer (`manual_mode = true`), sets
 `bot_conversation.queue_reason / queue_note`, and routes the chat with the existing agent routing.
 Turning the bot back on for the customer (existing toggle) clears the reason.
@@ -45,7 +57,7 @@ Turning the bot back on for the customer (existing toggle) clears the reason.
    SALES_BOT_API_KEY=<same as BOT_API_KEY in the Python bot>
    SALES_BOT_TEST_MODE=false        # true only to use the dashboard's Customer simulator
    ```
-3. Restart. The migration `migrations/supabase_sales_bot.sql` runs automatically at startup
+3. Restart. The migrations `migrations/supabase_sales_bot.sql` and `supabase_sales_bot_products.sql` run automatically at startup
    (added to `src/common/run-startup-migrations.ts`). Look for `[migrations] applied supabase_sales_bot.sql`
    and `Python sales bot active at …` in the log.
 4. In the dashboard: Sales bot → Settings → switch the bot on, fill in About / hours / payment,
@@ -62,6 +74,9 @@ Turning the bot back on for the customer (existing toggle) clears the reason.
 | `bot_ai_usage` | tokens / cost / speed per bot reply (reports) |
 | `bot_conversation.queue_reason`, `queue_note` | why the chat waits in the unassigned queue |
 | `bot_order.delivery_fee`, `payment_method` | set on bot orders (fee is included in `total_amount`) |
+| `product.selling_points`, `related_product_ids`, `show_to_bot` | product data for the bot (`supabase_sales_bot_products.sql`) |
+| `bot_delivery_zone.included_kg`, `per_extra_kg` | optional weight rule per zone |
+| `bot_order.total_weight_kg` | order weight used for the delivery fee |
 
 Bot messages are saved in `bot_message` with `source = 'sales_bot'` and `intent`
 (`order`, `booking`, `lead`, `handoff`, or several, e.g. `lead,handoff`).
@@ -76,7 +91,10 @@ The unassigned queue (`/bot/conversations/unassigned`) now also returns `queue_r
 
 ## Files
 
-New: `src/sales-bot/*`, `src/common/sales-bot-hook.ts`, `migrations/supabase_sales_bot.sql`.
+New: `src/sales-bot/*` (incl. `delivery-fee.ts`), `src/common/sales-bot-hook.ts`,
+`migrations/supabase_sales_bot.sql`, `migrations/supabase_sales_bot_products.sql`.
+Products (for the bot fields): `products/entities/*.ts`, `products/dto/create-product*.dto.ts`,
+`products/products.service.ts` (create/update/CSV import of the new fields).
 Changed (small, marked with comments): `app.module.ts`, `integrations/whatsapp/whatsapp.service.ts`
 (hand inbound to the sales bot; n8n forward only when the sales bot is off),
 `agent-routing/agent-routing.service.ts` (queue reason), `bot-admin/bot-admin.service.ts`
@@ -106,3 +124,6 @@ Changed (small, marked with comments): `app.module.ts`, `integrations/whatsapp/w
 8. **`app.enableCors()`** allows every origin. Consider limiting it to the dashboard's domain.
 9. `EVOLUTION_WEBHOOK_URL` / `N8N_*` settings are still in `.env.example`; when the n8n workflow is retired
    they can be removed (the code keeps working without them).
+10. **Variant prices from `variant_price_match` are copied into each variant when products are saved**
+    (`applyVariantDefaults` puts the base price on variants without a price). The bot uses the saved
+    variant price first, so a later change to the price-match table only applies after the product is saved again.

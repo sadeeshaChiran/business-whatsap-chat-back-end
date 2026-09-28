@@ -100,6 +100,20 @@ export class CreateDeliveryZoneDto {
   @IsString()
   @MaxLength(120)
   days?: string;
+
+  /** Weight rule (optional): kg included in the base fee. Empty = flat fee. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  included_kg?: number | null;
+
+  /** Weight rule (optional): fee for each extra kg (exact kg). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  per_extra_kg?: number | null;
 }
 
 export class UpdateDeliveryZoneDto {
@@ -119,6 +133,20 @@ export class UpdateDeliveryZoneDto {
   @IsString()
   @MaxLength(120)
   days?: string;
+
+  /** Weight rule (optional): kg included in the base fee. Empty = flat fee. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  included_kg?: number | null;
+
+  /** Weight rule (optional): fee for each extra kg (exact kg). */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  per_extra_kg?: number | null;
 }
 
 /* ───────── Bookings ───────── */

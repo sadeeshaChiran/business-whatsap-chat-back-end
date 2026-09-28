@@ -22,6 +22,7 @@ type ImportVariant = {
   sku?: string;
   image_url?: string;
   use_default_image?: boolean;
+  weight?: number;
 };
 
 type ImportLine = {
@@ -37,6 +38,8 @@ type ImportLine = {
   weight: number;
   gallery: string[];
   coverImageUrl: string;
+  sellingPoints?: string;
+  showToBot?: boolean;
   variant?: ImportVariant;
   legacyAttributeGroups?: Map<string, string[]>;
 };
@@ -54,6 +57,8 @@ type ImportProductGroup = {
   weight: number;
   gallery: string[];
   coverImageUrl: string;
+  sellingPoints?: string;
+  showToBot?: boolean;
   variants: ImportVariant[];
 };
 
@@ -239,6 +244,9 @@ export class ProductsService {
         if (variant.sku?.trim()) {
           withPricing.sku = variant.sku.trim();
         }
+        if (variant.weight !== undefined && variant.weight !== null && Number.isFinite(Number(variant.weight)) && Number(variant.weight) >= 0) {
+          withPricing.weight = Number(variant.weight);
+        }
         if (variant.image_url?.trim()) {
           withPricing.image_url = variant.image_url.trim();
           withPricing.use_default_image = false;
@@ -255,6 +263,18 @@ export class ProductsService {
     }
 
     return this.applyVariantDefaults(normalized, basePrice);
+  }
+
+  /** Add-on products must be other, existing products of the same company. */
+  private async normalizeRelatedProductIds(ids: number[] | undefined, companyId: number, selfId?: number) {
+    const wanted = [...new Set((ids ?? []).map(Number).filter((id) => Number.isInteger(id) && id > 0 && id !== selfId))];
+    if (!wanted.length) return [];
+    const rows = await this.productRepository.find({
+      select: { id: true },
+      where: wanted.map((id) => ({ id, company_id: companyId, is_deleted: false })),
+    });
+    const found = new Set(rows.map((row) => row.id));
+    return wanted.filter((id) => found.has(id)).slice(0, 10);
   }
 
   private async findProductEntity(id: number, companyId: number) {
@@ -400,6 +420,9 @@ export class ProductsService {
       image_url: coverImage,
       gallery,
       weight: Number(createProductDto.weight),
+      selling_points: createProductDto.selling_points?.trim() ?? '',
+      related_product_ids: await this.normalizeRelatedProductIds(createProductDto.related_product_ids, user.company_id),
+      show_to_bot: createProductDto.show_to_bot ?? true,
       variant_image_match: this.normalizeVariantImageMatch(
         createProductDto.variant_image_match,
       ),
@@ -475,6 +498,15 @@ export class ProductsService {
     }
     if (updateProductDto.status !== undefined) {
       product.status = updateProductDto.status?.trim() || 'In Stock';
+    }
+    if (updateProductDto.selling_points !== undefined) {
+      product.selling_points = updateProductDto.selling_points?.trim() ?? '';
+    }
+    if (updateProductDto.related_product_ids !== undefined) {
+      product.related_product_ids = await this.normalizeRelatedProductIds(updateProductDto.related_product_ids, user.company_id, product.id);
+    }
+    if (updateProductDto.show_to_bot !== undefined) {
+      product.show_to_bot = updateProductDto.show_to_bot;
     }
 
     const normalizedVariants = this.normalizeVariants(
@@ -750,6 +782,13 @@ export class ProductsService {
       variant.quantity = variantQuantity;
     }
 
+    const variantWeight = this.normalizePrice(
+      this.getRowValue(row, [/variant[_\s-]?weight/, /^variant weight$/]),
+    );
+    if (Number.isFinite(variantWeight) && variantWeight >= 0) {
+      variant.weight = variantWeight;
+    }
+
     const variantSku = String(
       this.getRowValue(row, [/variant[_\s-]?sku/, /^variant sku$/]) ?? '',
     ).trim();
@@ -823,6 +862,10 @@ export class ProductsService {
         /main image/,
       ]) ?? '',
     ).trim();
+    const sellingPoints = String(
+      this.getRowValue(row, [/selling[_\s-]?points?/, /^usp$/]) ?? '',
+    ).trim();
+    const showToBotRaw = this.getRowValue(row, [/show[_\s-]?to[_\s-]?bot/]);
     const parsedQuantity = Number(String(quantityRaw ?? '').trim() || 0);
     const status = String(statusRaw ?? '').trim() || 'In Stock';
     const variant = this.extractVariantCombinationFromRow(row);
@@ -846,6 +889,8 @@ export class ProductsService {
       weight,
       gallery,
       coverImageUrl,
+      ...(sellingPoints ? { sellingPoints } : {}),
+      ...(showToBotRaw !== undefined && String(showToBotRaw).trim() !== '' ? { showToBot: this.normalizeBoolean(showToBotRaw) } : {}),
       ...(variant ? { variant } : {}),
       ...(legacyAttributeGroups.size ? { legacyAttributeGroups } : {}),
     };
@@ -882,6 +927,8 @@ export class ProductsService {
           weight: line.weight,
           gallery: [...line.gallery],
           coverImageUrl: line.coverImageUrl,
+          sellingPoints: line.sellingPoints,
+          showToBot: line.showToBot,
           variants: [],
         });
       } else {
@@ -896,6 +943,8 @@ export class ProductsService {
           existing.gallery = Array.from(new Set([...existing.gallery, ...line.gallery]));
         }
         if (line.coverImageUrl) existing.coverImageUrl = line.coverImageUrl;
+        if (line.sellingPoints) existing.sellingPoints = line.sellingPoints;
+        if (line.showToBot !== undefined) existing.showToBot = line.showToBot;
       }
 
       const group = groups.get(key)!;
@@ -1021,6 +1070,8 @@ export class ProductsService {
         image_url: coverImage,
         gallery,
         weight: Number(group.weight),
+        ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
+        ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
         is_deleted: false,
         category,
       }),

@@ -88,6 +88,27 @@ export class CreateProductDto {
   @Min(0)
   weight: number;
 
+  @ApiPropertyOptional({ example: 'Soft sole, non-slip, loved by moms', description: 'Why customers love it (used by the sales bot)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  selling_points?: string;
+
+  @ApiPropertyOptional({ example: [12, 15], description: 'Add-on products the sales bot may suggest' })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  related_product_ids?: number[];
+
+  @ApiPropertyOptional({ example: true, description: 'false = the sales bot never mentions this product' })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  show_to_bot?: boolean;
+
   @ApiPropertyOptional({ type: [CreateProductVariantDto] })
   @IsOptional()
   @IsArray()

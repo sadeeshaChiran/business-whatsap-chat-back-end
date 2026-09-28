@@ -18,6 +18,14 @@ export class BotDeliveryZone {
   @Column({ type: 'varchar', length: 120, default: '' })
   days: string;
 
+  /** Optional weight rule: kg included in the base fee (null = flat fee) */
+  @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
+  included_kg: number | null;
+
+  /** Optional weight rule: fee for each kg above included_kg (exact kg, no rounding) */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  per_extra_kg: number | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

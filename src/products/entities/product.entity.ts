@@ -55,6 +55,18 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
   weight: number | null;
 
+  /** Why customers love it – used by the sales bot to recommend and handle price doubts */
+  @Column({ type: 'text', default: '' })
+  selling_points: string;
+
+  /** Add-on products the sales bot may suggest (ids of products in the same company) */
+  @Column({ type: 'int', array: true, default: () => "'{}'" })
+  related_product_ids: number[];
+
+  /** false = the sales bot never mentions this product */
+  @Column({ type: 'boolean', default: true })
+  show_to_bot: boolean;
+
   @Column({ type: 'jsonb', nullable: true })
   variant_image_match: {
     dimensions: string[];

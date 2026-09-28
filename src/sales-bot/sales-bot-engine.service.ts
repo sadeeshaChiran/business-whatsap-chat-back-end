@@ -22,14 +22,18 @@ import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
-import { SalesBotContextService, productImages, productOptions, variantLabel, variantPrice } from './sales-bot-context.service';
+import { SalesBotContextService, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
+import { findZone, hasWeightRule, zoneFee } from './delivery-fee';
 
 type PricedItem = {
   product_id: number; variant_id: number | null; product_name: string; variant_name: string;
   quantity: number; unit_price: number; total_price: number;
+  /** kg per unit (variant weight, else product weight; 0 when not set) */
+  weight_kg: number;
 };
 type PendingOrder = {
-  items: PricedItem[]; subtotal: number; delivery_fee: number | null; total: number;
+  items: PricedItem[]; subtotal: number; delivery_area: string | null; total_weight_kg: number;
+  delivery_fee: number | null; total: number;
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
 };
 type BotSession = { language?: string; pending_order?: PendingOrder | null };
@@ -422,7 +426,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const priced: PricedItem[] = [];
     for (const item of items) {
       const product = await this.productRepository.findOne({
-        where: { id: Number(item.product_id), company_id: companyId, is_deleted: false },
+        where: { id: Number(item.product_id), company_id: companyId, is_deleted: false, show_to_bot: true },
         relations: ['variants'],
       });
       if (!product) return { items: priced, problem: `unknown_product_${item.product_id}` };
@@ -430,6 +434,7 @@ export class SalesBotEngineService implements OnModuleInit {
       let unit = Number(product.price) || 0;
       let variantName = '';
       let variantId: number | null = null;
+      let weightKg = productWeight(product) ?? 0;
       if (options.length) {
         const byId = item.variant_id ? options[Number(item.variant_id) - 1] : undefined;
         const wanted = String(item.variant_name ?? '').trim().toLowerCase();
@@ -439,9 +444,10 @@ export class SalesBotEngineService implements OnModuleInit {
         unit = variantPrice(product, options[index]);
         variantName = variantLabel(options[index]);
         variantId = index + 1;
+        weightKg = optionWeight(options[index]) ?? weightKg;
       }
       const quantity = Math.max(1, Math.round(Number(item.quantity) || 1));
-      priced.push({ product_id: product.id, variant_id: variantId, product_name: product.name, variant_name: variantName, quantity, unit_price: unit, total_price: unit * quantity });
+      priced.push({ product_id: product.id, variant_id: variantId, product_name: product.name, variant_name: variantName, quantity, unit_price: unit, total_price: unit * quantity, weight_kg: weightKg });
     }
     return { items: priced, problem: '' };
   }
@@ -450,9 +456,16 @@ export class SalesBotEngineService implements OnModuleInit {
     order: SalesBotOrder, session: BotSession): Promise<string> {
     const { items, problem } = await this.priceItems(companyId, order.items ?? []);
     const subtotal = items.reduce((sum, item) => sum + item.total_price, 0);
+    const totalWeight = Math.round(items.reduce((sum, item) => sum + item.weight_kg * item.quantity, 0) * 1000) / 1000;
+    // The fee is always calculated here (zone + order weight) – never taken from the AI.
     const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
-    const wantedFee = order.delivery_fee == null ? null : Number(order.delivery_fee);
-    const fee = wantedFee != null && zones.some((zone) => Number(zone.fee) === wantedFee) ? wantedFee : null;
+    const area = String(order.delivery_area ?? '').trim();
+    let zone = area ? findZone(zones, area) : null;
+    if (!zone && order.delivery_fee != null) {
+      // older bot replies without delivery_area: accept only a flat zone with exactly that fee
+      zone = zones.find((row) => !hasWeightRule(row) && Number(row.fee) === Number(order.delivery_fee)) ?? null;
+    }
+    const fee = zone ? zoneFee(zone, totalWeight) : null;
     const total = subtotal + (fee ?? 0);
     const address = String(order.address ?? '').trim();
     const name = String(order.customer_name ?? '').trim();
@@ -464,7 +477,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const summaryShown = order.summary_shown === true || (previousShown && signature(previous) === signature({ items, address }));
 
     const pending: PendingOrder = {
-      items, subtotal, delivery_fee: fee, total, customer_name: name, customer_phone: phone, address,
+      items, subtotal, delivery_area: zone?.area ?? (area || null), total_weight_kg: totalWeight,
+      delivery_fee: fee, total, customer_name: name, customer_phone: phone, address,
       payment_method: String(order.payment_method || 'COD').slice(0, 60), summary_shown: summaryShown,
     };
     if (!order.confirm_order) {
@@ -484,6 +498,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const saved = await this.orderRepository.save(this.orderRepository.create({
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
+      total_weight_kg: totalWeight || null,
       admin_note: 'Created by the sales bot.',
     }));
     for (const item of items) {

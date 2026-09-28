@@ -10,7 +10,7 @@ import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 
-export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; image_url: string | null };
+export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; image_url: string | null; weight_kg: number | null };
 export type ContextProduct = {
   id: number;
   name: string;
@@ -21,6 +21,8 @@ export type ContextProduct = {
   image_urls: string[];
   description: string;
   selling_points: string;
+  /** kg, null = not set */
+  weight_kg: number | null;
   variants: ContextVariant[];
   related_product_ids: number[];
 };
@@ -31,7 +33,8 @@ export type SalesBotContext = {
   };
   products: ContextProduct[];
   services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null }>;
-  delivery_zones: Array<{ area: string; fee: number; days: string }>;
+  /** included_kg + per_extra_kg set = weight rule (fee = fee + extra kg × per_extra_kg) */
+  delivery_zones: Array<{ area: string; fee: number; days: string; included_kg: number | null; per_extra_kg: number | null }>;
   policies: Array<{ question: string; answer: string }>;
   styles: Array<{ question: string; answer: string }>;
   faqs: Array<{ question: string; answer: string }>;
@@ -77,6 +80,18 @@ export function productImages(product: Product): string[] {
   return [...new Set(urls)];
 }
 
+/** Product weight in kg (null when not set). */
+export function productWeight(product: Pick<Product, 'weight'>): number | null {
+  const kg = Number(product.weight);
+  return product.weight != null && Number.isFinite(kg) && kg > 0 ? kg : null;
+}
+
+/** Variant weight in kg from the variant JSON (null when not set). */
+export function optionWeight(option: ProductVariantOption): number | null {
+  const kg = Number(option.weight);
+  return option.weight != null && Number.isFinite(kg) && kg > 0 ? kg : null;
+}
+
 function productStock(product: Product): number | null {
   if (/out\s*of\s*stock/i.test(product.status ?? '')) return 0;
   const quantity = toNumber(product.quantity);
@@ -109,7 +124,7 @@ export class SalesBotContextService {
 
   async loadProducts(companyId: number): Promise<Product[]> {
     return this.productRepository.find({
-      where: { company_id: companyId, is_deleted: false },
+      where: { company_id: companyId, is_deleted: false, show_to_bot: true },
       relations: ['category', 'variants'],
       order: { name: 'ASC' },
       take: MAX_PRODUCTS,
@@ -154,12 +169,16 @@ export class SalesBotContextService {
         default_language: settings.default_language || 'auto',
         bot_name: settings.bot_name,
       },
-      products: products.map((product) => this.toContextProduct(product)),
+      products: products.map((product) => this.toContextProduct(product, new Set(products.map((p) => p.id)))),
       services: services.map((service) => ({
         service_id: service.id, name: service.name, description: service.description,
         price: toNumber(service.price), price_note: service.price_note, duration_min: service.duration_min,
       })),
-      delivery_zones: zones.map((zone) => ({ area: zone.area, fee: toNumber(zone.fee), days: zone.days })),
+      delivery_zones: zones.map((zone) => ({
+        area: zone.area, fee: toNumber(zone.fee), days: zone.days,
+        included_kg: zone.included_kg == null ? null : toNumber(zone.included_kg),
+        per_extra_kg: zone.per_extra_kg == null ? null : toNumber(zone.per_extra_kg),
+      })),
       policies: policies.slice(0, 40),
       styles: styles.slice(0, 300),
       faqs: faqs.slice(0, 300),
@@ -179,7 +198,7 @@ export class SalesBotContextService {
     };
   }
 
-  toContextProduct(product: Product): ContextProduct {
+  toContextProduct(product: Product, visibleIds?: Set<number>): ContextProduct {
     const images = productImages(product);
     const options = productOptions(product);
     return {
@@ -191,15 +210,18 @@ export class SalesBotContextService {
       photo_count: images.length,
       image_urls: images,
       description: String(product.description ?? '').slice(0, 600),
-      selling_points: '',
+      selling_points: String(product.selling_points ?? '').slice(0, 1000),
+      weight_kg: productWeight(product),
       variants: options.map((option, index) => ({
         variant_id: index + 1,
         name: variantLabel(option),
         price: variantPrice(product, option),
         stock: typeof option.quantity === 'number' && option.quantity > 0 ? option.quantity : null,
         image_url: option.image_url?.trim() || null,
+        weight_kg: optionWeight(option) ?? productWeight(product),
       })),
-      related_product_ids: [],
+      // only add-ons the bot can actually sell
+      related_product_ids: (product.related_product_ids ?? []).map(Number).filter((id) => !visibleIds || visibleIds.has(id)),
     };
   }
 }
