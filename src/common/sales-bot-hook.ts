@@ -7,7 +7,7 @@ export type SalesBotInboundEvent = {
   companyId: number;
   conversationId: number;
   phone: string;
-  provider: 'meta' | 'evolution' | 'simulator';
+  provider: 'meta' | 'evolution' | 'simulator' | 'messenger' | 'instagram';
 };
 
 type Handler = (event: SalesBotInboundEvent) => Promise<boolean>;

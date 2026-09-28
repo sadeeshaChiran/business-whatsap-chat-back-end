@@ -13,6 +13,7 @@ import { BotOrder } from '../bot-admin/entities/bot-order.entity';
 import { PusherService } from '../common/pusher.service';
 import { SalesBotHook, type SalesBotInboundEvent } from '../common/sales-bot-hook';
 import { Company } from '../company/entities/company.entity';
+import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import { WhatsappProviderFactory } from '../integrations/whatsapp/whatsapp-provider.factory';
 import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 import { Product } from '../products/entities/product.entity';
@@ -98,6 +99,7 @@ export class SalesBotEngineService implements OnModuleInit {
     private readonly whatsappService: WhatsappService,
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly pusherService: PusherService,
+    private readonly socialSender: MetaSocialSenderService,
   ) {}
 
   onModuleInit() {
@@ -188,7 +190,9 @@ export class SalesBotEngineService implements OnModuleInit {
       .filter(Boolean)
       .join('\n');
     const mediaRow = [...pending].reverse().find((row) => row.media_url && (row.message_type === 'image' || row.message_type === 'voice'));
-    const channel = simulated ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
+    const social = socialPlatformOf(channelUser.platform);
+    // Messenger / Instagram chats are answered through the connected Page, not a WhatsApp channel
+    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
     const media = mediaRow ? await this.loadMedia(mediaRow.media_url as string, channel) : null;
     if (!message && !media) return;
 
@@ -201,7 +205,7 @@ export class SalesBotEngineService implements OnModuleInit {
       const context = await this.contextService.build(companyId, channelUser.id);
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
-        session: { language: session.language, pending_order: session.pending_order ?? null },
+        session: { language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp' },
         media, context,
       });
     } catch (error) {
@@ -308,7 +312,15 @@ export class SalesBotEngineService implements OnModuleInit {
     channel: WhatsappChannel | null, text: string, intent: string | null, simulated: boolean) {
     let messageId: string | null = null;
     let failed = false;
-    if (!simulated && channel) {
+    const social = socialPlatformOf(channelUser.platform);
+    if (!simulated && social) {
+      try {
+        messageId = await this.socialSender.sendText(companyId, social, channelUser.source_account_id, channelUser.external_user_id, text);
+      } catch (error) {
+        failed = true;
+        this.logger.warn(`sending the bot reply on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else if (!simulated && channel) {
       try {
         messageId = (await this.providerFactory.getAdapterForChannel(channel).sendText(channel, channelUser.external_user_id, text)).messageId;
       } catch (error) {
@@ -319,7 +331,7 @@ export class SalesBotEngineService implements OnModuleInit {
       failed = true;
     }
     await this.messageRepository.save(this.messageRepository.create({
-      conversation_id: conversation.id, direction: 'outbound', message_type: 'text', platform: channelUser.platform || 'whatsapp',
+      conversation_id: conversation.id, direction: 'outbound', message_type: 'text', platform: social ?? (channelUser.platform || 'whatsapp'),
       provider_message_id: messageId, delivery_status: failed ? 'failed' : messageId ? 'sent' : null,
       content: text, source: BOT_SOURCE, intent, llm_provider: 'gemini',
     }));
@@ -335,7 +347,25 @@ export class SalesBotEngineService implements OnModuleInit {
       for (const url of productImages(product).slice(0, 3)) {
         if (sent >= 6) break;
         let messageId: string | null = null;
-        if (!simulated && channel) {
+        const social = socialPlatformOf(channelUser.platform);
+        if (!simulated && social) {
+          try {
+            let buffer: Buffer | undefined;
+            let mimetype: string | undefined;
+            if (social === 'messenger') {
+              const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+              if (!response.ok) continue;
+              buffer = Buffer.from(await response.arrayBuffer());
+              mimetype = (response.headers.get('content-type') || 'image/jpeg').split(';')[0];
+            }
+            messageId = await this.socialSender.sendImage(companyId, social, channelUser.source_account_id, channelUser.external_user_id, {
+              url, buffer, mimetype, fileName: `${product.name}.${(mimetype || 'image/jpeg').split('/')[1] || 'jpg'}`,
+            });
+          } catch (error) {
+            this.logger.warn(`sending a product photo on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
+            continue;
+          }
+        } else if (!simulated && channel) {
           try {
             const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
             if (!response.ok) continue;
@@ -350,7 +380,7 @@ export class SalesBotEngineService implements OnModuleInit {
           }
         }
         await this.messageRepository.save(this.messageRepository.create({
-          conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: channelUser.platform || 'whatsapp',
+          conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: socialPlatformOf(channelUser.platform) ?? (channelUser.platform || 'whatsapp'),
           provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: '[image]', media_url: url, source: BOT_SOURCE,
         }));
         sent += 1;
@@ -380,7 +410,8 @@ export class SalesBotEngineService implements OnModuleInit {
         company_id: companyId, bot_channel_user_id: channelUser.id, conversation_id: conversation.id,
         service_id: service?.id ?? null, service_name: service?.name ?? booking.service_name,
         date: String(booking.date).slice(0, 40), time: String(booking.time ?? '').slice(0, 40),
-        customer_name: booking.customer_name || channelUser.display_name || '', customer_phone: channelUser.external_user_id,
+        customer_name: booking.customer_name || channelUser.display_name || '',
+        customer_phone: socialPlatformOf(channelUser.platform) ? null : channelUser.external_user_id, // Messenger/Instagram ids are not phone numbers
         notes: booking.notes ?? '', status: 'requested',
       }));
       intents.add('booking');
@@ -469,7 +500,9 @@ export class SalesBotEngineService implements OnModuleInit {
     const total = subtotal + (fee ?? 0);
     const address = String(order.address ?? '').trim();
     const name = String(order.customer_name ?? '').trim();
-    const phone = String(order.customer_phone || channelUser.external_user_id || '').replace(/[^\d+]/g, '');
+    const isSocial = socialPlatformOf(channelUser.platform) !== null;
+    // WhatsApp: the chat number is the customer's phone. Messenger / Instagram: the chat id is not a phone, the customer must give one.
+    const phone = String(order.customer_phone || (isSocial ? '' : channelUser.external_user_id) || '').replace(/[^\d+]/g, '');
     const previous = session.pending_order;
     const signature = (value: { items?: Array<{ product_id: number; variant_id?: number | null; quantity: number }>; address?: string } | null | undefined) =>
       JSON.stringify({ i: (value?.items ?? []).map((item) => [item.product_id, item.variant_id ?? null, item.quantity]), a: String(value?.address ?? '').trim() });
@@ -489,6 +522,7 @@ export class SalesBotEngineService implements OnModuleInit {
     let blocked = problem;
     if (!blocked && !previousShown) blocked = 'confirmed before the summary was shown';
     if (!blocked && (!name || !address)) blocked = 'name or address missing';
+    if (!blocked && isSocial && phone.replace(/\D/g, '').length < 9) blocked = 'phone number missing';
     if (!blocked && subtotal <= 0) blocked = 'total is zero';
     if (blocked) {
       session.pending_order = pending;

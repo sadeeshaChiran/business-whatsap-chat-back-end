@@ -1,4 +1,5 @@
 import { createHmac } from 'crypto';
+import { SalesBotHook } from '../../common/sales-bot-hook';
 import { MetaMessagesController } from './meta-messages.controller';
 
 describe('MetaMessagesController', () => {
@@ -60,5 +61,30 @@ describe('MetaMessagesController', () => {
     expect(messageRepository.save).toHaveBeenCalledWith(expect.objectContaining({
       platform: 'messenger', content: 'Hello', provider_message_id: 'mid-1',
     }));
+  });
+  it('hands new Messenger / Instagram messages to the sales bot and lets new customers follow the auto-enable rule', async () => {
+    process.env.META_APP_SECRET = 'secret';
+    const notified: unknown[] = [];
+    SalesBotHook.register(async (event) => { notified.push(event); return true; });
+    const body = { object: 'instagram', entry: [{ id: 'ig-1', messaging: [{
+      sender: { id: 'cust-1' }, recipient: { id: 'ig-1' }, message: { mid: 'mid-9', text: 'price?' },
+    }] }] };
+    const rawBody = Buffer.from(JSON.stringify(body));
+    const signature = 'sha256=' + createHmac('sha256', 'secret').update(rawBody).digest('hex');
+    const savedUsers: any[] = [];
+    const controller = new MetaMessagesController(
+      { findOne: jest.fn().mockResolvedValue({ company_id: 7, instagram_business_account_id: 'ig-1', page_access_token: 't' }) } as never,
+      { findOne: jest.fn().mockResolvedValue(null), create: jest.fn().mockImplementation((x) => x),
+        save: jest.fn().mockImplementation(async (x) => { const row = { id: 5, ...x }; savedUsers.push(row); return row; }) } as never,
+      { findOne: jest.fn().mockResolvedValue(null), create: jest.fn().mockImplementation((x) => x),
+        save: jest.fn().mockImplementation(async (x) => ({ id: 31, ...x })) } as never,
+      { findOne: jest.fn().mockResolvedValue(null), create: jest.fn().mockImplementation((x) => x),
+        save: jest.fn().mockImplementation(async (x) => x) } as never,
+      { fetchMessagingProfile: jest.fn().mockResolvedValue({ username: 'kamal_ig' }) } as never,
+    );
+    await controller.receive(body, { rawBody } as never, signature);
+    expect(notified).toEqual([{ companyId: 7, conversationId: 31, phone: 'cust-1', provider: 'instagram' }]);
+    expect(savedUsers[0]).toEqual(expect.objectContaining({ platform: 'instagram', manual_mode: false, bot_enabled: false, display_name: 'kamal_ig' }));
+    SalesBotHook.register(undefined as never);
   });
 });

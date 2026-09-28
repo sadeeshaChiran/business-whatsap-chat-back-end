@@ -154,11 +154,20 @@ export class MetaController {
       cfg.scopes,
     );
     connection = await this.syncInstagramLink(connection);
+    // Turn on the Messenger / Instagram message webhook for this Page. A failure must not block
+    // connecting the Page (it is still usable for posts); it is shown as a warning instead.
+    let messagingWarning: string | null = null;
+    try {
+      await this.metaGraphService.subscribePageMessaging(connection.page_id, connection.page_access_token);
+    } catch (error) {
+      messagingWarning = error instanceof Error ? error.message : String(error);
+      await this.metaPageConnectionRepository.update({ id: connection.id }, { last_error: `Messaging webhook: ${messagingWarning}` });
+    }
     const savedCompany = await this.companyService.findOne(
       user.company_id,
       user,
     );
-    return { company: savedCompany, connection };
+    return { company: savedCompany, connection, messaging_warning: messagingWarning };
   }
 
   @Delete('connection')
