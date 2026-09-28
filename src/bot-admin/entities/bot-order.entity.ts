@@ -52,6 +52,13 @@ export class BotOrder {
   @Column({ type: 'text', nullable: true })
   admin_note: string | null;
 
+  /** Set by the sales bot (from bot_delivery_zone); included in total_amount */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  delivery_fee: number | null;
+
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  payment_method: string | null;
+
   @ManyToOne(() => BotChannelUser, { nullable: false, onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'bot_channel_user_id' })
   channelUser: BotChannelUser;

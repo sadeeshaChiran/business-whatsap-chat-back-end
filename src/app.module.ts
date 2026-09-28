@@ -23,6 +23,7 @@ import { MetaModule } from './integrations/meta/meta.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.module';
 import { AutomationModule } from './automation/automation.module';
+import { SalesBotModule } from './sales-bot/sales-bot.module';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -60,6 +61,7 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     WhatsappIntegrationModule,
     UsersModule,
     AutomationModule,
+    SalesBotModule,
   ],
   controllers: [AppController],
   providers: [

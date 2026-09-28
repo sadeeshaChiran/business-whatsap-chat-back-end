@@ -52,6 +52,13 @@ export class BotConversation {
   @Column({ type: 'timestamptz', nullable: true })
   agent_last_read_at: Date | null;
 
+  /** Why the chat waits in the unassigned queue: bot_handoff | order_check | bot_error (sales bot) */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  queue_reason: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  queue_note: string | null;
+
   @ManyToOne(() => BotChannelUser, (channelUser) => channelUser.conversations, {
     nullable: false,
     onDelete: 'RESTRICT',

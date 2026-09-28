@@ -1,0 +1,372 @@
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { AgentRoutingService } from '../agent-routing/agent-routing.service';
+import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { saveChatMedia } from '../bot-admin/chat-media.store';
+import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
+import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
+import { SalesBotHook } from '../common/sales-bot-hook';
+import { Company } from '../company/entities/company.entity';
+import type {
+  BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, RepliesQueryDto, SalesBotTestDto,
+  SimulateCustomerMessageDto, UpdateBookingStatusDto, UpdateBotServiceDto, UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
+} from './dto/sales-bot.dto';
+import { BotAiUsage } from './entities/bot-ai-usage.entity';
+import { BotBooking } from './entities/bot-booking.entity';
+import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
+import { BotService } from './entities/bot-service.entity';
+import { SalesBotSettings } from './entities/sales-bot-settings.entity';
+import { SalesBotClient } from './sales-bot.client';
+import { SalesBotContextService } from './sales-bot-context.service';
+import { BOT_SOURCE, SalesBotEngineService, planAllowsBot } from './sales-bot-engine.service';
+
+type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; size: number };
+
+const num = (value: unknown) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+};
+const PLACEHOLDER_LINE = /^\[[^\]]*\]$/;
+
+@Injectable()
+export class SalesBotAdminService {
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @InjectRepository(Company) private readonly companyRepository: Repository<Company>,
+    @InjectRepository(SalesBotSettings) private readonly settingsRepository: Repository<SalesBotSettings>,
+    @InjectRepository(BotService) private readonly serviceRepository: Repository<BotService>,
+    @InjectRepository(BotDeliveryZone) private readonly zoneRepository: Repository<BotDeliveryZone>,
+    @InjectRepository(BotBooking) private readonly bookingRepository: Repository<BotBooking>,
+    @InjectRepository(BotAiUsage) private readonly usageRepository: Repository<BotAiUsage>,
+    @InjectRepository(BotChannelUser) private readonly channelUserRepository: Repository<BotChannelUser>,
+    @InjectRepository(BotConversation) private readonly conversationRepository: Repository<BotConversation>,
+    private readonly contextService: SalesBotContextService,
+    private readonly client: SalesBotClient,
+    private readonly agentRoutingService: AgentRoutingService,
+  ) {}
+
+  /** Same rule as the rest of the bot admin: only the company admin. */
+  private async adminCompany(user: AuthenticatedUser): Promise<Company> {
+    const companyId = Number(user.company_id);
+    if (!Number.isFinite(companyId) || companyId <= 0) throw new ForbiddenException('Company not found.');
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+      throw new ForbiddenException('Only the company admin can manage the sales bot.');
+    }
+    return company;
+  }
+
+  /* ───────────────────────── Services ───────────────────────── */
+
+  private serviceView(row: BotService) {
+    return { id: row.id, name: row.name, description: row.description, price: num(row.price), price_note: row.price_note, duration_min: row.duration_min, is_active: row.is_active };
+  }
+
+  async listServices(user: AuthenticatedUser) {
+    const company = await this.adminCompany(user);
+    const rows = await this.serviceRepository.find({ where: { company_id: Number(company.id) }, order: { name: 'ASC' } });
+    return rows.map((row) => this.serviceView(row));
+  }
+
+  async createService(user: AuthenticatedUser, dto: CreateBotServiceDto) {
+    const company = await this.adminCompany(user);
+    const saved = await this.serviceRepository.save(this.serviceRepository.create({
+      company_id: Number(company.id), name: dto.name.trim(), description: dto.description?.trim() ?? '', price: dto.price,
+      price_note: dto.price_note?.trim() ?? '', duration_min: dto.duration_min ?? null, is_active: dto.is_active ?? true,
+    }));
+    return this.serviceView(saved);
+  }
+
+  async updateService(user: AuthenticatedUser, id: number, dto: UpdateBotServiceDto) {
+    const company = await this.adminCompany(user);
+    const row = await this.serviceRepository.findOne({ where: { id, company_id: Number(company.id) } });
+    if (!row) throw new NotFoundException('Service not found.');
+    if (dto.name !== undefined) row.name = dto.name.trim();
+    if (dto.description !== undefined) row.description = dto.description.trim();
+    if (dto.price !== undefined) row.price = dto.price;
+    if (dto.price_note !== undefined) row.price_note = dto.price_note.trim();
+    if (dto.duration_min !== undefined) row.duration_min = dto.duration_min ?? null;
+    if (dto.is_active !== undefined) row.is_active = dto.is_active;
+    return this.serviceView(await this.serviceRepository.save(row));
+  }
+
+  async deleteService(user: AuthenticatedUser, id: number) {
+    const company = await this.adminCompany(user);
+    const result = await this.serviceRepository.delete({ id, company_id: Number(company.id) });
+    if (!result.affected) throw new NotFoundException('Service not found.');
+    return { id, removed: true };
+  }
+
+  /* ───────────────────────── Delivery zones ───────────────────────── */
+
+  private zoneView(row: BotDeliveryZone) {
+    return { id: row.id, area: row.area, fee: num(row.fee), days: row.days };
+  }
+
+  private async assertUniqueArea(companyId: number, area: string, exceptId?: number) {
+    const existing = await this.zoneRepository
+      .createQueryBuilder('z')
+      .where('z.company_id = :companyId', { companyId })
+      .andWhere('LOWER(TRIM(z.area)) = LOWER(TRIM(:area))', { area })
+      .getOne();
+    if (existing && existing.id !== exceptId) throw new BadRequestException(`"${area}" already has a delivery fee.`);
+  }
+
+  async listZones(user: AuthenticatedUser) {
+    const company = await this.adminCompany(user);
+    const rows = await this.zoneRepository.find({ where: { company_id: Number(company.id) }, order: { area: 'ASC' } });
+    return rows.map((row) => this.zoneView(row));
+  }
+
+  async createZone(user: AuthenticatedUser, dto: CreateDeliveryZoneDto) {
+    const company = await this.adminCompany(user);
+    const area = dto.area.trim();
+    await this.assertUniqueArea(Number(company.id), area);
+    const saved = await this.zoneRepository.save(this.zoneRepository.create({
+      company_id: Number(company.id), area, fee: dto.fee, days: dto.days?.trim() ?? '',
+    }));
+    return this.zoneView(saved);
+  }
+
+  async updateZone(user: AuthenticatedUser, id: number, dto: UpdateDeliveryZoneDto) {
+    const company = await this.adminCompany(user);
+    const row = await this.zoneRepository.findOne({ where: { id, company_id: Number(company.id) } });
+    if (!row) throw new NotFoundException('Delivery zone not found.');
+    if (dto.area !== undefined) {
+      await this.assertUniqueArea(Number(company.id), dto.area.trim(), id);
+      row.area = dto.area.trim();
+    }
+    if (dto.fee !== undefined) row.fee = dto.fee;
+    if (dto.days !== undefined) row.days = dto.days.trim();
+    return this.zoneView(await this.zoneRepository.save(row));
+  }
+
+  async deleteZone(user: AuthenticatedUser, id: number) {
+    const company = await this.adminCompany(user);
+    const result = await this.zoneRepository.delete({ id, company_id: Number(company.id) });
+    if (!result.affected) throw new NotFoundException('Delivery zone not found.');
+    return { id, removed: true };
+  }
+
+  /* ───────────────────────── Bookings ───────────────────────── */
+
+  private bookingView(row: BotBooking) {
+    return {
+      id: row.id, service_id: row.service_id, service_name: row.service_name, date: row.date, time: row.time,
+      customer_name: row.customer_name, customer_phone: row.customer_phone, notes: row.notes, status: row.status,
+      conversation_id: row.conversation_id, created_at: row.created_at,
+    };
+  }
+
+  async listBookings(user: AuthenticatedUser, query: BookingsQueryDto) {
+    const company = await this.adminCompany(user);
+    const rows = await this.bookingRepository.find({
+      where: { company_id: Number(company.id), ...(query.status ? { status: query.status } : {}) },
+      order: { created_at: 'DESC' },
+      take: 500,
+    });
+    return rows.map((row) => this.bookingView(row));
+  }
+
+  async updateBookingStatus(user: AuthenticatedUser, id: number, dto: UpdateBookingStatusDto) {
+    const company = await this.adminCompany(user);
+    const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
+    if (!row) throw new NotFoundException('Booking not found.');
+    row.status = dto.status;
+    return this.bookingView(await this.bookingRepository.save(row));
+  }
+
+  /* ───────────────────────── Settings ───────────────────────── */
+
+  private settingsView(company: Company, settings: SalesBotSettings) {
+    return {
+      bot_enabled: planAllowsBot(company) && Boolean(company.bot_enabled),
+      bot_name: settings.bot_name, tone: settings.tone, default_language: settings.default_language || 'auto',
+      greeting: settings.greeting, about: settings.about, opening_hours: settings.opening_hours,
+      payment_methods: settings.payment_methods, auto_enable_new_customers: settings.auto_enable_new_customers,
+    };
+  }
+
+  async getSettings(user: AuthenticatedUser) {
+    const company = await this.adminCompany(user);
+    return this.settingsView(company, await this.contextService.getSettings(Number(company.id)));
+  }
+
+  async updateSettings(user: AuthenticatedUser, dto: UpdateSalesBotSettingsDto) {
+    const company = await this.adminCompany(user);
+    if (dto.bot_enabled !== undefined && dto.bot_enabled !== Boolean(company.bot_enabled)) {
+      if (dto.bot_enabled && !planAllowsBot(company)) {
+        throw new ForbiddenException('AI replies are currently available on the Free package only.');
+      }
+      company.bot_enabled = dto.bot_enabled;
+      await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
+    }
+    const settings = await this.contextService.getSettings(Number(company.id));
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers'] as const;
+    for (const field of fields) {
+      const value = dto[field];
+      if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;
+    }
+    const saved = await this.settingsRepository.save(settings);
+    return this.settingsView(company, saved);
+  }
+
+  /* ───────────────────────── Test chat ───────────────────────── */
+
+  /** Nothing is saved or sent: only the AI usage row (marked as test) for cost tracking. */
+  async testReply(user: AuthenticatedUser, dto: SalesBotTestDto) {
+    const company = await this.adminCompany(user);
+    const context = await this.contextService.build(Number(company.id), null);
+    const result = await this.client.reply({
+      company_id: Number(company.id), customer_id: null, message: dto.message,
+      history: (dto.history ?? []).slice(-20), session: dto.session ?? {}, media: null, context,
+    });
+    await this.usageRepository.save(this.usageRepository.create({
+      company_id: Number(company.id), conversation_id: null, model: result.usage.model,
+      input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens, output_tokens: result.usage.output_tokens,
+      calls: result.usage.calls ?? 1, cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: true,
+    }));
+    return result;
+  }
+
+  /* ───────────────────────── Customer simulator ───────────────────────── */
+
+  simulatorStatus() {
+    return { test_mode: SalesBotEngineService.testMode() && SalesBotClient.isConfigured() };
+  }
+
+  private normalizePhone(phone: string) {
+    return this.agentRoutingService.normalizePhone(phone);
+  }
+
+  async simulate(user: AuthenticatedUser, dto: SimulateCustomerMessageDto, file?: UploadedFile) {
+    const company = await this.adminCompany(user);
+    if (!SalesBotEngineService.testMode()) throw new ForbiddenException('Test mode is off (set SALES_BOT_TEST_MODE=true).');
+    if (!SalesBotClient.isConfigured()) throw new ForbiddenException('The sales bot is not configured (SALES_BOT_URL).');
+    const phone = this.normalizePhone(dto.phone);
+    const text = dto.text?.trim() ?? '';
+    const kind = file?.mimetype?.startsWith('image/') ? 'image' : file?.mimetype?.startsWith('audio/') ? 'voice' : null;
+    if (file && !kind) throw new BadRequestException('Only photos and voice notes are supported.');
+    if (!phone || (!text && !kind)) throw new BadRequestException('Phone number and a message or file are required.');
+
+    const mediaUrl = file && kind ? saveChatMedia(Number(company.id), file.buffer, file.mimetype, file.originalname) : null;
+    const content = text || (kind === 'image' ? '[image]' : kind === 'voice' ? '[voice note]' : '');
+    const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(Number(company.id), phone, dto.name?.trim() || undefined, {
+      content, message_type: kind ?? 'text', media_url: mediaUrl, source: 'customer',
+      provider_message_id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+    if (routing.conversationId) {
+      await SalesBotHook.notify({ companyId: Number(company.id), conversationId: routing.conversationId, phone, provider: 'simulator' });
+    }
+    return { conversation_id: routing.conversationId };
+  }
+
+  async findSimulatorConversation(user: AuthenticatedUser, phoneRaw: string) {
+    const company = await this.adminCompany(user);
+    const phone = this.normalizePhone(phoneRaw);
+    if (!phone) return { conversation_id: null };
+    const channelUser = await this.channelUserRepository.findOne({ where: { company_id: Number(company.id), platform: 'whatsapp', external_user_id: phone } });
+    if (!channelUser) return { conversation_id: null };
+    const conversation = await this.conversationRepository
+      .createQueryBuilder('c')
+      .where('c.bot_channel_user_id = :id', { id: channelUser.id })
+      .andWhere("c.status <> 'closed'")
+      .orderBy('c.id', 'DESC')
+      .getOne();
+    return { conversation_id: conversation?.id ?? null };
+  }
+
+  /* ───────────────────────── Reply review ───────────────────────── */
+
+  async replies(user: AuthenticatedUser, query: RepliesQueryDto) {
+    const company = await this.adminCompany(user);
+    const limit = Math.min(Math.max(Number(query.limit) || 60, 1), 200);
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(
+      `SELECT b.id, b.conversation_id, b.content AS bot_reply, b.created_at, b.intent,
+              cu.display_name AS customer_name, cu.external_user_id AS customer_phone,
+              (SELECT string_agg(NULLIF(m.content, ''), E'\\n' ORDER BY m.id)
+                 FROM bot_message m
+                WHERE m.conversation_id = b.conversation_id AND m.direction::text = 'inbound' AND m.id < b.id
+                  AND m.id > COALESCE((SELECT MAX(o.id) FROM bot_message o
+                                        WHERE o.conversation_id = b.conversation_id AND o.direction::text = 'outbound' AND o.id < b.id), 0)
+              ) AS customer_text,
+              (SELECT string_agg(DISTINCT m.message_type::text, ',')
+                 FROM bot_message m
+                WHERE m.conversation_id = b.conversation_id AND m.direction::text = 'inbound' AND m.id < b.id
+                  AND m.message_type::text <> 'text'
+                  AND m.id > COALESCE((SELECT MAX(o.id) FROM bot_message o
+                                        WHERE o.conversation_id = b.conversation_id AND o.direction::text = 'outbound' AND o.id < b.id), 0)
+              ) AS media
+         FROM bot_message b
+         JOIN bot_conversation c ON c.id = b.conversation_id
+         JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        WHERE CAST(cu.company_id AS BIGINT) = CAST($1 AS BIGINT)
+          AND b.direction::text = 'outbound' AND b.source = $2 AND b.message_type::text = 'text'
+          AND ($3::text IS NULL OR b.intent LIKE '%' || $3 || '%')
+        ORDER BY b.id DESC
+        LIMIT $4`,
+      [Number(company.id), BOT_SOURCE, query.only === 'handoff' ? 'handoff' : null, limit],
+    );
+    return rows.map((row) => {
+      const customerText = String(row.customer_text ?? '')
+        .split('\n').filter((line) => !PLACEHOLDER_LINE.test(line.trim())).join('\n').trim();
+      return {
+        id: Number(row.id), conversation_id: Number(row.conversation_id),
+        customer_name: (row.customer_name as string) || null, customer_phone: String(row.customer_phone ?? ''),
+        customer_text: customerText || null, media: (row.media as string) || null,
+        bot_reply: String(row.bot_reply ?? ''), handed_off: String(row.intent ?? '').includes('handoff'), created_at: row.created_at,
+      };
+    });
+  }
+
+  /* ───────────────────────── Reports ───────────────────────── */
+
+  async report(user: AuthenticatedUser, daysRaw?: number) {
+    const company = await this.adminCompany(user);
+    const companyId = Number(company.id);
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365);
+    const [summary] = await this.dataSource.query(
+      `WITH since AS (SELECT NOW() - make_interval(days => $2::int) AS t)
+       SELECT
+         (SELECT COUNT(*) FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.created_at > (SELECT t FROM since))::int AS conversations,
+         (SELECT COUNT(*) FROM bot_order o WHERE CAST(o.company_id AS BIGINT) = $1 AND o.created_at > (SELECT t FROM since)
+           AND o.status::text <> 'Cancelled')::int AS orders,
+         (SELECT COALESCE(SUM(o.total_amount), 0) FROM bot_order o WHERE CAST(o.company_id AS BIGINT) = $1
+           AND o.created_at > (SELECT t FROM since) AND o.status::text <> 'Cancelled') AS revenue,
+         (SELECT COUNT(*) FROM bot_booking b WHERE b.company_id = $1 AND b.created_at > (SELECT t FROM since))::int AS bookings,
+         (SELECT COUNT(*) FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+           JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE CAST(cu.company_id AS BIGINT) = $1 AND m.source = $3 AND m.intent LIKE '%lead%' AND m.created_at > (SELECT t FROM since))::int AS leads,
+         (SELECT COUNT(*) FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+           JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE CAST(cu.company_id AS BIGINT) = $1 AND m.source = $3 AND m.intent LIKE '%handoff%' AND m.created_at > (SELECT t FROM since))::int AS handoffs,
+         (SELECT COUNT(*) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since))::int AS ai_replies,
+         (SELECT COALESCE(SUM(u.cost_usd), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND u.created_at > (SELECT t FROM since)) AS ai_cost_usd,
+         (SELECT COALESCE(AVG(u.latency_ms), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_latency_ms,
+         (SELECT COALESCE(AVG(u.calls), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_calls`,
+      [companyId, days, BOT_SOURCE],
+    );
+    const daily: Array<{ day: string; conversations: number; orders: number }> = await this.dataSource.query(
+      `SELECT to_char(d, 'YYYY-MM-DD') AS day,
+              (SELECT COUNT(*) FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+                WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.created_at::date = d::date)::int AS conversations,
+              (SELECT COUNT(*) FROM bot_order o WHERE CAST(o.company_id AS BIGINT) = $1 AND o.created_at::date = d::date
+                AND o.status::text <> 'Cancelled')::int AS orders
+         FROM generate_series(CURRENT_DATE - ($2::int - 1), CURRENT_DATE, INTERVAL '1 day') d
+        ORDER BY d`,
+      [companyId, days],
+    );
+    const conversations = num(summary?.conversations);
+    const orders = num(summary?.orders);
+    const bookings = num(summary?.bookings);
+    return {
+      days, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
+      handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_cost_usd: num(summary?.ai_cost_usd),
+      avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
+      conversion: conversations ? (orders + bookings) / conversations : 0,
+      daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),
+    };
+  }
+}

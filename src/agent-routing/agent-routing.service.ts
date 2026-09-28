@@ -668,10 +668,14 @@ export class AgentRoutingService {
       const assignedId = conv.assigned_agent_id
         ? Number(conv.assigned_agent_id)
         : null;
+      const botReason = ['bot_handoff', 'order_check', 'bot_error'].includes(String(conv.queue_reason ?? ''))
+        ? (conv.queue_reason as 'bot_handoff' | 'order_check' | 'bot_error')
+        : null;
       const queueReason =
-        assignedId != null && agentOnlineById.get(assignedId) === false
+        botReason ??
+        (assignedId != null && agentOnlineById.get(assignedId) === false
           ? ('agent_offline' as const)
-          : ('no_agent' as const);
+          : ('no_agent' as const));
 
       return {
         id: conv.id,
@@ -679,6 +683,7 @@ export class AgentRoutingService {
         assignment_mode: conv.assignment_mode,
         last_message_at: conv.last_message_at,
         queue_reason: queueReason,
+        queue_note: botReason ? conv.queue_note ?? null : null,
         assigned_agent_id: assignedId,
         assigned_agent_name:
           assignedId != null ? agentNameById.get(assignedId) ?? null : null,

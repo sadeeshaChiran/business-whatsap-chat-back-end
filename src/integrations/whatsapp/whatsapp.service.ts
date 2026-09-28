@@ -6,6 +6,7 @@ import { AutomationService } from '../../automation/automation.service';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
+import { SalesBotHook } from '../../common/sales-bot-hook';
 import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
 import { MetaAdapter } from './adapters/meta.adapter';
 import { WhatsappProviderFactory } from './whatsapp-provider.factory';
@@ -210,7 +211,21 @@ export class WhatsappService {
       await this.executeAutomationFlows(channel, normalized, routing.conversationId, row.content);
     }
 
+    // Python sales bot (SALES_BOT_URL): owns bot replies for Meta and Evolution.
+    const salesBotHandled =
+      SalesBotHook.isActive() &&
+      Boolean(routing.conversationId) &&
+      !routing.duplicate &&
+      normalized.input_type !== 'system' &&
+      (await SalesBotHook.notify({
+        companyId: Number(channel.company_id),
+        conversationId: Number(routing.conversationId),
+        phone: normalized.phone,
+        provider: normalized.provider,
+      }));
+
     if (
+      !SalesBotHook.isActive() &&
       normalized.provider === 'meta' &&
       forwardMeta &&
       normalized.input_type !== 'system'
@@ -228,7 +243,9 @@ export class WhatsappService {
       provider: normalized.provider,
       normalized,
       agent_routing: routing,
+      sales_bot: salesBotHandled,
       n8n_forwarded:
+        !SalesBotHook.isActive() &&
         normalized.provider === 'meta' &&
         forwardMeta &&
         normalized.input_type !== 'system',
