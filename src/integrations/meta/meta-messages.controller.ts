@@ -12,6 +12,7 @@ import { BotConversation } from '../../bot-admin/entities/bot-conversation.entit
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { saveChatMedia } from '../../bot-admin/chat-media.store';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
+import { SalesBotHook } from '../../common/sales-bot-hook';
 import { MetaGraphService } from './meta-graph.service';
 
 type Attachment = {
@@ -157,6 +158,12 @@ export class MetaMessagesController {
           platform,
           direction: 'inbound',
         });
+
+        // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
+        // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).
+        if (SalesBotHook.isActive()) {
+          await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
+        }
       }
     }
     return { ok: true, saved };
@@ -307,7 +314,9 @@ export class MetaMessagesController {
         language_locked: false,
         session_state: null,
         bot_enabled: false,
-        manual_mode: true,
+        // false = "no agent has decided yet", so the company's "auto-enable bot for new customers"
+        // setting applies (same as new WhatsApp customers). true would keep the bot off forever.
+        manual_mode: false,
         last_seen_at: new Date(),
       });
     }

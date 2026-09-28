@@ -11,6 +11,8 @@ import { BotOrderStatusHistory } from '../bot-admin/entities/bot-order-status-hi
 import { BotOrder } from '../bot-admin/entities/bot-order.entity';
 import { BotTrainingData } from '../bot-admin/entities/bot-training-data.entity';
 import { PusherService } from '../common/pusher.service';
+import { MetaSocialSenderService } from '../integrations/meta/meta-social-sender.service';
+import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity';
 import { Company } from '../company/entities/company.entity';
 import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.module';
 import { ProductVariant } from '../products/entities/product-variant.entity';
@@ -38,10 +40,10 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
     TypeOrmModule.forFeature([
       Company, BotChannelUser, BotConversation, BotMessage, BotOrder, BotOrderItem, BotOrderStatusHistory,
       BotCustomerNote, BotTrainingData, Product, ProductVariant,
-      SalesBotSettings, BotService, BotDeliveryZone, BotBooking, BotAiUsage,
+      SalesBotSettings, BotService, BotDeliveryZone, BotBooking, BotAiUsage, MetaPageConnection,
     ]),
   ],
   controllers: [SalesBotController],
-  providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, PusherService],
+  providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, PusherService, MetaSocialSenderService],
 })
 export class SalesBotModule {}

@@ -185,6 +185,21 @@ export class MetaGraphService {
     return payload.access_token.trim();
   }
 
+  /**
+   * Tells Meta to send this Page's Messenger messages (and the linked Instagram account's DMs)
+   * to our webhook. Without this step the webhook stays silent even when the app is set up correctly.
+   */
+  async subscribePageMessaging(pageId: string, pageAccessToken: string): Promise<void> {
+    const cfg = this.getConfig();
+    const params = new URLSearchParams({ subscribed_fields: 'messages,messaging_postbacks,message_deliveries,message_reads' });
+    const url = `${this.graphUrl(`/${encodeURIComponent(pageId)}/subscribed_apps`, cfg)}?${params.toString()}`;
+    const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${pageAccessToken}` } });
+    const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
+    if (!response.ok || payload.success !== true) {
+      throw new BadRequestException(payload.error?.message ?? 'Meta could not subscribe this Page to the messaging webhook.');
+    }
+  }
+
   async subscribeWhatsappApp(wabaId: string, accessToken: string): Promise<void> {
     const cfg = this.getConfig();
     const url = this.graphUrl(`/${encodeURIComponent(wabaId)}/subscribed_apps`, cfg);
