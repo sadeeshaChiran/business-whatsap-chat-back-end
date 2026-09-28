@@ -204,6 +204,15 @@ export class UpdateSalesBotSettingsDto {
   @IsOptional()
   @IsBoolean()
   auto_enable_new_customers?: boolean;
+
+  /** auto (from the business category) | products | services | both */
+  @IsOptional()
+  @IsIn(['auto', 'products', 'services', 'both'])
+  sells?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  auto_send_invoice?: boolean;
 }
 
 /* ───────── Test chat ───────── */

@@ -31,6 +31,7 @@ const MIGRATION_FILES = [
   'supabase_packages_bot_off.sql',
   'supabase_sales_bot.sql',
   'supabase_sales_bot_products.sql',
+  'supabase_sales_bot_orders.sql',
 ] as const;
 
 function migrationDir(): string | null {

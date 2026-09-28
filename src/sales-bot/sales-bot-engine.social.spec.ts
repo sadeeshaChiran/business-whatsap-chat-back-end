@@ -26,12 +26,14 @@ function build(platform: string, botResult: Record<string, unknown> = {}) {
     { findOne: async () => null, createQueryBuilder: () => qb, create: (x: any) => x, save: async (x: any) => { saved.push(x); return x; } } as never,
     {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
     { create: (x: any) => x, save: async (x: any) => x } as never,
+    { create: (x: any) => x, save: async (x: any) => x } as never, // bot notifications
     { getSettings: async () => ({ auto_enable_new_customers: true }), build: async () => ({}) } as never,
     { reply } as never,
     {} as never,
     whatsapp as never,
     { getAdapterForChannel: () => adapter } as never,
     { trigger: jest.fn() } as never,
+    { sendInvoiceForCompany: jest.fn() } as never, // bot-admin (invoices)
     social as never,
   );
   qbQueue.push([{ id: 1, content: 'hi, price of the pram?', message_type: 'text', media_url: null, direction: 'inbound' }], []);

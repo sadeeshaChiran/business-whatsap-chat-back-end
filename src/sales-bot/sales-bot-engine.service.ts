@@ -18,7 +18,9 @@ import { WhatsappProviderFactory } from '../integrations/whatsapp/whatsapp-provi
 import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 import { Product } from '../products/entities/product.entity';
 import type { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
+import { BotAdminService } from '../bot-admin/bot-admin.service';
 import { BotAiUsage } from './entities/bot-ai-usage.entity';
+import { BotNotification, type BotNotificationKind } from './entities/bot-notification.entity';
 import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
@@ -33,13 +35,17 @@ type PricedItem = {
   weight_kg: number;
 };
 type PendingOrder = {
+  /** special notes said before the order was saved – written into the order note when it is saved */
+  notes?: string[];
   items: PricedItem[]; subtotal: number; delivery_area: string | null; total_weight_kg: number;
   delivery_fee: number | null; total: number;
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
 };
 type BotSession = { language?: string; pending_order?: PendingOrder | null };
 /** intent is stored on the bot message, e.g. "lead,handoff" (one reply can do several things). */
-type Outcome = { intent: string | null; replyOverride: string | null };
+type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[] };
+type LeadStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
+const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 2, proposal: 3, won: 4, lost: 4 };
 
 export const BOT_SOURCE = 'sales_bot';
 const PLACEHOLDER = /^\[[^\]]*\]$/;
@@ -52,6 +58,16 @@ function holdMessage(language: string): string {
   if (language === 'sinhala_latin') return 'Poddak inna, ape team eka oyage order eka check karala ikmanatama confirm karanawa.';
   return 'One moment please, our team is checking your order and will confirm it shortly.';
 }
+
+/** Sent when an order change could not be applied automatically. */
+function changeHoldMessage(language: string): string {
+  if (language === 'sinhala') return 'ඔයාගේ වෙනස අපි සටහන් කරගත්තා. අපේ team එක check කරලා ඉක්මනින්ම confirm කරනවා.';
+  if (language === 'tamil') return 'உங்கள் மாற்றத்தை குறித்துக்கொண்டோம். எங்கள் குழு சரிபார்த்து விரைவில் உறுதிப்படுத்தும்.';
+  if (language === 'sinhala_latin') return 'Oyage wenasa api note kara gaththa. Ape team eka check karala ikmanatama confirm karanawa.';
+  return 'We noted your change. Our team will check it and confirm shortly.';
+}
+
+const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 
 /** Sent when the bot itself failed, so the customer is never left without an answer. */
 function sorryMessage(language: string): string {
@@ -93,12 +109,14 @@ export class SalesBotEngineService implements OnModuleInit {
     @InjectRepository(BotDeliveryZone) private readonly zoneRepository: Repository<BotDeliveryZone>,
     @InjectRepository(BotBooking) private readonly bookingRepository: Repository<BotBooking>,
     @InjectRepository(BotAiUsage) private readonly usageRepository: Repository<BotAiUsage>,
+    @InjectRepository(BotNotification) private readonly notificationRepository: Repository<BotNotification>,
     private readonly contextService: SalesBotContextService,
     private readonly client: SalesBotClient,
     private readonly agentRoutingService: AgentRoutingService,
     private readonly whatsappService: WhatsappService,
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly pusherService: PusherService,
+    private readonly botAdminService: BotAdminService,
     private readonly socialSender: MetaSocialSenderService,
   ) {}
 
@@ -202,7 +220,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
     let result: SalesBotResult;
     try {
-      const context = await this.contextService.build(companyId, channelUser.id);
+      const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp');
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
         session: { language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp' },
@@ -231,6 +249,24 @@ export class SalesBotEngineService implements OnModuleInit {
     await this.sendPhotos(companyId, conversation, channelUser, channel, result.photo_product_ids, simulated);
     const text = outcome.replyOverride ?? result.reply;
     if (text) await this.sendText(companyId, conversation, channelUser, channel, text, outcome.intent, simulated);
+    await this.advanceLead(conversation.id, 'contacted');
+
+    // Invoice PDF after a new or changed order (existing invoice feature, on the customer's channel)
+    if (outcome.invoiceOrderIds.length) {
+      const settings = await this.contextService.getSettings(companyId);
+      for (const orderId of outcome.invoiceOrderIds) {
+        if (!settings.auto_send_invoice) break;
+        if (simulated) {
+          await this.messageRepository.save(this.messageRepository.create({
+            conversation_id: conversation.id, direction: 'outbound', message_type: 'text', platform: channelUser.platform || 'whatsapp',
+            content: `[invoice for order #${orderId} – not sent in the simulator]`, source: BOT_SOURCE,
+          }));
+          continue;
+        }
+        await this.botAdminService.sendInvoiceForCompany(companyId, orderId).catch((error: unknown) =>
+          this.logger.warn(`auto invoice for order ${orderId} failed: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
 
     await this.usageRepository.save(this.usageRepository.create({
       company_id: companyId, conversation_id: conversationId, model: result.usage.model,
@@ -400,6 +436,9 @@ export class SalesBotEngineService implements OnModuleInit {
     result: SalesBotResult, session: BotSession): Promise<Outcome> {
     const intents = new Set<string>();
     let replyOverride: string | null = null;
+    const invoiceOrderIds: number[] = [];
+    let savedOrderId: number | null = null;
+    const who = channelUser.display_name || channelUser.external_user_id;
 
     const booking = result.booking;
     if (booking?.confirm && booking.service_name && booking.date) {
@@ -415,6 +454,9 @@ export class SalesBotEngineService implements OnModuleInit {
         notes: booking.notes ?? '', status: 'requested',
       }));
       intents.add('booking');
+      await this.advanceLead(conversation.id, 'won', { booking: `${booking.service_name} ${booking.date} ${booking.time ?? ''}`.trim() });
+    } else if (booking?.service_name) {
+      await this.advanceLead(conversation.id, 'proposal', { booking: `${booking.service_name} ${booking.date ?? ''} ${booking.time ?? ''}`.trim() });
     }
 
     const lead = result.lead;
@@ -429,15 +471,19 @@ export class SalesBotEngineService implements OnModuleInit {
         company_id: companyId, bot_channel_user_id: channelUser.id, content: lines.join('\n'),
         created_by_user_id: null, created_by_name: 'Sales bot',
       }));
-      if (['new', 'contacted'].includes(String(conversation.lead_stage ?? 'new'))) {
-        await this.conversationRepository.update(conversation.id, { lead_stage: 'qualified' });
-      }
+      await this.advanceLead(conversation.id, 'qualified', {
+        need: lead.need, budget: lead.budget, location: lead.location, contact_time: lead.contact_time, name: lead.customer_name,
+      });
       intents.add('lead');
     }
 
     if (result.order?.items?.length) {
       const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, result.order, session);
-      if (orderOutcome === 'saved') intents.add('order');
+      if (orderOutcome.startsWith('saved:')) {
+        savedOrderId = Number(orderOutcome.slice(6));
+        invoiceOrderIds.push(savedOrderId);
+        intents.add('order');
+      }
       if (orderOutcome.startsWith('blocked:')) {
         replyOverride = holdMessage(result.language);
         await this.handoff(companyId, conversation, channelUser, 'order_check', `Order needs a check: ${orderOutcome.slice(8)}`);
@@ -445,12 +491,195 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
 
+    if (result.order_change) {
+      const change = await this.handleOrderChange(companyId, conversation, channelUser, result.order_change, who);
+      if (change.intent) intents.add(change.intent);
+      if (change.invoice) invoiceOrderIds.push(change.invoice);
+      if (change.hold) replyOverride = changeHoldMessage(result.language);
+      if (change.handoff) {
+        await this.handoff(companyId, conversation, channelUser, 'bot_handoff', change.handoff);
+        intents.add('handoff');
+      }
+    }
+
+    if (result.cancel_request) {
+      const cancel = await this.handleCancel(companyId, conversation, channelUser, result.cancel_request, who);
+      if (cancel.intent) intents.add(cancel.intent);
+      if (cancel.handoff) {
+        await this.handoff(companyId, conversation, channelUser, 'bot_handoff', cancel.handoff);
+        intents.add('handoff');
+      }
+    }
+
+    for (const note of result.notes ?? []) {
+      await this.handleSpecialNote(companyId, conversation, channelUser, note, savedOrderId, session, who);
+      intents.add('note');
+    }
+
     if (result.handoff?.needed && !intents.has('handoff')) {
       await this.handoff(companyId, conversation, channelUser, 'bot_handoff', result.handoff.reason || 'The bot asked for a person.');
       intents.add('handoff');
     }
-    return { intent: intents.size ? [...intents].join(',') : null, replyOverride };
+    return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds };
   }
+
+  /* ───────────────── Special notes, order changes, cancellations, lead stages ───────────────── */
+
+  /** Alert for the team: stored for the Notifications feed + live event for open dashboards. */
+  private async notifyTeam(companyId: number, kind: BotNotificationKind, priority: 'LOW' | 'MEDIUM' | 'HIGH',
+    title: string, message: string, conversationId: number | null, orderId: number | null = null) {
+    await this.notificationRepository.save(this.notificationRepository.create({
+      company_id: companyId, kind, priority, title: title.slice(0, 255), message, conversation_id: conversationId, order_id: orderId,
+    }));
+    this.pusherService.trigger(`company-${companyId}`, 'bot_notification', { kind, priority, title, message, conversation_id: conversationId, order_id: orderId });
+  }
+
+  /** Adds a dated line to the order's note (admin_note), keeping what is already there. */
+  private async appendOrderNote(orderId: number, line: string) {
+    const order = await this.orderRepository.findOne({ where: { id: orderId } });
+    if (!order) return;
+    const next = [order.admin_note?.trim(), `${line} (${stamp()})`].filter(Boolean).join('\n');
+    await this.orderRepository.update(orderId, { admin_note: next.slice(-5000) });
+  }
+
+  /** The order the customer named, else their newest order that is not delivered or cancelled. */
+  private async findOpenOrder(companyId: number, channelUserId: number, orderId?: number | null): Promise<BotOrder | null> {
+    if (orderId) {
+      const named = await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'] });
+      if (named) return named;
+    }
+    return this.orderRepository
+      .createQueryBuilder('o')
+      .leftJoinAndSelect('o.items', 'items')
+      .where('o.company_id = :companyId AND o.bot_channel_user_id = :channelUserId', { companyId, channelUserId })
+      .andWhere("o.status::text NOT IN ('Delivered', 'Cancelled')")
+      .orderBy('o.id', 'DESC')
+      .getOne();
+  }
+
+  /**
+   * Moves the chat forward in Lead Management (never backwards, so manual moves are kept).
+   * won / lost always apply (order saved / order cancelled).
+   */
+  private async advanceLead(conversationId: number, stage: LeadStage, details?: Record<string, unknown>) {
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId } });
+    if (!conversation) return;
+    const current = (conversation.lead_stage ?? 'new') as LeadStage;
+    let next = current;
+    if (stage === 'won' || stage === 'lost') next = stage;
+    else if (current !== 'won' && current !== 'lost' && LEAD_RANK[stage] > LEAD_RANK[current]) next = stage;
+    const cleaned = Object.fromEntries(Object.entries(details ?? {}).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+    const hasDetails = Object.keys(cleaned).length > 0;
+    if (next === current && !hasDetails) return;
+    await this.conversationRepository.update(conversationId, {
+      lead_stage: next,
+      ...(hasDetails ? { lead_details: { ...(conversation.lead_details ?? {}), ...cleaned, updated_at: new Date().toISOString() } } : {}),
+    });
+  }
+
+  private async handleSpecialNote(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    note: { text: string; about?: 'order' | 'customer' }, savedOrderId: number | null, session: BotSession, who: string) {
+    if (note.about === 'order') {
+      const order = savedOrderId ? { id: savedOrderId } : await this.findOpenOrder(companyId, channelUser.id);
+      if (order) {
+        await this.appendOrderNote(order.id, `📝 Special note: ${note.text}`);
+        await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note on order #${order.id}`, `${who}: ${note.text}`, conversation.id, order.id);
+        return;
+      }
+      if (session.pending_order) {
+        // order not saved yet – the note goes into the order note when it is saved
+        session.pending_order.notes = [...(session.pending_order.notes ?? []), note.text].slice(-10);
+        await this.notifyTeam(companyId, 'special_note', 'LOW', `Special note from ${who}`, `${note.text} (for the order being placed)`, conversation.id);
+        return;
+      }
+    }
+    await this.noteRepository.save(this.noteRepository.create({
+      company_id: companyId, bot_channel_user_id: channelUser.id, content: `📝 Special note from the customer: ${note.text}`,
+      created_by_user_id: null, created_by_name: 'Sales bot',
+    }));
+    await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note from ${who}`, note.text, conversation.id);
+  }
+
+  /** Pending → the bot edits the order. Confirmed / Processing → request only. Shipped → request + a person. */
+  private async handleOrderChange(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string }> {
+    const order = await this.findOpenOrder(companyId, channelUser.id, change.order_id);
+    const request = String(change.request ?? '').trim() || 'wants to change the order';
+    if (!order) return { intent: null };
+
+    if (order.status !== 'Pending') {
+      await this.appendOrderNote(order.id, `🔔 Customer asked to change the order: ${request}`);
+      await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${order.id} (${order.status})`, `${who}: ${request}`, conversation.id, order.id);
+      return order.status === 'Shipped'
+        ? { intent: 'change_request', handoff: `Order #${order.id} already shipped – customer wants a change: ${request}` }
+        : { intent: 'change_request' };
+    }
+
+    // Pending: apply the change – prices and delivery fee are recalculated here, never taken from the AI
+    let items = order.items ?? [];
+    let weight = Number(order.total_weight_kg ?? 0);
+    if (change.items?.length) {
+      const priced = await this.priceItems(companyId, change.items);
+      if (priced.problem || !priced.items.length) {
+        await this.appendOrderNote(order.id, `🔔 Customer asked to change the order (not applied automatically: ${priced.problem || 'no items'}): ${request}`);
+        await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${order.id}`, `${who}: ${request}`, conversation.id, order.id);
+        return { intent: 'change_request', hold: true };
+      }
+      await this.orderItemRepository.delete({ order_id: order.id });
+      for (const item of priced.items) {
+        await this.orderItemRepository.save(this.orderItemRepository.create({
+          order_id: order.id, product_id: item.product_id, product_name: item.product_name,
+          variant_text: item.variant_name || null, quantity: item.quantity, unit_price: item.unit_price, total_price: item.total_price,
+        }));
+      }
+      items = await this.orderItemRepository.find({ where: { order_id: order.id } });
+      weight = Math.round(priced.items.reduce((sum, item) => sum + item.weight_kg * item.quantity, 0) * 1000) / 1000;
+    }
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
+    const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
+    const area = String(change.delivery_area ?? order.delivery_area ?? '').trim();
+    const zone = area ? findZone(zones, area) : null;
+    const fee = zone ? zoneFee(zone, weight) : order.delivery_fee == null ? null : Number(order.delivery_fee);
+    const phone = String(change.customer_phone ?? '').replace(/[^\d+]/g, '');
+    await this.orderRepository.update(order.id, {
+      total_amount: subtotal + (fee ?? 0), delivery_fee: fee, total_weight_kg: weight || null,
+      delivery_area: zone?.area ?? order.delivery_area,
+      ...(change.address?.trim() ? { address: change.address.trim() } : {}),
+      ...(change.customer_name?.trim() ? { customer_name: change.customer_name.trim().slice(0, 255) } : {}),
+      ...(phone.replace(/\D/g, '').length >= 9 ? { customer_phone: phone } : {}),
+    });
+    await this.orderHistoryRepository.save(this.orderHistoryRepository.create({
+      order_id: order.id, status: 'Pending', message: `Order changed by the customer in chat (sales bot): ${request}`,
+    }));
+    await this.appendOrderNote(order.id, `✏️ Changed by the customer: ${request}`);
+    await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${order.id} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
+    await this.advanceLead(conversation.id, 'won', { order_value: subtotal + (fee ?? 0), order_id: order.id });
+    return { intent: 'order_changed', invoice: order.id };
+  }
+
+  /** Pending → cancelled. Confirmed / Processing → request only (the team decides). Shipped → request + a person. */
+  private async handleCancel(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    cancel: NonNullable<SalesBotResult['cancel_request']>, who: string): Promise<{ intent: string | null; handoff?: string }> {
+    const order = await this.findOpenOrder(companyId, channelUser.id, cancel.order_id);
+    if (!order) return { intent: null };
+    const reason = String(cancel.reason ?? '').trim() || 'no reason given';
+    if (order.status === 'Pending') {
+      await this.orderRepository.update(order.id, { status: 'Cancelled' });
+      await this.orderHistoryRepository.save(this.orderHistoryRepository.create({
+        order_id: order.id, status: 'Cancelled', message: `Cancelled by the customer in chat (sales bot): ${reason}`,
+      }));
+      await this.appendOrderNote(order.id, `❌ Cancelled by the customer: ${reason}`);
+      await this.notifyTeam(companyId, 'order_cancelled', 'MEDIUM', `Order #${order.id} cancelled by the customer`, `${who}: ${reason}`, conversation.id, order.id);
+      await this.advanceLead(conversation.id, 'lost', { lost_reason: reason });
+      return { intent: 'cancelled' };
+    }
+    await this.appendOrderNote(order.id, `🔔 Customer requested cancellation: ${reason}`);
+    await this.notifyTeam(companyId, 'cancel_request', 'HIGH', `Cancellation request for order #${order.id} (${order.status})`, `${who}: ${reason}`, conversation.id, order.id);
+    return order.status === 'Shipped'
+      ? { intent: 'cancel_request', handoff: `Order #${order.id} already shipped – customer wants to cancel: ${reason}` }
+      : { intent: 'cancel_request' };
+  }
+
 
   /** Prices always come from the products table – never from the AI. */
   async priceItems(companyId: number, items: NonNullable<SalesBotOrder['items']>): Promise<{ items: PricedItem[]; problem: string }> {
@@ -514,8 +743,10 @@ export class SalesBotEngineService implements OnModuleInit {
       delivery_fee: fee, total, customer_name: name, customer_phone: phone, address,
       payment_method: String(order.payment_method || 'COD').slice(0, 60), summary_shown: summaryShown,
     };
+    pending.notes = previous?.notes ?? [];
     if (!order.confirm_order) {
       session.pending_order = pending;
+      if (summaryShown) await this.advanceLead(conversation.id, 'proposal', { order_value: total });
       return 'pending';
     }
 
@@ -532,8 +763,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const saved = await this.orderRepository.save(this.orderRepository.create({
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
-      total_weight_kg: totalWeight || null,
-      admin_note: 'Created by the sales bot.',
+      total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
+      admin_note: ['Created by the sales bot.', ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].join('\n'),
     }));
     for (const item of items) {
       await this.orderItemRepository.save(this.orderItemRepository.create({
@@ -549,7 +780,10 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     session.pending_order = null;
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversation.id, order_created: saved.id });
-    return 'saved';
+    await this.notifyTeam(companyId, 'new_order', 'LOW', `New order #${saved.id} from the sales bot`,
+      `${name} – ${items.length} item(s), total Rs ${total.toLocaleString('en-LK')}${(pending.notes ?? []).length ? ' – has special notes' : ''}`, conversation.id, saved.id);
+    await this.advanceLead(conversation.id, 'won', { order_value: total, order_id: saved.id, name });
+    return `saved:${saved.id}`;
   }
 
   /** Bot stops for this customer and a person takes over (online agent, or the unassigned queue). */

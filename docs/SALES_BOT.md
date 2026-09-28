@@ -47,6 +47,42 @@ Turning the bot back on for the customer (existing toggle) clears the reason.
 **AI Assistant knowledge** (`bot_training_data.category`): `Policy` → always in the prompt,
 `Style` → reply examples (8 most similar per message), anything else → FAQ search.
 
+## Orders after the sale, notes, invoices, leads (update)
+
+| Customer says | Order status | What happens |
+|---|---|---|
+| a special request ("deliver quickly", "gift wrap") | – | about an order → dated line in the **order note** (`admin_note`, 📝); otherwise a **customer note**. A note said before the order is saved is added when it is saved. Notification. |
+| add / remove / change items, address | **Pending** | the bot **edits the order**: items re-priced from `product`, delivery fee recalculated (zone + weight), ✏️ line in the order note, status history, notification, invoice sent again |
+| same | Confirmed / Processing | **not changed** – 🔔 request in the order note + HIGH notification; the bot says the team will confirm |
+| same | Shipped | request + notification + handed to a person |
+| cancel | **Pending** | status **Cancelled**, ❌ line in the order note, notification, lead → lost |
+| cancel | Confirmed / Processing | **not cancelled** – 🔔 request in the order note + HIGH notification |
+| cancel | Shipped | request + notification + handed to a person |
+
+- **Messenger / Instagram:** the bot is told the channel and asks for a phone number before confirming
+  (orders need one there). Order status messages and invoices are now sent on the customer's own channel
+  (`BotAdminService.sendCustomerMessage`); before, they always went to WhatsApp.
+- **Invoice PDF:** after the bot saves or changes an order (setting `auto_send_invoice`, default on),
+  using the existing invoice feature (`sendInvoiceForCompany`). Instagram cannot receive PDF files – the
+  invoice link is sent as text.
+- **Notifications:** `bot_notification` rows are added to the existing Notifications feed
+  (new orders, special notes, order changes, change / cancellation requests). The feed is cached for 60 s.
+- **Products + services:** Sales bot → Settings → "What do you sell?" (auto / products / services / both).
+  `GET /bot/sales-bot/sells` tells the dashboard which pages to show; a service business with
+  products/both can use the product APIs.
+- **Lead Management:** the bot moves chats forward only (new → contacted → qualified → proposal → won;
+  lost when a pending order is cancelled) and fills `bot_conversation.lead_details`
+  (need, budget, location, contact time, booking, order value, lost reason) shown on the cards.
+- Migration: `migrations/supabase_sales_bot_orders.sql` (runs at startup).
+
+### If "Confirmed" still does not work in your live database
+The code saves every status (tested). Check the column in Supabase:
+```sql
+select data_type, udt_name from information_schema.columns where table_name='bot_order' and column_name='status';
+select pg_get_constraintdef(oid) from pg_constraint where conrelid='bot_order'::regclass and contype='c';
+```
+If it is an enum or a CHECK without `Confirmed`, that is the cause (not changed here).
+
 ## Setup
 
 1. Deploy the Python sales bot (separate service, `sales-bot-python`), with `BOT_API_KEY` and `GEMINI_API_KEY`.
@@ -127,3 +163,4 @@ Changed (small, marked with comments): `app.module.ts`, `integrations/whatsapp/w
 10. **Variant prices from `variant_price_match` are copied into each variant when products are saved**
     (`applyVariantDefaults` puts the base price on variants without a price). The bot uses the saved
     variant price first, so a later change to the price-match table only applies after the product is saved again.
+11. Status messages / invoices for Messenger & Instagram customers used to go to WhatsApp (fixed in this update, see above).

@@ -32,6 +32,15 @@ export type SalesBotResult = {
   booking: { service_id?: number; service_name?: string; date?: string; time?: string; customer_name?: string; notes?: string; confirm?: boolean } | null;
   lead: { need?: string; budget?: string; location?: string; contact_time?: string; customer_name?: string; notes?: string } | null;
   handoff: { needed?: boolean; reason?: string } | null;
+  /** Special requests ("quick delivery", "call before coming"): about the order → order note, else customer note */
+  notes: Array<{ text: string; about?: 'order' | 'customer' }>;
+  /** Customer wants to change a placed order (items = the FULL new item list, when items change) */
+  order_change: {
+    order_id?: number; request?: string; items?: SalesBotOrderItem[]; address?: string;
+    customer_name?: string; customer_phone?: string; delivery_area?: string;
+  } | null;
+  /** Customer wants to cancel a placed order */
+  cancel_request: { order_id?: number; reason?: string } | null;
   language: string;
   tools_used: string[];
   parse_error?: boolean;
@@ -90,6 +99,11 @@ export class SalesBotClient {
       reply: String(result.reply ?? '').trim(),
       photo_product_ids: Array.isArray(result.photo_product_ids) ? result.photo_product_ids.map(Number).filter((id) => id > 0) : [],
       tools_used: Array.isArray(result.tools_used) ? result.tools_used : [],
+      notes: Array.isArray(result.notes)
+        ? result.notes.filter((note) => note && String(note.text ?? '').trim()).map((note) => ({ text: String(note.text).trim().slice(0, 500), about: note.about === 'order' ? 'order' : 'customer' }))
+        : [],
+      order_change: result.order_change && typeof result.order_change === 'object' ? result.order_change : null,
+      cancel_request: result.cancel_request && typeof result.cancel_request === 'object' ? result.cancel_request : null,
       usage: {
         model: String(result.usage?.model ?? ''),
         input_tokens: Number(result.usage?.input_tokens ?? 0),

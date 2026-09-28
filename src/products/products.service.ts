@@ -81,7 +81,13 @@ export class ProductsService {
       throw new NotFoundException('Company not found');
     }
     if (company.business_category === 'service') {
-      throw new ForbiddenException('Products are not available for service-based businesses');
+      // A service business can still sell products when the sales bot setting says products / both
+      const [settings] = await this.companyRepository.manager
+        .query(`SELECT sells FROM bot_sales_settings WHERE company_id = $1`, [companyId])
+        .catch(() => [] as Array<{ sells: string }>);
+      if (!['products', 'both'].includes(String(settings?.sells ?? ''))) {
+        throw new ForbiddenException('Products are not available for service-based businesses');
+      }
     }
   }
 

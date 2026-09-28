@@ -59,6 +59,10 @@ export class BotConversation {
   @Column({ type: 'text', nullable: true })
   queue_note: string | null;
 
+  /** What the sales bot learned about this lead: need, budget, location, contact time, order value… */
+  @Column({ type: 'jsonb', nullable: true })
+  lead_details: Record<string, unknown> | null;
+
   @ManyToOne(() => BotChannelUser, (channelUser) => channelUser.conversations, {
     nullable: false,
     onDelete: 'RESTRICT',

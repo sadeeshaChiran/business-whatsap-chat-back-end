@@ -17,7 +17,9 @@ import { Company } from '../company/entities/company.entity';
 import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.module';
 import { ProductVariant } from '../products/entities/product-variant.entity';
 import { Product } from '../products/entities/product.entity';
+import { BotAdminModule } from '../bot-admin/bot-admin.module';
 import { BotAiUsage } from './entities/bot-ai-usage.entity';
+import { BotNotification } from './entities/bot-notification.entity';
 import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
@@ -37,10 +39,11 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
     AuthModule,
     AgentRoutingModule,
     WhatsappIntegrationModule,
+    BotAdminModule,
     TypeOrmModule.forFeature([
       Company, BotChannelUser, BotConversation, BotMessage, BotOrder, BotOrderItem, BotOrderStatusHistory,
       BotCustomerNote, BotTrainingData, Product, ProductVariant,
-      SalesBotSettings, BotService, BotDeliveryZone, BotBooking, BotAiUsage, MetaPageConnection,
+      SalesBotSettings, BotService, BotDeliveryZone, BotBooking, BotAiUsage, BotNotification, MetaPageConnection,
     ]),
   ],
   controllers: [SalesBotController],
