@@ -16,6 +16,8 @@ export type ProductVariantOption = {
   sku?: string;
   image_url?: string;
   use_default_image?: boolean;
+  /** Weight of this variant in kg (optional; product weight is used when empty) */
+  weight?: number;
 };
 
 @Entity()

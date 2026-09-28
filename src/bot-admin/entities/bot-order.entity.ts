@@ -59,6 +59,10 @@ export class BotOrder {
   @Column({ type: 'varchar', length: 60, nullable: true })
   payment_method: string | null;
 
+  /** Order weight (kg) used for the delivery fee (sales bot) */
+  @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
+  total_weight_kg: number | null;
+
   @ManyToOne(() => BotChannelUser, { nullable: false, onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'bot_channel_user_id' })
   channelUser: BotChannelUser;

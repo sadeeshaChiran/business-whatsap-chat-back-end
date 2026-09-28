@@ -101,7 +101,11 @@ export class SalesBotAdminService {
   /* ───────────────────────── Delivery zones ───────────────────────── */
 
   private zoneView(row: BotDeliveryZone) {
-    return { id: row.id, area: row.area, fee: num(row.fee), days: row.days };
+    return {
+      id: row.id, area: row.area, fee: num(row.fee), days: row.days,
+      included_kg: row.included_kg == null ? null : num(row.included_kg),
+      per_extra_kg: row.per_extra_kg == null ? null : num(row.per_extra_kg),
+    };
   }
 
   private async assertUniqueArea(companyId: number, area: string, exceptId?: number) {
@@ -125,6 +129,7 @@ export class SalesBotAdminService {
     await this.assertUniqueArea(Number(company.id), area);
     const saved = await this.zoneRepository.save(this.zoneRepository.create({
       company_id: Number(company.id), area, fee: dto.fee, days: dto.days?.trim() ?? '',
+      included_kg: dto.included_kg ?? null, per_extra_kg: dto.per_extra_kg ?? null,
     }));
     return this.zoneView(saved);
   }
@@ -139,6 +144,8 @@ export class SalesBotAdminService {
     }
     if (dto.fee !== undefined) row.fee = dto.fee;
     if (dto.days !== undefined) row.days = dto.days.trim();
+    if (dto.included_kg !== undefined) row.included_kg = dto.included_kg ?? null;
+    if (dto.per_extra_kg !== undefined) row.per_extra_kg = dto.per_extra_kg ?? null;
     return this.zoneView(await this.zoneRepository.save(row));
   }
 

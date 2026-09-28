@@ -47,6 +47,13 @@ export class CreateProductVariantDto {
   @Min(0)
   quantity?: number;
 
+  @ApiPropertyOptional({ example: 0.5, minimum: 0, description: 'Variant weight in kg (empty = product weight)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  weight?: number;
+
   @ApiPropertyOptional({ example: 'RED-M-01', maxLength: 100 })
   @IsOptional()
   @IsString()
