@@ -28,7 +28,7 @@ export type ContextProduct = {
 };
 export type SalesBotContext = {
   company: {
-    id: number; name: string; business_type: 'shop' | 'service'; about: string; opening_hours: string;
+    id: number; name: string; business_type: 'shop' | 'service' | 'both'; about: string; opening_hours: string;
     payment_methods: string; tone: string; greeting: string; default_language: string; bot_name: string;
   };
   products: ContextProduct[];
@@ -39,9 +39,20 @@ export type SalesBotContext = {
   styles: Array<{ question: string; answer: string }>;
   faqs: Array<{ question: string; answer: string }>;
   last_order: Record<string, unknown> | null;
+  /** The customer's orders that are not delivered or cancelled (newest first) – for changes and cancellations */
+  open_orders: Array<Record<string, unknown>>;
+  /** whatsapp | messenger | instagram */
+  channel: string;
 };
 
 const MAX_PRODUCTS = 400;
+
+/** products | services | both ("auto" follows the company's business category). */
+export function effectiveSellsOf(company: Pick<Company, 'business_category'> | null, settings: Pick<SalesBotSettings, 'sells'>): 'products' | 'services' | 'both' {
+  const sells = String(settings.sells ?? 'auto');
+  if (sells === 'products' || sells === 'services' || sells === 'both') return sells;
+  return String(company?.business_category ?? '').toLowerCase() === 'service' ? 'services' : 'products';
+}
 const toNumber = (value: unknown, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -119,6 +130,7 @@ export class SalesBotContextService {
     return existing ?? this.settingsRepository.create({
       company_id: companyId, bot_name: '', tone: 'friendly, short, helpful', default_language: 'auto',
       greeting: '', about: '', opening_hours: '', payment_methods: '', auto_enable_new_customers: true,
+      sells: 'auto', auto_send_invoice: true,
     });
   }
 
@@ -131,8 +143,8 @@ export class SalesBotContextService {
     });
   }
 
-  async build(companyId: number, channelUserId: number | null): Promise<SalesBotContext> {
-    const [company, settings, products, services, zones, knowledge, lastOrder] = await Promise.all([
+  async build(companyId: number, channelUserId: number | null, channel = 'whatsapp'): Promise<SalesBotContext> {
+    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders] = await Promise.all([
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
       this.loadProducts(companyId),
@@ -142,6 +154,16 @@ export class SalesBotContextService {
       channelUserId
         ? this.orderRepository.findOne({ where: { company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'], order: { id: 'DESC' } })
         : Promise.resolve(null),
+      channelUserId
+        ? this.orderRepository
+            .createQueryBuilder('o')
+            .leftJoinAndSelect('o.items', 'items')
+            .where('o.company_id = :companyId AND o.bot_channel_user_id = :channelUserId', { companyId, channelUserId })
+            .andWhere("o.status::text NOT IN ('Delivered', 'Cancelled')")
+            .orderBy('o.id', 'DESC')
+            .take(3)
+            .getMany()
+        : Promise.resolve([] as BotOrder[]),
     ]);
 
     const policies: SalesBotContext['policies'] = [];
@@ -160,7 +182,7 @@ export class SalesBotContextService {
       company: {
         id: companyId,
         name: company?.name ?? '',
-        business_type: String(company?.business_category ?? '').toLowerCase() === 'service' ? 'service' : 'shop',
+        business_type: ({ products: 'shop', services: 'service', both: 'both' } as const)[effectiveSellsOf(company, settings)],
         about: settings.about,
         opening_hours: settings.opening_hours,
         payment_methods: settings.payment_methods,
@@ -195,6 +217,24 @@ export class SalesBotContextService {
             })),
           }
         : null,
+      open_orders: openOrders.map((order) => ({
+        order_id: order.id,
+        status: order.status,
+        date: order.created_at ? new Date(order.created_at).toISOString().slice(0, 10) : null,
+        total: toNumber(order.total_amount),
+        delivery_fee: order.delivery_fee == null ? null : toNumber(order.delivery_fee),
+        delivery_area: order.delivery_area,
+        address: order.address,
+        customer_name: order.customer_name,
+        customer_phone: order.customer_phone,
+        // pending = the bot may change or cancel it; other statuses = only a request for the team
+        can_change: order.status === 'Pending',
+        items: (order.items ?? []).map((item) => ({
+          product_id: item.product_id, name: item.product_name, variant: item.variant_text,
+          qty: item.quantity, price: toNumber(item.total_price),
+        })),
+      })),
+      channel,
     };
   }
 

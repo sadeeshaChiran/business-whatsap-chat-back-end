@@ -75,6 +75,12 @@ export class SalesBotController {
     return this.service.updateBookingStatus(user, id, dto);
   }
 
+  /* What the business sells (products / services / both) – any signed-in user */
+  @Get('sales-bot/sells')
+  sells(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.getSellsInfo(user);
+  }
+
   /* Settings */
   @Get('sales-bot/settings')
   getSettings(@CurrentUser() user: AuthenticatedUser) {

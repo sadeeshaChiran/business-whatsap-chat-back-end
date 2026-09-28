@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { subDays } from 'date-fns';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Expense } from '../expenses/entities/expense.entity';
 import { Income } from '../income/entities/income.entity';
@@ -12,7 +12,7 @@ import { NotificationsQueryDto } from './dto/notifications-query.dto';
 
 type NotificationType = 'REMINDER' | 'RISK' | 'INFO';
 type NotificationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
-type RelatedEntityType = 'expense' | 'income' | 'note' | null;
+type RelatedEntityType = 'expense' | 'income' | 'note' | 'order' | 'conversation' | null;
 
 type NotificationItem = {
   id: string;
@@ -46,6 +46,8 @@ export class NotificationsService {
     @InjectRepository(Note)
     private readonly noteRepository: Repository<Note>,
     private readonly reportsService: ReportsService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async getNotifications(
@@ -309,12 +311,42 @@ export class NotificationsService {
       );
     }
 
+    notifications.push(...(await this.salesBotNotifications(user)));
+
     return this.deduplicate(notifications)
       .sort(
         (left, right) =>
           new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
       )
-      .slice(0, 20);
+      .slice(0, 30);
+  }
+
+  /** Alerts from the sales bot (special notes, order changes, cancellation requests) – last 14 days. */
+  private async salesBotNotifications(user: AuthenticatedUser): Promise<NotificationItem[]> {
+    try {
+      const rows: Array<{ id: number; kind: string; priority: NotificationPriority; title: string; message: string;
+        conversation_id: number | null; order_id: number | null; created_at: Date }> = await this.dataSource.query(
+        `SELECT id, kind, priority, title, message, conversation_id, order_id, created_at
+           FROM bot_notification
+          WHERE company_id = $1 AND created_at > NOW() - INTERVAL '14 days'
+          ORDER BY id DESC LIMIT 20`,
+        [user.company_id],
+      );
+      return rows.map((row) =>
+        this.createNotification({
+          id: `sales-bot-${row.id}`,
+          type: row.priority === 'HIGH' ? 'RISK' : 'INFO',
+          title: row.title,
+          message: row.message,
+          priority: row.priority,
+          createdAt: new Date(row.created_at),
+          relatedEntityType: row.order_id ? 'order' : row.conversation_id ? 'conversation' : null,
+          relatedEntityId: row.order_id ?? row.conversation_id ?? null,
+        }),
+      );
+    } catch {
+      return []; // table not created yet (before the sales bot migration)
+    }
   }
 
   private sumPeriod(incomes: Income[], expenses: Expense[], days: number) {

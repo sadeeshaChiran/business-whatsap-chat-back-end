@@ -59,6 +59,10 @@ export class BotOrder {
   @Column({ type: 'varchar', length: 60, nullable: true })
   payment_method: string | null;
 
+  /** Delivery zone area of a bot order (the fee is recalculated from it when the order changes) */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  delivery_area: string | null;
+
   /** Order weight (kg) used for the delivery fee (sales bot) */
   @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
   total_weight_kg: number | null;

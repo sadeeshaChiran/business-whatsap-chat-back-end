@@ -23,6 +23,9 @@ import { BOT_SOURCE, SalesBotEngineService, planAllowsBot } from './sales-bot-en
 
 type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; size: number };
 
+export { effectiveSellsOf as effectiveSells } from './sales-bot-context.service';
+import { effectiveSellsOf as effectiveSells } from './sales-bot-context.service';
+
 const num = (value: unknown) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -192,7 +195,17 @@ export class SalesBotAdminService {
       bot_name: settings.bot_name, tone: settings.tone, default_language: settings.default_language || 'auto',
       greeting: settings.greeting, about: settings.about, opening_hours: settings.opening_hours,
       payment_methods: settings.payment_methods, auto_enable_new_customers: settings.auto_enable_new_customers,
+      sells: settings.sells || 'auto', auto_send_invoice: settings.auto_send_invoice ?? true,
+      /** what the dashboard should show: products page, services page, or both */
+      sells_effective: effectiveSells(company, settings),
     };
+  }
+
+  /** For every signed-in user (admins and agents): which pages the dashboard shows. */
+  async getSellsInfo(user: AuthenticatedUser) {
+    const company = await this.companyRepository.findOne({ where: { id: Number(user.company_id) } });
+    const settings = await this.contextService.getSettings(Number(user.company_id));
+    return { sells: effectiveSells(company, settings) };
   }
 
   async getSettings(user: AuthenticatedUser) {
@@ -210,7 +223,7 @@ export class SalesBotAdminService {
       await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
     }
     const settings = await this.contextService.getSettings(Number(company.id));
-    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers'] as const;
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice'] as const;
     for (const field of fields) {
       const value = dto[field];
       if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;

@@ -1,3 +1,4 @@
+import { MetaSocialSenderService } from '../integrations/meta/meta-social-sender.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
@@ -54,6 +55,8 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
     EvolutionModule,
   ],
   controllers: [BotAdminController],
-  providers: [BotAdminService, PusherService],
+  providers: [BotAdminService, PusherService, MetaSocialSenderService],
+  // the sales bot reuses order messages and invoices
+  exports: [BotAdminService],
 })
 export class BotAdminModule {}

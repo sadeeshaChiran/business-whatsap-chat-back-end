@@ -1,3 +1,4 @@
+import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import {
   BadRequestException,
   ForbiddenException,
@@ -81,6 +82,7 @@ type CompanyContactRow = {
     id: number;
     status: string;
     lead_stage?: string;
+    lead_details?: Record<string, unknown> | null;
     assigned_agent_id?: number | null;
     last_message_at: Date | string | null;
   } | null;
@@ -133,6 +135,7 @@ export class BotAdminService {
     private readonly pusherService: PusherService,
     private readonly agentRoutingService: AgentRoutingService,
     private readonly whatsappService: WhatsappService,
+    private readonly socialSender: MetaSocialSenderService,
   ) {}
 
   private getEvolutionConfig() {
@@ -1753,6 +1756,7 @@ export class BotAdminService {
           id: conversation.id,
           status: conversation.status,
           lead_stage: conversation.lead_stage || 'new',
+          lead_details: conversation.lead_details ?? null,
           assigned_agent_id: conversation.assigned_agent_id,
           last_message_at: conversation.last_message_at,
         },
@@ -1825,6 +1829,7 @@ export class BotAdminService {
               id: conversation.id,
               status: conversation.status,
               lead_stage: conversation.lead_stage || 'new',
+              lead_details: conversation.lead_details ?? null,
               assigned_agent_id: conversation.assigned_agent_id,
               last_message_at: conversation.last_message_at,
             }
@@ -1862,6 +1867,7 @@ export class BotAdminService {
               id: conversation.id,
               status: conversation.status,
               lead_stage: conversation.lead_stage || 'new',
+              lead_details: conversation.lead_details ?? null,
               assigned_agent_id: conversation.assigned_agent_id,
               last_message_at: conversation.last_message_at,
             }
@@ -3496,11 +3502,7 @@ export class BotAdminService {
         message,
       }),
     );
-    await this.sendWhatsappStatusMessage(
-      user.company_id,
-      saved.channelUser?.external_user_id,
-      message,
-    );
+    await this.sendCustomerMessage(user.company_id, saved.channelUser, message);
     return { order: saved, message };
   }
 
@@ -3655,8 +3657,13 @@ export class BotAdminService {
 
   async sendOrderInvoice(user: AuthenticatedUser, id: number) {
     await this.assertAdminAccess(user);
+    return this.sendInvoiceForCompany(user.company_id, id);
+  }
+
+  /** Creates the invoice PDF and sends it on the customer's channel (also used by the sales bot). */
+  async sendInvoiceForCompany(companyId: number, id: number) {
     const order = await this.orderRepository.findOne({
-      where: { id, company_id: user.company_id },
+      where: { id, company_id: companyId },
       relations: ['channelUser', 'items'],
     });
 
@@ -3664,24 +3671,20 @@ export class BotAdminService {
       throw new NotFoundException('Order not found.');
     }
 
-    const company = await this.getCompanyForUser(user);
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
 
     const invoiceUrl = this.writeInvoicePdf(order, company);
     order.invoice_url = invoiceUrl;
     const saved = await this.orderRepository.save(order);
 
     const message = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}\n${invoiceUrl}`;
-    const sent = await this.sendWhatsappStatusMessage(
-      user.company_id,
-      saved.channelUser?.external_user_id,
-      message,
-    );
+    const sent = await this.sendCustomerMessage(companyId, saved.channelUser, message);
 
     await this.orderStatusHistoryRepository.save(
       this.orderStatusHistoryRepository.create({
         order_id: saved.id,
         status: saved.status,
-        message: sent ? 'Invoice sent to customer.' : 'Invoice generated, but WhatsApp send failed.',
+        message: sent ? 'Invoice sent to customer.' : 'Invoice generated, but sending it failed.',
       }),
     );
 
@@ -3691,8 +3694,30 @@ export class BotAdminService {
       sent,
       message: sent
         ? 'Invoice sent to customer.'
-        : 'Invoice generated, but WhatsApp send failed. Check WhatsApp credentials and public bot URL.',
+        : 'Invoice generated, but sending it failed. Check the channel credentials and the public bot URL.',
     };
+  }
+
+  /**
+   * Sends an order message to the customer on the channel they wrote from:
+   * Messenger / Instagram through the connected Page, otherwise WhatsApp (as before).
+   */
+  async sendCustomerMessage(
+    companyId: number,
+    channelUser: Pick<BotChannelUser, 'platform' | 'external_user_id' | 'source_account_id'> | null | undefined,
+    message: string,
+  ): Promise<boolean> {
+    const social = socialPlatformOf(channelUser?.platform);
+    if (social && channelUser) {
+      try {
+        const id = await this.socialSender.sendText(companyId, social, channelUser.source_account_id, channelUser.external_user_id, message);
+        return Boolean(id);
+      } catch (error) {
+        console.warn(`[bot-admin] order message on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
+        return false;
+      }
+    }
+    return this.sendWhatsappStatusMessage(companyId, channelUser?.external_user_id, message);
   }
 
   private writeInvoicePdf(order: BotOrder, company: Company | null) {

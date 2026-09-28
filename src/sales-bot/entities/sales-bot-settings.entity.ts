@@ -31,6 +31,14 @@ export class SalesBotSettings {
   @Column({ type: 'boolean', default: true })
   auto_enable_new_customers: boolean;
 
+  /** auto (from the business category) | products | services | both */
+  @Column({ type: 'varchar', length: 20, default: 'auto' })
+  sells: string;
+
+  /** Send the invoice PDF automatically when the bot saves an order */
+  @Column({ type: 'boolean', default: true })
+  auto_send_invoice: boolean;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
