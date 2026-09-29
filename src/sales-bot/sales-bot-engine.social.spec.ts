@@ -34,6 +34,8 @@ function build(platform: string, botResult: Record<string, unknown> = {}) {
     { getAdapterForChannel: () => adapter } as never,
     { trigger: jest.fn() } as never,
     { sendInvoiceForCompany: jest.fn() } as never, // bot-admin (invoices)
+    { planAllowsBot: async () => true } as never, // packages
+    { canBotReply: async () => true } as never, // token quota
     social as never,
   );
   qbQueue.push([{ id: 1, content: 'hi, price of the pram?', message_type: 'text', media_url: null, direction: 'inbound' }], []);

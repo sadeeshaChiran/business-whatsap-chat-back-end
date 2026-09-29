@@ -213,6 +213,10 @@ export class UpdateSalesBotSettingsDto {
   @IsOptional()
   @IsBoolean()
   auto_send_invoice?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  bot_off_on_handoff?: boolean;
 }
 
 /* ───────── Test chat ───────── */

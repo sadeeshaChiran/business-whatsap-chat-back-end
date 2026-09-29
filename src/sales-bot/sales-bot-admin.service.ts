@@ -19,7 +19,9 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 import { SalesBotClient } from './sales-bot.client';
 import { SalesBotContextService } from './sales-bot-context.service';
-import { BOT_SOURCE, SalesBotEngineService, planAllowsBot } from './sales-bot-engine.service';
+import { BOT_SOURCE, SalesBotEngineService } from './sales-bot-engine.service';
+import { PlanService } from '../platform/plan.service';
+import { TokenQuotaService } from '../platform/token-quota.service';
 
 type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; size: number };
 
@@ -47,6 +49,8 @@ export class SalesBotAdminService {
     private readonly contextService: SalesBotContextService,
     private readonly client: SalesBotClient,
     private readonly agentRoutingService: AgentRoutingService,
+    private readonly planService: PlanService,
+    private readonly tokenQuota: TokenQuotaService,
   ) {}
 
   /** Same rule as the rest of the bot admin: only the company admin. */
@@ -189,13 +193,14 @@ export class SalesBotAdminService {
 
   /* ───────────────────────── Settings ───────────────────────── */
 
-  private settingsView(company: Company, settings: SalesBotSettings) {
+  private async settingsView(company: Company, settings: SalesBotSettings) {
     return {
-      bot_enabled: planAllowsBot(company) && Boolean(company.bot_enabled),
+      bot_enabled: (await this.planService.planAllowsBot(company.plan)) && Boolean(company.bot_enabled),
       bot_name: settings.bot_name, tone: settings.tone, default_language: settings.default_language || 'auto',
       greeting: settings.greeting, about: settings.about, opening_hours: settings.opening_hours,
       payment_methods: settings.payment_methods, auto_enable_new_customers: settings.auto_enable_new_customers,
       sells: settings.sells || 'auto', auto_send_invoice: settings.auto_send_invoice ?? true,
+      bot_off_on_handoff: settings.bot_off_on_handoff ?? false,
       /** what the dashboard should show: products page, services page, or both */
       sells_effective: effectiveSells(company, settings),
     };
@@ -216,14 +221,14 @@ export class SalesBotAdminService {
   async updateSettings(user: AuthenticatedUser, dto: UpdateSalesBotSettingsDto) {
     const company = await this.adminCompany(user);
     if (dto.bot_enabled !== undefined && dto.bot_enabled !== Boolean(company.bot_enabled)) {
-      if (dto.bot_enabled && !planAllowsBot(company)) {
-        throw new ForbiddenException('AI replies are currently available on the Free package only.');
+      if (dto.bot_enabled && !(await this.planService.planAllowsBot(company.plan))) {
+        throw new ForbiddenException('AI replies need an active package.');
       }
       company.bot_enabled = dto.bot_enabled;
       await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
     }
     const settings = await this.contextService.getSettings(Number(company.id));
-    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice'] as const;
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff'] as const;
     for (const field of fields) {
       const value = dto[field];
       if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;
@@ -237,6 +242,9 @@ export class SalesBotAdminService {
   /** Nothing is saved or sent: only the AI usage row (marked as test) for cost tracking. */
   async testReply(user: AuthenticatedUser, dto: SalesBotTestDto) {
     const company = await this.adminCompany(user);
+    if (!(await this.tokenQuota.canBotReply(Number(company.id)))) {
+      throw new ForbiddenException('Your AI tokens for this month are used up. Renew or buy more tokens to use the bot.');
+    }
     const context = await this.contextService.build(Number(company.id), null);
     const result = await this.client.reply({
       company_id: Number(company.id), customer_id: null, message: dto.message,
@@ -247,7 +255,9 @@ export class SalesBotAdminService {
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens, output_tokens: result.usage.output_tokens,
       calls: result.usage.calls ?? 1, cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: true,
     }));
-    return result;
+    this.tokenQuota.forget(Number(company.id));
+    // companies see tokens, never the AI cost (super admin only)
+    return { ...result, usage: { ...result.usage, cost_usd: undefined } };
   }
 
   /* ───────────────────────── Customer simulator ───────────────────────── */
@@ -363,7 +373,7 @@ export class SalesBotAdminService {
            JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
            WHERE CAST(cu.company_id AS BIGINT) = $1 AND m.source = $3 AND m.intent LIKE '%handoff%' AND m.created_at > (SELECT t FROM since))::int AS handoffs,
          (SELECT COUNT(*) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since))::int AS ai_replies,
-         (SELECT COALESCE(SUM(u.cost_usd), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND u.created_at > (SELECT t FROM since)) AS ai_cost_usd,
+         (SELECT COALESCE(SUM(u.input_tokens + u.output_tokens), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND u.created_at > (SELECT t FROM since)) AS ai_tokens,
          (SELECT COALESCE(AVG(u.latency_ms), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_latency_ms,
          (SELECT COALESCE(AVG(u.calls), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_calls`,
       [companyId, days, BOT_SOURCE],
@@ -383,7 +393,7 @@ export class SalesBotAdminService {
     const bookings = num(summary?.bookings);
     return {
       days, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
-      handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_cost_usd: num(summary?.ai_cost_usd),
+      handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
       conversion: conversations ? (orders + bookings) / conversations : 0,
       daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),

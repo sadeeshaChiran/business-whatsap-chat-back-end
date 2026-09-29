@@ -1,3 +1,4 @@
+import { ChatMediaPublicController } from './chat-media-public.controller';
 import { MetaSocialSenderService } from '../integrations/meta/meta-social-sender.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -54,7 +55,8 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
     AuthModule,
     EvolutionModule,
   ],
-  controllers: [BotAdminController],
+  // ChatMediaPublicController serves the signed public links (invoice PDFs, Instagram media)
+  controllers: [BotAdminController, ChatMediaPublicController],
   providers: [BotAdminService, PusherService, MetaSocialSenderService],
   // the sales bot reuses order messages and invoices
   exports: [BotAdminService],

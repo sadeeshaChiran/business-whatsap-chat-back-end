@@ -83,6 +83,28 @@ select pg_get_constraintdef(oid) from pg_constraint where conrelid='bot_order'::
 ```
 If it is an enum or a CHECK without `Confirmed`, that is the cause (not changed here).
 
+## Update: bot stays on, Client notes, invoice PDF, products + services
+
+- **The bot no longer switches itself off.** When a person is needed (customer asks, order needs a check,
+  bot error), the bot keeps replying and the team gets a **Client note** (🙋 reason) + a HIGH notification,
+  and the chat is routed to an agent. Sales bot → Settings → "Switch the bot off when a person is needed"
+  brings back the old behaviour. The bot still stops when an agent accepts the chat (status active).
+- **Order details missing** → the bot asks for them (name / address / phone) instead of stopping.
+  "Yes" before a summary → the backend sends the real summary (prices from `product`) and asks again.
+- **Notes:** only notes about a specific order go to the order note; everything else goes to Client notes.
+- **Invoice PDF** is now a real file: WhatsApp → document (same sending as the inbox "send file"),
+  Messenger → file attachment, Instagram → link (Instagram cannot receive files). If a file cannot be sent,
+  the link is sent instead. The PDF is stored with the chat media and served by this API at a signed link
+  valid 90 days – **set `PUBLIC_API_BASE_URL`** (e.g. `https://api.yourdomain.com/v1/api`). Without it the
+  old location (`BOT_INVOICE_DIR` + `BOT_PUBLIC_BASE_URL`, the old Python bot) is used.
+- **Customer asks for the invoice** ("bill eka evanna") → the bot sends it (`send_invoice`), no handoff.
+- **Products and services:** Settings → Business Type now has **Products & services** (`business_category = both`).
+  The Sales bot follows it (one place to set it).
+
+### Fixed while doing this (existing code)
+- `ChatMediaPublicController` was never registered in `BotAdminModule`, so every public media link
+  (invoice PDFs, Instagram media from the inbox) returned 404. It is registered now.
+
 ## Setup
 
 1. Deploy the Python sales bot (separate service, `sales-bot-python`), with `BOT_API_KEY` and `GEMINI_API_KEY`.

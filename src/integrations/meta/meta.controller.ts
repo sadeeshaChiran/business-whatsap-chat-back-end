@@ -95,6 +95,9 @@ export class MetaController {
     const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code);
     const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
     await this.metaGraphService.subscribeWhatsappApp(body.waba_id.trim(), accessToken);
+    // Cloud API numbers must be registered before they can send / receive (6-digit two-step PIN)
+    const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? '')) ? String(process.env.WHATSAPP_REGISTRATION_PIN) : String(Math.floor(100000 + Math.random() * 900000));
+    const registration = await this.metaGraphService.registerWhatsappNumber(phoneNumberId, accessToken, pin);
 
     const verifyToken = existing?.meta_verify_token?.trim()
       || process.env.META_WEBHOOK_VERIFY_TOKEN?.trim()
@@ -117,8 +120,59 @@ export class MetaController {
       display_phone_number: phone.display_phone_number,
       verified_name: phone.verified_name,
       subscribed: true,
+      registered: registration.registered,
+      registration_message: registration.registered ? null : `The number could not be registered for the Cloud API: ${registration.message}`,
     };
   }
+  /**
+   * Connection health for the Channels screen: WhatsApp (token, number, webhook subscription, public URL),
+   * Messenger (Page token, webhook subscription) and Instagram (linked account). Never changes anything.
+   */
+  @Get('health')
+  async health(@CurrentUser() user: AuthenticatedUser) {
+    await this.assertAdmin(user);
+    type Check = { key: string; label: string; ok: boolean | null; detail: string };
+    const publicBase = process.env.PUBLIC_API_BASE_URL?.trim() || '';
+    const whatsapp: Check[] = [];
+    const channel = await this.whatsappChannelService.getForCompany(user.company_id);
+    const token = channel?.meta_access_token?.trim() || '';
+    whatsapp.push({ key: 'public_url', label: 'Public API address (webhooks, media, invoices)', ok: Boolean(publicBase), detail: publicBase || 'Set PUBLIC_API_BASE_URL on the API server' });
+    if ((channel?.provider_type ?? 'meta') !== 'meta') {
+      whatsapp.push({ key: 'provider', label: 'Provider', ok: null, detail: `Uses ${channel?.provider_type} (not checked here)` });
+    } else if (!channel?.meta_phone_number_id || !token) {
+      whatsapp.push({ key: 'connected', label: 'WhatsApp number connected', ok: false, detail: 'Not connected yet – use "Connect WhatsApp".' });
+    } else {
+      const phone = await this.metaGraphService.healthGet<{ display_phone_number?: string; verified_name?: string; quality_rating?: string; code_verification_status?: string }>(
+        `/${channel.meta_phone_number_id}`, token, { fields: 'display_phone_number,verified_name,quality_rating,code_verification_status' });
+      whatsapp.push({ key: 'token', label: 'Access token works', ok: phone.ok, detail: phone.ok ? `${phone.data?.display_phone_number ?? ''} · ${phone.data?.verified_name ?? ''}` : phone.error ?? '' });
+      if (phone.ok) whatsapp.push({ key: 'quality', label: 'Number quality', ok: phone.data?.quality_rating !== 'RED', detail: phone.data?.quality_rating ?? 'unknown' });
+      if (channel.meta_waba_id) {
+        const apps = await this.metaGraphService.healthGet<{ data?: Array<{ whatsapp_business_api_data?: { id?: string } }> }>(`/${channel.meta_waba_id}/subscribed_apps`, token);
+        whatsapp.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: apps.ok && Boolean(apps.data?.data?.length), detail: apps.ok ? `${apps.data?.data?.length ?? 0} app(s) subscribed` : apps.error ?? '' });
+      }
+    }
+
+    const messenger: Check[] = [];
+    const instagram: Check[] = [];
+    const page = await this.metaPageConnectionRepository.findOne({ where: { company_id: user.company_id, status: 'CONNECTED' }, order: { id: 'DESC' } });
+    if (!page?.page_access_token) {
+      messenger.push({ key: 'page', label: 'Facebook Page connected', ok: false, detail: 'Not connected yet – use "Connect with Facebook".' });
+      instagram.push({ key: 'page', label: 'Facebook Page connected (Instagram needs it)', ok: false, detail: 'Connect the Facebook Page that is linked to your Instagram account.' });
+    } else {
+      const me = await this.metaGraphService.healthGet<{ name?: string }>(`/${page.page_id}`, page.page_access_token, { fields: 'name' });
+      messenger.push({ key: 'token', label: 'Page token works', ok: me.ok, detail: me.ok ? me.data?.name ?? '' : me.error ?? '' });
+      const subs = await this.metaGraphService.healthGet<{ data?: Array<{ subscribed_fields?: string[] }> }>(`/${page.page_id}/subscribed_apps`, page.page_access_token);
+      const fields = subs.data?.data?.flatMap((row) => row.subscribed_fields ?? []) ?? [];
+      messenger.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: subs.ok && fields.includes('messages'), detail: subs.ok ? (fields.join(', ') || 'no fields') : subs.error ?? '' });
+      instagram.push({ key: 'page', label: 'Facebook Page connected', ok: true, detail: page.page_name ?? page.page_id });
+      instagram.push({ key: 'linked', label: 'Instagram professional account linked to the Page', ok: Boolean(page.instagram_business_account_id),
+        detail: page.instagram_business_account_id ? `Instagram account ${page.instagram_business_account_id}` : 'Link the Instagram account to this Facebook Page (Instagram → Settings → Linked accounts / Meta Business Suite).' });
+      instagram.push({ key: 'dm_access', label: 'Instagram → Settings → Messages → "Allow access to messages" is on', ok: null, detail: 'Check this in the Instagram app (it cannot be read by Agent Metra).' });
+      instagram.push({ key: 'app_webhook', label: 'Meta app: Instagram webhook "messages" is subscribed', ok: null, detail: 'Meta Developers → your app → Webhooks → Instagram → subscribe to "messages".' });
+    }
+    return { whatsapp, messenger, instagram };
+  }
+
   @Get('auth-url')
   async getAuthUrl(
     @CurrentUser() user: AuthenticatedUser,

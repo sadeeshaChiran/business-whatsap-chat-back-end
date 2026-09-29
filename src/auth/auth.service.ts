@@ -361,6 +361,8 @@ export class AuthService {
       business_category: businessCategory ?? 'product',
       is_active: user.is_active,
       is_agent_active: Boolean(user.is_agent_active),
+      /** Metrocoding team (Agent Metra platform admin) */
+      is_super_admin: Boolean(user.is_super_admin),
       created_at: user.created_at,
       updated_at: user.updated_at,
     };

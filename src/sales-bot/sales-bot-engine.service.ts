@@ -19,6 +19,8 @@ import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 import { Product } from '../products/entities/product.entity';
 import type { WhatsappChannel } from '../whatsapp/entities/whatsapp-channel.entity';
 import { BotAdminService } from '../bot-admin/bot-admin.service';
+import { PlanService } from '../platform/plan.service';
+import { TokenQuotaService } from '../platform/token-quota.service';
 import { BotAiUsage } from './entities/bot-ai-usage.entity';
 import { BotNotification, type BotNotificationKind } from './entities/bot-notification.entity';
 import { BotBooking } from './entities/bot-booking.entity';
@@ -68,6 +70,29 @@ function changeHoldMessage(language: string): string {
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
+const rs = (value: number) => `Rs ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
+
+/** Asks for the details an order still needs (instead of switching the bot off). */
+function askMissingMessage(language: string, missing: string[]): string {
+  const want = missing.join(', ');
+  if (language === 'sinhala') return `Order එක confirm කරන්න කරුණාකර ${want} එවන්නකෝ.`;
+  if (language === 'tamil') return `ஆர்டரை உறுதிப்படுத்த தயவுசெய்து ${want} அனுப்புங்கள்.`;
+  if (language === 'sinhala_latin') return `Order eka confirm karanna karunakara ${want} evanna.`;
+  return `To confirm your order, please send your ${want}.`;
+}
+
+/** The order summary written by the backend (real prices) when the bot skipped it. */
+function summaryMessage(language: string, order: { items: Array<{ quantity: number; product_name: string; variant_name: string; total_price: number }>;
+  delivery_area: string | null; delivery_fee: number | null; total: number; customer_name: string; address: string; customer_phone: string; payment_method: string }): string {
+  const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''} – ${rs(item.total_price)}`);
+  lines.push(order.delivery_fee == null ? 'Delivery: to be confirmed' : `Delivery${order.delivery_area && order.delivery_area !== '*' ? ` (${order.delivery_area})` : ''}: ${rs(order.delivery_fee)}`);
+  lines.push(`Total: ${rs(order.total)}`);
+  lines.push([order.customer_name, order.address, order.customer_phone].filter(Boolean).join(', '));
+  lines.push(`Payment: ${order.payment_method}`);
+  const ask = language === 'sinhala' ? 'Order එක confirm කරන්නද?' : language === 'tamil' ? 'ஆர்டரை உறுதிப்படுத்தவா?'
+    : language === 'sinhala_latin' ? 'Order eka confirm karannada?' : 'Shall I confirm the order?';
+  return `${lines.join('\n')}\n\n${ask}`;
+}
 
 /** Sent when the bot itself failed, so the customer is never left without an answer. */
 function sorryMessage(language: string): string {
@@ -117,6 +142,8 @@ export class SalesBotEngineService implements OnModuleInit {
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly pusherService: PusherService,
     private readonly botAdminService: BotAdminService,
+    private readonly planService: PlanService,
+    private readonly tokenQuota: TokenQuotaService,
     private readonly socialSender: MetaSocialSenderService,
   ) {}
 
@@ -166,7 +193,9 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** Should the bot answer this chat right now? */
   private async botMayReply(company: Company | null, conversation: BotConversation, channelUser: BotChannelUser, simulated: boolean) {
-    if (!company || !planAllowsBot(company) || !company.bot_enabled) return false;
+    if (!company || !(await this.planService.planAllowsBot(company.plan)) || !company.bot_enabled) return false;
+    // tokens used up / package expired / suspended → the bot stops, the chat stays with the agents
+    if (!(await this.tokenQuota.canBotReply(Number(company.id)))) return false;
     if (conversation.status === 'active' || conversation.status === 'closed') return false; // an agent is handling it
     if (channelUser.bot_enabled) return true;
     // Never toggled by an agent (manual_mode false) → new customer: switch the bot on if the company wants that.
@@ -254,8 +283,9 @@ export class SalesBotEngineService implements OnModuleInit {
     // Invoice PDF after a new or changed order (existing invoice feature, on the customer's channel)
     if (outcome.invoiceOrderIds.length) {
       const settings = await this.contextService.getSettings(companyId);
+      const askedFor = String(outcome.intent ?? '').includes('invoice');
       for (const orderId of outcome.invoiceOrderIds) {
-        if (!settings.auto_send_invoice) break;
+        if (!settings.auto_send_invoice && !askedFor) break;
         if (simulated) {
           await this.messageRepository.save(this.messageRepository.create({
             conversation_id: conversation.id, direction: 'outbound', message_type: 'text', platform: channelUser.platform || 'whatsapp',
@@ -484,6 +514,12 @@ export class SalesBotEngineService implements OnModuleInit {
         invoiceOrderIds.push(savedOrderId);
         intents.add('order');
       }
+      if (orderOutcome.startsWith('ask:')) {
+        replyOverride = askMissingMessage(result.language, orderOutcome.slice(4).split(','));
+      }
+      if (orderOutcome === 'summary' && session.pending_order) {
+        replyOverride = summaryMessage(result.language, session.pending_order);
+      }
       if (orderOutcome.startsWith('blocked:')) {
         replyOverride = holdMessage(result.language);
         await this.handoff(companyId, conversation, channelUser, 'order_check', `Order needs a check: ${orderOutcome.slice(8)}`);
@@ -509,6 +545,12 @@ export class SalesBotEngineService implements OnModuleInit {
         await this.handoff(companyId, conversation, channelUser, 'bot_handoff', cancel.handoff);
         intents.add('handoff');
       }
+    }
+
+    if (result.send_invoice) {
+      const order = await this.findInvoiceOrder(companyId, channelUser.id, result.send_invoice.order_id);
+      if (order && !invoiceOrderIds.includes(order.id)) invoiceOrderIds.push(order.id);
+      if (order) intents.add('invoice');
     }
 
     for (const note of result.notes ?? []) {
@@ -540,6 +582,20 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!order) return;
     const next = [order.admin_note?.trim(), `${line} (${stamp()})`].filter(Boolean).join('\n');
     await this.orderRepository.update(orderId, { admin_note: next.slice(-5000) });
+  }
+
+  /** The order the customer wants an invoice for: the one they named, else their newest non-cancelled order. */
+  private async findInvoiceOrder(companyId: number, channelUserId: number, orderId?: number | null): Promise<BotOrder | null> {
+    if (orderId) {
+      const named = await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId } });
+      if (named) return named;
+    }
+    return this.orderRepository
+      .createQueryBuilder('o')
+      .where('o.company_id = :companyId AND o.bot_channel_user_id = :channelUserId', { companyId, channelUserId })
+      .andWhere("o.status::text <> 'Cancelled'")
+      .orderBy('o.id', 'DESC')
+      .getOne();
   }
 
   /** The order the customer named, else their newest order that is not delivered or cancelled. */
@@ -750,14 +806,24 @@ export class SalesBotEngineService implements OnModuleInit {
       return 'pending';
     }
 
-    let blocked = problem;
-    if (!blocked && !previousShown) blocked = 'confirmed before the summary was shown';
-    if (!blocked && (!name || !address)) blocked = 'name or address missing';
-    if (!blocked && isSocial && phone.replace(/\D/g, '').length < 9) blocked = 'phone number missing';
-    if (!blocked && subtotal <= 0) blocked = 'total is zero';
-    if (blocked) {
+    // Something a person must look at (unknown product / variant, zero total)
+    if (problem || subtotal <= 0) {
       session.pending_order = pending;
-      return `blocked:${blocked}`;
+      return `blocked:${problem || 'total is zero'}`;
+    }
+    // Details missing → ask the customer (the bot keeps going)
+    const missing = [
+      !name ? 'name' : '', !address ? 'address' : '',
+      isSocial && phone.replace(/\D/g, '').length < 9 ? 'phone number' : '',
+    ].filter(Boolean);
+    if (missing.length) {
+      session.pending_order = { ...pending, summary_shown: false };
+      return `ask:${missing.join(',')}`;
+    }
+    // The customer said yes but never saw the summary → show the real summary and ask again
+    if (!previousShown) {
+      session.pending_order = { ...pending, summary_shown: true };
+      return 'summary';
     }
 
     const saved = await this.orderRepository.save(this.orderRepository.create({
@@ -787,8 +853,22 @@ export class SalesBotEngineService implements OnModuleInit {
   }
 
   /** Bot stops for this customer and a person takes over (online agent, or the unassigned queue). */
+  /**
+   * A person is needed. Default: the bot KEEPS replying, the team gets a Client note + a notification and the
+   * chat is routed to an agent. Setting "bot_off_on_handoff" = true switches the bot off for this customer (old behaviour).
+   */
   async handoff(companyId: number, conversation: BotConversation, channelUser: BotChannelUser, reason: string, note: string) {
-    await this.channelUserRepository.update(channelUser.id, { bot_enabled: false, manual_mode: true });
+    const settings = await this.contextService.getSettings(companyId);
+    if (settings.bot_off_on_handoff) {
+      await this.channelUserRepository.update(channelUser.id, { bot_enabled: false, manual_mode: true });
+    }
+    const label = reason === 'order_check' ? 'Order needs a check' : reason === 'bot_error' ? 'Bot could not reply' : 'Customer needs a person';
+    await this.noteRepository.save(this.noteRepository.create({
+      company_id: companyId, bot_channel_user_id: channelUser.id, content: `🙋 ${label}: ${note}`,
+      created_by_user_id: null, created_by_name: 'Sales bot',
+    }));
+    await this.notifyTeam(companyId, 'handoff', 'HIGH', `${label} – ${channelUser.display_name || channelUser.external_user_id}`,
+      `${note}${settings.bot_off_on_handoff ? ' (bot switched off for this customer)' : ' (bot keeps replying)'}`, conversation.id);
     await this.conversationRepository.update(conversation.id, { queue_reason: reason, queue_note: note.slice(0, 500) });
     const fresh = await this.conversationRepository.findOne({ where: { id: conversation.id } });
     if (fresh && (fresh.status === 'open' || fresh.assigned_agent_id == null)) {

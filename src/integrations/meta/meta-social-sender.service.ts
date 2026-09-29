@@ -87,4 +87,25 @@ export class MetaSocialSenderService {
     });
     return this.parse(await this.post(t.sendAccountId, t.token, body, true));
   }
+
+  /**
+   * Messenger: uploads the file (e.g. an invoice PDF) as a file attachment.
+   * Instagram cannot receive files – it gets the link as text (when a public link exists).
+   */
+  async sendFile(companyId: number, platform: SocialPlatform, accountId: string | null, recipientId: string,
+    file: { buffer: Buffer; mimetype: string; fileName: string; url?: string | null; caption?: string }): Promise<string | null> {
+    if (platform === 'instagram') {
+      const text = [file.caption, file.url].filter(Boolean).join('\n');
+      return text ? this.sendText(companyId, platform, accountId, recipientId, text) : null;
+    }
+    const t = await this.target(companyId, platform, accountId);
+    const form = new FormData();
+    form.append('recipient', JSON.stringify({ id: recipientId }));
+    form.append('messaging_type', 'RESPONSE');
+    form.append('message', JSON.stringify({ attachment: { type: 'file', payload: { is_reusable: false } } }));
+    form.append('filedata', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.fileName);
+    const id = this.parse(await this.post(t.sendAccountId, t.token, form, false));
+    if (file.caption) await this.sendText(companyId, platform, accountId, recipientId, file.caption);
+    return id;
+  }
 }

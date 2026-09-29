@@ -51,7 +51,8 @@ const MAX_PRODUCTS = 400;
 export function effectiveSellsOf(company: Pick<Company, 'business_category'> | null, settings: Pick<SalesBotSettings, 'sells'>): 'products' | 'services' | 'both' {
   const sells = String(settings.sells ?? 'auto');
   if (sells === 'products' || sells === 'services' || sells === 'both') return sells;
-  return String(company?.business_category ?? '').toLowerCase() === 'service' ? 'services' : 'products';
+  const category = String(company?.business_category ?? '').toLowerCase();
+  return category === 'both' ? 'both' : category === 'service' ? 'services' : 'products';
 }
 const toNumber = (value: unknown, fallback = 0) => {
   const n = Number(value);
@@ -130,7 +131,7 @@ export class SalesBotContextService {
     return existing ?? this.settingsRepository.create({
       company_id: companyId, bot_name: '', tone: 'friendly, short, helpful', default_language: 'auto',
       greeting: '', about: '', opening_hours: '', payment_methods: '', auto_enable_new_customers: true,
-      sells: 'auto', auto_send_invoice: true,
+      sells: 'auto', auto_send_invoice: true, bot_off_on_handoff: false,
     });
   }
 

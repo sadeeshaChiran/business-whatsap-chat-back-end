@@ -41,7 +41,7 @@ export class MetaGraphService {
       process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
     const scopes =
       process.env.META_OAUTH_SCOPES?.trim() ||
-      'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,instagram_basic,instagram_manage_messages';
+      'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management';
     const configId = process.env.META_OAUTH_CONFIG_ID?.trim() ?? '';
 
     if (!appId || !appSecret || !redirectUri) {
@@ -523,5 +523,38 @@ export class MetaGraphService {
       }
     }
     return [...urls];
+  }
+
+  /**
+   * Registers the WhatsApp number for the Cloud API (required after Embedded Signup before it can send
+   * or receive). An already registered number (or a coexistence number) is treated as success.
+   */
+  async registerWhatsappNumber(phoneNumberId: string, accessToken: string, pin: string): Promise<{ registered: boolean; message: string }> {
+    const cfg = this.getConfig();
+    const response = await fetch(this.graphUrl(`/${encodeURIComponent(phoneNumberId)}/register`, cfg), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', pin }),
+    });
+    const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
+    if (response.ok && payload.success === true) return { registered: true, message: 'Number registered for the Cloud API.' };
+    const message = payload.error?.message ?? `Meta answered ${response.status}`;
+    if (/already registered|already been registered/i.test(message)) return { registered: true, message: 'Number was already registered.' };
+    return { registered: false, message };
+  }
+
+  /** Small GET helper for the connection health check (returns null on any error). */
+  async healthGet<T>(path: string, token: string, params: Record<string, string> = {}): Promise<{ ok: boolean; data: T | null; error: string | null }> {
+    try {
+      const cfg = this.getConfig();
+      const query = new URLSearchParams(params).toString();
+      const response = await fetch(`${this.graphUrl(path, cfg)}${query ? `?${query}` : ''}`, {
+        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(12000),
+      });
+      const payload = (await response.json().catch(() => ({}))) as T & GraphErrorBody;
+      return response.ok ? { ok: true, data: payload, error: null } : { ok: false, data: null, error: payload.error?.message ?? `HTTP ${response.status}` };
+    } catch (error) {
+      return { ok: false, data: null, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 }

@@ -31,6 +31,10 @@ export class User {
   @Column({ type: 'boolean', default: false })
   is_agent_active: boolean;
 
+  /** Metrocoding team (Agent Metra platform admin) */
+  @Column({ type: 'boolean', default: false })
+  is_super_admin: boolean;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

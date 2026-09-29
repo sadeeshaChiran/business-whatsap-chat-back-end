@@ -127,11 +127,12 @@ export class UpdateCompanyDto extends PartialType(
   @MaxLength(2048)
   meta_webhook_base_url?: string;
 
-  @ApiPropertyOptional({ enum: ['product', 'service'] })
+  @ApiPropertyOptional({ enum: ['product', 'service', 'both'], description: 'both = sells products and services' })
   @IsOptional()
   @IsString()
+  @IsIn(['product', 'service', 'both'])
   @MaxLength(20)
-  business_category?: 'product' | 'service';
+  business_category?: 'product' | 'service' | 'both';
 
   @ApiPropertyOptional({ example: true })
   @IsOptional()

@@ -39,6 +39,10 @@ export class SalesBotSettings {
   @Column({ type: 'boolean', default: true })
   auto_send_invoice: boolean;
 
+  /** false (default) = keep replying when a person is needed (note + notification); true = switch the bot off */
+  @Column({ type: 'boolean', default: false })
+  bot_off_on_handoff: boolean;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
