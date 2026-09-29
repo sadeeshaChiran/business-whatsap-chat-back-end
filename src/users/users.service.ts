@@ -1,3 +1,4 @@
+import { PlanService } from '../platform/plan.service';
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -19,6 +20,7 @@ export class UsersService {
     private readonly conversationRepository: Repository<BotConversation>,
     private readonly agentRoutingService: AgentRoutingService,
     private readonly pusherService: PusherService,
+    private readonly planService: PlanService,
   ) {}
 
   async getAgents(companyId: number): Promise<User[]> {
@@ -123,9 +125,10 @@ export class UsersService {
     }
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
-    if (!company || String(company.plan ?? '').trim().toLowerCase() !== 'free') {
-      throw new BadRequestException('Select the Free package before adding agents.');
+    if (!company || !String(company.plan ?? '').trim()) {
+      throw new BadRequestException('Select a package before adding agents.');
     }
+    const maxAgents = await this.planService.maxAgents(company.plan);
 
     const adminUserId = company.admin_user_id ? Number(company.admin_user_id) : null;
     const existingAgentCount = await this.userRepository
@@ -133,8 +136,8 @@ export class UsersService {
       .where('user.company_id = :companyId', { companyId })
       .andWhere(adminUserId ? 'CAST(user.id AS BIGINT) != CAST(:adminUserId AS BIGINT)' : '1=1', { adminUserId })
       .getCount();
-    if (existingAgentCount >= 3) {
-      throw new BadRequestException('Free package allows maximum 3 support agents.');
+    if (maxAgents !== null && existingAgentCount >= maxAgents) {
+      throw new BadRequestException(`Your package allows maximum ${maxAgents} support agents. Upgrade to add more.`);
     }
 
     const passwordHash = this.hashPassword(password);

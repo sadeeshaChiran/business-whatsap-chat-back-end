@@ -1,3 +1,4 @@
+import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import {
   BadRequestException,
@@ -136,6 +137,7 @@ export class BotAdminService {
     private readonly agentRoutingService: AgentRoutingService,
     private readonly whatsappService: WhatsappService,
     private readonly socialSender: MetaSocialSenderService,
+    private readonly planService: PlanService,
   ) {}
 
   private getEvolutionConfig() {
@@ -1479,10 +1481,8 @@ export class BotAdminService {
       }
     }
 
-    const normalizedPlan = String(company.plan ?? '').trim().toLowerCase();
-    const freePlanCanUseBot = normalizedPlan === 'free' || normalizedPlan.startsWith('free ');
-    if (!freePlanCanUseBot) {
-      throw new ForbiddenException('AI replies are currently available on the Free package only.');
+    if (!(await this.planService.planAllowsBot(company.plan))) {
+      throw new ForbiddenException('AI replies need an active package.');
     }
     if (!company.bot_enabled) {
       throw new ForbiddenException('Enable AI Bot Globally in Settings before enabling it for this chat.');
@@ -3660,7 +3660,10 @@ export class BotAdminService {
     return this.sendInvoiceForCompany(user.company_id, id);
   }
 
-  /** Creates the invoice PDF and sends it on the customer's channel (also used by the sales bot). */
+  /**
+   * Creates the invoice PDF and sends it to the customer as a real file on their channel
+   * (WhatsApp document, Messenger file, Instagram link). Also used by the sales bot.
+   */
   async sendInvoiceForCompany(companyId: number, id: number) {
     const order = await this.orderRepository.findOne({
       where: { id, company_id: companyId },
@@ -3673,29 +3676,67 @@ export class BotAdminService {
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
 
-    const invoiceUrl = this.writeInvoicePdf(order, company);
-    order.invoice_url = invoiceUrl;
+    const invoice = this.writeInvoicePdf(order, company);
+    order.invoice_url = invoice.url;
     const saved = await this.orderRepository.save(order);
 
-    const message = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}\n${invoiceUrl}`;
-    const sent = await this.sendCustomerMessage(companyId, saved.channelUser, message);
+    const caption = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}`;
+    const sent = await this.sendCustomerFile(companyId, saved.channelUser, {
+      buffer: invoice.buffer, mimetype: 'application/pdf', fileName: invoice.fileName, url: invoice.url, caption,
+    });
 
     await this.orderStatusHistoryRepository.save(
       this.orderStatusHistoryRepository.create({
         order_id: saved.id,
         status: saved.status,
-        message: sent ? 'Invoice sent to customer.' : 'Invoice generated, but sending it failed.',
+        message: sent ? 'Invoice PDF sent to customer.' : 'Invoice generated, but sending it failed.',
       }),
     );
+    if (sent && saved.channelUser) await this.logInvoiceMessage(saved.channelUser.id, saved.channelUser.platform, `📄 Invoice for order #${saved.id} (PDF)`);
 
     return {
       order: saved,
-      invoice_url: invoiceUrl,
+      invoice_url: invoice.url,
       sent,
       message: sent
         ? 'Invoice sent to customer.'
-        : 'Invoice generated, but sending it failed. Check the channel credentials and the public bot URL.',
+        : 'Invoice generated, but sending it failed. Check the channel connection.',
     };
+  }
+
+  /** Shows the invoice in the chat history of the customer's latest conversation. */
+  private async logInvoiceMessage(channelUserId: number, platform: string | null | undefined, content: string) {
+    const conversation = await this.conversationRepository.findOne({
+      where: { bot_channel_user_id: channelUserId },
+      order: { id: 'DESC' },
+    });
+    if (!conversation) return;
+    await this.messageRepository.save(this.messageRepository.create({
+      conversation_id: conversation.id, direction: 'outbound', message_type: 'text',
+      platform: platform || 'whatsapp', content, source: 'agent',
+    })).catch(() => undefined);
+  }
+
+  /** Sends a file (e.g. invoice PDF) on the customer's channel; falls back to the link as text. */
+  private async sendCustomerFile(
+    companyId: number,
+    channelUser: Pick<BotChannelUser, 'platform' | 'external_user_id' | 'source_account_id'> | null | undefined,
+    file: { buffer: Buffer; mimetype: string; fileName: string; url: string | null; caption: string },
+  ): Promise<boolean> {
+    if (!channelUser?.external_user_id) return false;
+    const social = socialPlatformOf(channelUser.platform);
+    try {
+      if (social) {
+        return Boolean(await this.socialSender.sendFile(companyId, social, channelUser.source_account_id, channelUser.external_user_id, file));
+      }
+      const result = await this.whatsappService.sendMedia(companyId, channelUser.external_user_id, {
+        buffer: file.buffer, mimetype: file.mimetype, fileName: file.fileName, caption: file.caption, mediaType: 'document',
+      });
+      return Boolean(result?.messageId ?? true);
+    } catch (error) {
+      console.warn(`[bot-admin] sending the invoice file failed, sending the link instead: ${error instanceof Error ? error.message : String(error)}`);
+      return file.url ? this.sendCustomerMessage(companyId, channelUser, `${file.caption}\n${file.url}`) : false;
+    }
   }
 
   /**
@@ -3720,17 +3761,22 @@ export class BotAdminService {
     return this.sendWhatsappStatusMessage(companyId, channelUser?.external_user_id, message);
   }
 
-  private writeInvoicePdf(order: BotOrder, company: Company | null) {
+  /**
+   * Builds the invoice PDF and stores it with the chat media (served by this API at
+   * /public/chat-media/… with a signed link, valid 90 days – needs PUBLIC_API_BASE_URL).
+   * Without PUBLIC_API_BASE_URL the old location (BOT_INVOICE_DIR / BOT_PUBLIC_BASE_URL) is used.
+   */
+  private writeInvoicePdf(order: BotOrder, company: Company | null): { url: string; buffer: Buffer; fileName: string } {
+    const fileName = `invoice-order-${order.id}.pdf`;
+    const buffer = Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company)));
+    const key = saveChatMedia(Number(order.company_id), buffer, 'application/pdf', fileName);
+    const publicUrl = publicChatMediaUrl(key, 90 * 24 * 3600);
+    if (publicUrl) return { url: publicUrl, buffer, fileName };
+
     const invoiceDir = this.getInvoiceDirectory();
     mkdirSync(invoiceDir, { recursive: true });
-
-    const filename = `invoice-order-${order.id}.pdf`;
-    const filePath = join(invoiceDir, filename);
-    const lines = this.buildInvoiceLines(order, company);
-    writeFileSync(filePath, this.buildSimplePdf(lines));
-
-    const publicBaseUrl = this.getBotPublicBaseUrl();
-    return `${publicBaseUrl}/external/static/invoices/${filename}`;
+    writeFileSync(join(invoiceDir, fileName), buffer);
+    return { url: `${this.getBotPublicBaseUrl()}/external/static/invoices/${fileName}`, buffer, fileName };
   }
 
   private getInvoiceDirectory() {

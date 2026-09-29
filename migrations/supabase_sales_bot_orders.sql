@@ -25,3 +25,7 @@ CREATE TABLE IF NOT EXISTS bot_notification (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_bot_notification_company ON bot_notification (company_id, created_at DESC);
+
+-- false (default) = the bot keeps replying when a person is needed, the team gets a note + notification.
+-- true = the bot switches itself off for that customer (old behaviour).
+ALTER TABLE bot_sales_settings ADD COLUMN IF NOT EXISTS bot_off_on_handoff BOOLEAN NOT NULL DEFAULT FALSE;

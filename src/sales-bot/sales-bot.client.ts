@@ -41,6 +41,8 @@ export type SalesBotResult = {
   } | null;
   /** Customer wants to cancel a placed order */
   cancel_request: { order_id?: number; reason?: string } | null;
+  /** Customer asked for the invoice / bill of an order */
+  send_invoice: { order_id?: number } | null;
   language: string;
   tools_used: string[];
   parse_error?: boolean;
@@ -104,6 +106,7 @@ export class SalesBotClient {
         : [],
       order_change: result.order_change && typeof result.order_change === 'object' ? result.order_change : null,
       cancel_request: result.cancel_request && typeof result.cancel_request === 'object' ? result.cancel_request : null,
+      send_invoice: result.send_invoice && typeof result.send_invoice === 'object' ? result.send_invoice : null,
       usage: {
         model: String(result.usage?.model ?? ''),
         input_tokens: Number(result.usage?.input_tokens ?? 0),

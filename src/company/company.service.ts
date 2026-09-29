@@ -1,3 +1,4 @@
+import { PlanService } from '../platform/plan.service';
 import {
   BadRequestException,
   ConflictException,
@@ -31,6 +32,7 @@ export class CompanyService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly whatsappChannelService: WhatsappChannelService,
+    private readonly planService: PlanService,
   ) {}
 
   private whatsappAccountIdentity(provider: 'evolution' | 'meta', channel: WhatsappChannel | null, update?: UpdateCompanyDto): string {
@@ -106,6 +108,7 @@ export class CompanyService {
     ]);
     const login = loginEmail ?? '';
     const contactEmail = this.resolveContactEmail(company, login);
+    const planAllowsBot = await this.planService.planAllowsBot(company.plan);
     const businessAddress = (company.address ?? '').trim();
     return {
       id: Number(company.id),
@@ -148,7 +151,7 @@ export class CompanyService {
       order_collect_customer_info: company.order_collect_customer_info ?? true,
       order_collect_products: company.order_collect_products ?? true,
       order_allow_note: company.order_allow_note ?? true,
-      bot_enabled: String(company.plan ?? '').trim().toLowerCase() === 'free' && Boolean(company.bot_enabled),
+      bot_enabled: planAllowsBot && Boolean(company.bot_enabled),
       agent_assignment_timeout_minutes:
         company.agent_assignment_timeout_minutes ?? 1440,
       agent_offline_shift_minutes: company.agent_offline_shift_minutes ?? 0,
@@ -232,8 +235,10 @@ export class CompanyService {
     }
     if (updateCompanyDto.plan !== undefined) {
       const nextPlan = updateCompanyDto.plan.trim().toLowerCase();
-      if (nextPlan && nextPlan !== 'free') {
-        throw new BadRequestException('This package is coming soon. Select Free to continue.');
+      // companies can pick Free themselves; paid packages are set after payment / by the super admin
+      const current = String(company.plan ?? '').trim().toLowerCase();
+      if (nextPlan && nextPlan !== 'free' && nextPlan !== current) {
+        throw new BadRequestException('Paid packages are activated after payment. Select Free to continue.');
       }
       company.plan = nextPlan;
     }
@@ -273,8 +278,7 @@ export class CompanyService {
       company.order_allow_note = updateCompanyDto.order_allow_note;
     }
     if (updateCompanyDto.bot_enabled !== undefined) {
-      const effectivePlan = String(company.plan ?? '').trim().toLowerCase();
-      company.bot_enabled = effectivePlan === 'free' && updateCompanyDto.bot_enabled;
+      company.bot_enabled = (await this.planService.planAllowsBot(company.plan)) && updateCompanyDto.bot_enabled;
     }
     if (updateCompanyDto.agent_assignment_timeout_minutes !== undefined) {
       company.agent_assignment_timeout_minutes = updateCompanyDto.agent_assignment_timeout_minutes;
@@ -283,7 +287,7 @@ export class CompanyService {
       company.agent_offline_shift_minutes = updateCompanyDto.agent_offline_shift_minutes;
     }
 
-    if (String(company.plan ?? '').trim().toLowerCase() !== 'free') {
+    if (!(await this.planService.planAllowsBot(company.plan))) {
       company.bot_enabled = false;
     }
 
