@@ -57,28 +57,44 @@ function migrationDir(): string | null {
   return null;
 }
 
-function splitSqlStatements(sql: string): string[] {
+/**
+ * Splits a migration file into statements at ";" – but not inside '…', "…" or dollar-quoted
+ * blocks ($$ … $$ / $tag$ … $tag$, used by DO blocks and functions).
+ */
+export function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
   let current = '';
   let inSingleQuote = false;
   let inDoubleQuote = false;
+  let dollarTag: string | null = null;
 
-  for (const char of sql) {
-    if (char === "'" && !inDoubleQuote) {
-      inSingleQuote = !inSingleQuote;
-    } else if (char === '"' && !inSingleQuote) {
-      inDoubleQuote = !inDoubleQuote;
-    }
+  for (let i = 0; i < sql.length; i += 1) {
+    const char = sql[i];
 
-    if (char === ';' && !inSingleQuote && !inDoubleQuote) {
-      const statement = current.trim();
-      if (statement) {
-        statements.push(statement);
+    if (!inSingleQuote && !inDoubleQuote && char === '$') {
+      const match = /^\$[A-Za-z_]*\$/.exec(sql.slice(i));
+      if (match) {
+        const tag = match[0];
+        if (dollarTag === null) dollarTag = tag;
+        else if (dollarTag === tag) dollarTag = null;
+        current += tag;
+        i += tag.length - 1;
+        continue;
       }
-      current = '';
-      continue;
     }
-
+    if (dollarTag === null) {
+      if (char === "'" && !inDoubleQuote) {
+        inSingleQuote = !inSingleQuote;
+      } else if (char === '"' && !inSingleQuote) {
+        inDoubleQuote = !inDoubleQuote;
+      }
+      if (char === ';' && !inSingleQuote && !inDoubleQuote) {
+        const statement = current.trim();
+        if (statement) statements.push(statement);
+        current = '';
+        continue;
+      }
+    }
     current += char;
   }
 

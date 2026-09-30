@@ -18,6 +18,8 @@ export class InboxQueryDto {
   @IsOptional() @IsIn(['all', 'mine', 'waiting', 'bot']) filter?: string;
   @IsOptional() @IsString() @MaxLength(100) search?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  /** only chats with this tag (bot_customer_label id) */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) label_id?: number;
 }
 
 export class MessagesQueryDto {
@@ -177,21 +179,26 @@ export class MobileService {
              cu.platform AS channel, cu.external_user_id, cu.bot_enabled, c.status, c.assigned_agent_id, u.name AS assigned_agent_name,
              c.lead_stage, c.last_message_at,
              lm.content AS last_message, lm.message_type::text AS last_type, lm.direction::text AS last_direction,
+             lm.delivery_status AS last_status,
+             COALESCE((SELECT json_agg(json_build_object('id', l.id, 'name', l.name, 'color_code', l.color_code) ORDER BY l.name)
+                         FROM bot_conversation_label cl JOIN bot_customer_label l ON l.id = cl.label_id
+                        WHERE cl.conversation_id = c.id), '[]'::json) AS labels,
              (SELECT COUNT(*) FROM bot_message x WHERE x.conversation_id = c.id AND x.direction::text = 'inbound'
                 AND x.created_at > COALESCE(c.agent_last_read_at, 'epoch'))::int AS unread
         FROM bot_conversation c
         JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
         LEFT JOIN app_user u ON u.id = c.assigned_agent_id
-        LEFT JOIN LATERAL (SELECT content, message_type, direction FROM bot_message m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) lm ON TRUE
+        LEFT JOIN LATERAL (SELECT content, message_type, direction, delivery_status FROM bot_message m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) lm ON TRUE
        WHERE cu.company_id = $1 AND c.status <> 'closed'
          AND ($2::boolean OR c.assigned_agent_id = $3)
          AND ($4 <> 'mine' OR c.assigned_agent_id = $3)
          AND ($4 <> 'waiting' OR c.status IN ('open', 'pending'))
          AND ($4 <> 'bot' OR cu.bot_enabled = TRUE)
          AND ($5 = '' OR LOWER(COALESCE(cu.display_name, '')) LIKE '%' || $5 || '%' OR cu.external_user_id LIKE '%' || $5 || '%')
+         AND ($6::int IS NULL OR EXISTS (SELECT 1 FROM bot_conversation_label cl WHERE cl.conversation_id = c.id AND cl.label_id = $6))
        ORDER BY c.last_message_at DESC NULLS LAST
        LIMIT 40 OFFSET ${(page - 1) * 40}`,
-      [user.company_id, isAdmin, user.id, filter, search]);
+      [user.company_id, isAdmin, user.id, filter, search, query.label_id ?? null]);
     return { role: isAdmin ? 'admin' : 'agent', page, conversations: rows };
   }
 
