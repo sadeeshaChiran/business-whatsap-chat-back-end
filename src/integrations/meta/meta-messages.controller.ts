@@ -1,3 +1,4 @@
+import { MarketingHook } from '../../common/marketing-hook';
 import {
   Body, Controller, ForbiddenException, Get, Headers, Post, Query, Req,
 } from '@nestjs/common';
@@ -166,6 +167,8 @@ export class MetaMessagesController {
         }
       }
     }
+    // ad tracking: Click-to-Messenger / Instagram ad referrals on the saved messages
+    MarketingHook.capture(body, platform);
     return { ok: true, saved };
   }
 

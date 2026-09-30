@@ -22,6 +22,24 @@ export class PlanService {
 
   forget() {
     this.cache = null;
+    this.creditCache = null;
+  }
+
+  private creditCache: { at: number; value: number } | null = null;
+
+  /** 1 credit = this many AI tokens (super admin setting, default 50,000). Companies only see credits. */
+  async tokensPerCredit(): Promise<number> {
+    if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache.value;
+    const rows: Array<{ value: { tokens_per_credit?: number } }> = await this.packageRepository.manager
+      .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
+    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || 50_000);
+    this.creditCache = { at: Date.now(), value };
+    return value;
+  }
+
+  /** tokens → credits, 1 decimal */
+  static credits(tokens: number, tokensPerCredit: number): number {
+    return Math.round((Number(tokens || 0) / tokensPerCredit) * 10) / 10;
   }
 
   async byCode(code: string | null | undefined): Promise<PlatformPackage | null> {

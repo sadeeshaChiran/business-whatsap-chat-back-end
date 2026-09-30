@@ -1,3 +1,4 @@
+import { SuperAdminAuditInterceptor } from '../audit.interceptor';
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
@@ -64,6 +65,7 @@ export class PayhereNotifyController {
 @ApiTags('Super admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
+@UseInterceptors(SuperAdminAuditInterceptor)
 export class SuperAdminBillingController {
   constructor(private readonly billing: BillingService) {}
 

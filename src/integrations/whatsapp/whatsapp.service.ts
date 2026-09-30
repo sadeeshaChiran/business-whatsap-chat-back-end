@@ -1,3 +1,4 @@
+import { MarketingHook } from '../../common/marketing-hook';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -81,6 +82,8 @@ export class WhatsappService {
     for (const [index, normalized] of normalizedMessages.entries()) {
       results.push(await this.processNormalizedInbound(body, normalized, index === 0));
     }
+    // ad tracking: Click-to-WhatsApp referral on the saved messages
+    MarketingHook.capture(body, 'whatsapp');
 
     return results.length === 1
       ? results[0]

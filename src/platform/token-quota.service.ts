@@ -22,6 +22,9 @@ export type TokenUsage = {
   /** the bot is stopped: tokens used up, package expired or suspended */
   blocked: boolean;
   blocked_reason: 'tokens' | 'expired' | 'suspended' | null;
+  /** What companies see: credits (1 credit = tokens_per_credit tokens) */
+  tokens_per_credit: number;
+  credits: { quota: number; extra: number; used: number; remaining: number; per_month: number };
 };
 
 export function addMonths(date: Date, months: number): Date {
@@ -113,7 +116,11 @@ export class TokenQuotaService {
     const total = Math.max(0, quota + extra);
     const remaining = total - used;
     const blockedReason = sub.status === 'suspended' ? 'suspended' : sub.status === 'expired' ? 'expired' : remaining <= 0 ? 'tokens' : null;
+    const tpc = await this.planService.tokensPerCredit();
+    const c = (value: number) => PlanService.credits(value, tpc);
     return {
+      tokens_per_credit: tpc,
+      credits: { quota: c(quota), extra: c(extra), used: c(used), remaining: c(Math.max(0, remaining)), per_month: c(quota) },
       package: pkg ? { id: pkg.id, code: pkg.code, name: pkg.name, tokens_per_month: Number(pkg.tokens_per_month), max_agents: pkg.max_agents } : null,
       billing_cycle: sub.billing_cycle,
       status: sub.status,
@@ -151,12 +158,12 @@ export class TokenQuotaService {
     const sub = await this.subscriptionRepository.findOne({ where: { company_id: companyId } });
     if (!sub) return;
     if (usage.percent >= 1 && !sub.warned_100_at) {
-      await this.notify(companyId, 'HIGH', 'AI tokens used up – the bot has stopped',
-        `All ${(usage.quota + usage.extra).toLocaleString()} tokens of this month are used. Chats go to your agents. Renew or buy more tokens to switch the bot back on.`);
+      await this.notify(companyId, 'HIGH', 'AI credits used up – the bot has stopped',
+        `All ${(usage.credits.quota + usage.credits.extra).toLocaleString()} credits of this month are used. Chats go to your agents. Renew or buy more credits to switch the bot back on.`);
       await this.subscriptionRepository.update(companyId, { warned_100_at: new Date(), warned_80_at: sub.warned_80_at ?? new Date() });
     } else if (usage.percent >= 0.8 && !sub.warned_80_at) {
-      await this.notify(companyId, 'MEDIUM', 'AI tokens 80% used',
-        `${usage.used.toLocaleString()} of ${(usage.quota + usage.extra).toLocaleString()} tokens used this month. The bot stops when they run out.`);
+      await this.notify(companyId, 'MEDIUM', 'AI credits 80% used',
+        `${usage.credits.used.toLocaleString()} of ${(usage.credits.quota + usage.credits.extra).toLocaleString()} credits used this month. The bot stops when they run out.`);
       await this.subscriptionRepository.update(companyId, { warned_80_at: new Date() });
     }
   }

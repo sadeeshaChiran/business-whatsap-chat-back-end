@@ -84,14 +84,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       this.bankDetails(),
       this.paymentRepository.find({ where: { company_id: companyId }, order: { id: 'DESC' }, take: 50 }),
     ]);
+    const tpc = await this.planService.tokensPerCredit();
+    const credits = (tokens: number) => Math.round((num(tokens) / tpc) * 10) / 10;
     return {
       usage,
       subscription: { auto_renew: sub.auto_renew, period_end: sub.period_end, billing_cycle: sub.billing_cycle, status: sub.status },
       packages: packages.map((pkg) => ({
         id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: num(pkg.price_monthly),
         price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month), max_agents: pkg.max_agents, features: pkg.features ?? [],
+        credits_per_month: credits(num(pkg.tokens_per_month)),
       })),
-      token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), price: num(pack.price), valid_days: pack.valid_days })),
+      token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
       bank_details: bank,
       payhere_enabled: payhereEnabled(),
       payments: payments.map((payment) => this.paymentView(payment)),
@@ -115,7 +118,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       pack = dto.token_pack_id ? await this.packRepository.findOne({ where: { id: dto.token_pack_id, is_active: true } }) : null;
       if (!pack) throw new BadRequestException('Choose a token pack.');
       amount = num(pack.price);
-      description = `${pack.name} – ${num(pack.tokens).toLocaleString()} AI tokens`;
+      description = `${pack.name} – ${Math.round((num(pack.tokens) / (await this.planService.tokensPerCredit())) * 10) / 10} AI credits`;
     }
     if (dto.method === 'payhere' && !payhereEnabled()) throw new BadRequestException('Card payments are not available yet. Please use bank transfer.');
     const autoRenew = dto.kind === 'subscription' && dto.method === 'payhere' && Boolean(dto.auto_renew);

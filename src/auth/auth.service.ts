@@ -80,6 +80,14 @@ export class AuthService {
     );
   }
 
+  /** Old one-step sign-up (no codes). Blocked unless REGISTRATION_VERIFICATION=false – use /auth/register/start. */
+  async registerUnverified(registerDto: RegisterDto) {
+    if (String(process.env.REGISTRATION_VERIFICATION ?? 'true').trim().toLowerCase() !== 'false') {
+      throw new BadRequestException('Please sign up with email and WhatsApp verification.');
+    }
+    return this.register(registerDto);
+  }
+
   async register(registerDto: RegisterDto) {
     const email = registerDto.email.trim().toLowerCase();
     const existingUser = await this.userRepository.findOne({ where: { email } });
@@ -334,6 +342,14 @@ export class AuthService {
     return cert;
   }
 
+  /** Login response (token + user) for an existing user – used by the verified sign-up and email change. */
+  async issueAuthResponse(userId: number) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User not found');
+    const company = user.company_id ? await this.companyRepository.findOne({ where: { id: user.company_id } }) : null;
+    return this.buildAuthResponse(user, company?.name, company?.business_category);
+  }
+
   private buildAuthResponse(
     user: User,
     companyName?: string,
@@ -363,6 +379,9 @@ export class AuthService {
       is_agent_active: Boolean(user.is_agent_active),
       /** Metrocoding team (Agent Metra platform admin) */
       is_super_admin: Boolean(user.is_super_admin),
+      email_verified: Boolean(user.email_verified_at),
+      whatsapp_number: user.whatsapp_number ?? null,
+      whatsapp_verified: Boolean(user.whatsapp_verified_at),
       created_at: user.created_at,
       updated_at: user.updated_at,
     };
