@@ -243,12 +243,14 @@ export class CompanyService {
       company.plan = nextPlan;
     }
     if (updateCompanyDto.email !== undefined) {
+      // The business contact email is the admin's verified login email. It changes only through
+      // Account → Change email (with a verification code), never directly here.
       const loginEmail = await this.resolveLoginEmail(user);
-      let nextEmail = updateCompanyDto.email.trim().toLowerCase();
-      if (loginEmail && nextEmail === loginEmail) {
-        nextEmail = '';
+      const nextEmail = updateCompanyDto.email.trim().toLowerCase();
+      if (nextEmail && loginEmail && nextEmail !== loginEmail) {
+        throw new BadRequestException('The business email is your login email. Use "Change email" to change it (a code is sent to the new address).');
       }
-      company.email = nextEmail;
+      company.email = '';
     }
     if (updateCompanyDto.phone !== undefined) {
       company.phone = updateCompanyDto.phone.trim();

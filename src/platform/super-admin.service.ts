@@ -195,6 +195,21 @@ export class SuperAdminService {
     return this.packageView(saved);
   }
 
+  /* ───────────── Credits ───────────── */
+
+  async creditSettings() {
+    return { tokens_per_credit: await this.planService.tokensPerCredit() };
+  }
+
+  async setCreditSettings(tokensPerCredit: number) {
+    if (!Number.isInteger(tokensPerCredit) || tokensPerCredit < 1000) throw new BadRequestException('tokens_per_credit must be at least 1,000.');
+    await this.dataSource.query(
+      `INSERT INTO platform_setting (key, value) VALUES ('credits', $1::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit })]);
+    this.planService.forget();
+    return this.creditSettings();
+  }
+
   /* ───────────── Usage & cost ───────────── */
 
   async usage(daysRaw?: number) {

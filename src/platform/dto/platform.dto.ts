@@ -92,3 +92,9 @@ export class ListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   days?: number;
 }
+
+export class CreditSettingsDto {
+  /** 1 credit = this many AI tokens */
+  @Type(() => Number) @IsInt() @Min(1000)
+  tokens_per_credit: number;
+}

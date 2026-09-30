@@ -31,6 +31,16 @@ export class User {
   @Column({ type: 'boolean', default: false })
   is_agent_active: boolean;
 
+  @Column({ type: 'timestamptz', nullable: true })
+  email_verified_at: Date | null;
+
+  /** The admin's own WhatsApp number (verified with a code) */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  whatsapp_number: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  whatsapp_verified_at: Date | null;
+
   /** Metrocoding team (Agent Metra platform admin) */
   @Column({ type: 'boolean', default: false })
   is_super_admin: boolean;

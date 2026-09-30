@@ -25,6 +25,10 @@ import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.modu
 import { AutomationModule } from './automation/automation.module';
 import { SalesBotModule } from './sales-bot/sales-bot.module';
 import { PlatformModule } from './platform/platform.module';
+import { VerificationModule } from './verification/verification';
+import { CrmModule } from './crm/crm';
+import { MobileModule } from './mobile/mobile';
+import { MarketingModule } from './marketing/marketing.controller';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -63,6 +67,10 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     UsersModule,
     AutomationModule,
     PlatformModule,
+    VerificationModule,
+    CrmModule,
+    MobileModule,
+    MarketingModule,
     SalesBotModule,
   ],
   controllers: [AppController],

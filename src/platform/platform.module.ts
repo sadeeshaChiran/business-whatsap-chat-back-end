@@ -12,6 +12,8 @@ import { PlatformSetting } from './entities/platform-setting.entity';
 import { TokenPack } from './entities/token-pack.entity';
 import { CompanyBillingController, PayhereNotifyController, SuperAdminBillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
+import { SuperAdminExtraController, SuperAdminExtraService } from './super-admin-extra';
+import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { BillingController, PublicPackagesController, SuperAdminController } from './platform.controller';
 import { PlanService } from './plan.service';
 import { SuperAdminGuard } from './super-admin.guard';
@@ -25,8 +27,8 @@ import { TokenQuotaService } from './token-quota.service';
 @Global()
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([PlatformPackage, CompanySubscription, TokenAdjustment, PlatformPayment, PlatformSetting, TokenPack, Company, User])],
-  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController],
-  providers: [PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService],
+  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController],
+  providers: [PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor],
   exports: [PlanService, TokenQuotaService],
 })
 export class PlatformModule implements OnModuleInit {

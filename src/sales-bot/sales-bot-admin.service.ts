@@ -257,7 +257,8 @@ export class SalesBotAdminService {
     }));
     this.tokenQuota.forget(Number(company.id));
     // companies see tokens, never the AI cost (super admin only)
-    return { ...result, usage: { ...result.usage, cost_usd: undefined } };
+    const tpc = await this.planService.tokensPerCredit();
+    return { ...result, usage: { ...result.usage, cost_usd: undefined, credits: Math.round(((result.usage.input_tokens + result.usage.output_tokens) / tpc) * 1000) / 1000 } };
   }
 
   /* ───────────────────────── Customer simulator ───────────────────────── */
@@ -394,6 +395,7 @@ export class SalesBotAdminService {
     return {
       days, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
       handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
+      ai_credits: Math.round((num(summary?.ai_tokens) / (await this.planService.tokensPerCredit())) * 10) / 10,
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
       conversion: conversations ? (orders + bookings) / conversations : 0,
       daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),

@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { SuperAdminAuditInterceptor } from './audit.interceptor';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
+import { CreditSettingsDto, ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
 import { PlanService } from './plan.service';
 import { SuperAdminGuard } from './super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
@@ -14,6 +15,7 @@ import { TokenQuotaService } from './token-quota.service';
 @ApiTags('Super admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
+@UseInterceptors(SuperAdminAuditInterceptor)
 export class SuperAdminController {
   constructor(private readonly service: SuperAdminService) {}
 
@@ -47,6 +49,12 @@ export class SuperAdminController {
 
   @Get('usage')
   usage(@Query() query: ListQueryDto) { return this.service.usage(query.days); }
+
+  @Get('credit-settings')
+  creditSettings() { return this.service.creditSettings(); }
+
+  @Put('credit-settings')
+  setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit); }
 }
 
 /** For every signed-in company user: token usage WITHOUT any cost. */
@@ -71,11 +79,13 @@ export class PublicPackagesController {
 
   @Get()
   async list() {
+    const tpc = await this.planService.tokensPerCredit();
     return (await this.planService.packages())
       .filter((pkg) => pkg.is_active && pkg.is_public)
       .map((pkg) => ({
         code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: Number(pkg.price_monthly),
         price_yearly: Number(pkg.price_yearly), tokens_per_month: Number(pkg.tokens_per_month),
+        credits_per_month: PlanService.credits(Number(pkg.tokens_per_month), tpc),
         max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
       }));
   }
