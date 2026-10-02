@@ -1,7 +1,7 @@
 import { SocialHook } from '../../common/social-hook';
 import { MarketingHook } from '../../common/marketing-hook';
 import {
-  Body, Controller, ForbiddenException, Get, Headers, Post, Query, Req,
+  Body, Controller, ForbiddenException, Get, Headers, Logger, OnModuleDestroy, OnModuleInit, Post, Query, Req,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
@@ -51,8 +51,11 @@ type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'>;
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 @Controller('integrations/meta/messages')
-export class MetaMessagesController {
+export class MetaMessagesController implements OnModuleInit, OnModuleDestroy {
   private readonly pusherService = new PusherService();
+  private readonly logger = new Logger(MetaMessagesController.name);
+  private pollTimer: NodeJS.Timeout | null = null;
+  private polling = false;
   constructor(
     @InjectRepository(MetaPageConnection)
     private readonly connectionRepository: Repository<MetaPageConnection>,
@@ -88,12 +91,16 @@ export class MetaMessagesController {
   ) {
     const secret = process.env.META_APP_SECRET?.trim();
     const raw = request.rawBody;
+    const events = (body?.entry ?? []).reduce((n, e) => n + (e.messaging?.length ?? 0), 0);
+    this.logger.log(`webhook received: object=${body?.object ?? '?'} entries=${body?.entry?.length ?? 0} messaging=${events}`);
     if (!secret || !raw || !signature?.startsWith('sha256=')) {
+      this.logger.warn('webhook rejected: missing signature or META_APP_SECRET');
       throw new ForbiddenException('Meta webhook signature could not be verified.');
     }
     const expected = createHmac('sha256', secret).update(raw).digest();
     const supplied = Buffer.from(signature.slice(7), 'hex');
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      this.logger.warn('webhook rejected: invalid signature – META_APP_SECRET does not match the Meta app');
       throw new ForbiddenException('Invalid Meta webhook signature.');
     }
 
@@ -116,70 +123,156 @@ export class MetaMessagesController {
       const companyId = Number(connection.company_id);
 
       for (const event of entry.messaging ?? []) {
-        const message = event.message;
-        const postback = event.postback;
-        // echo = a message the Page itself sent (Messenger app, Business Suite, another tool) → customer is the recipient
-        const isEcho = Boolean(message?.is_echo);
-        const senderId = String((isEcho ? event.recipient?.id : event.sender?.id) ?? '').trim();
-        if (!senderId || senderId === accountId) continue;
-        const statusHandled = await this.applyMessageStatus(companyId, platform, accountId, senderId, event);
-        if (statusHandled) {
-          saved++;
-          continue;
-        }
-        if (message?.is_deleted) continue;
-        // sent through this app (agent reply, bot, private reply) → already saved when it was sent
-        if (isEcho && String(message?.app_id ?? '') === String(process.env.META_APP_ID ?? '').trim()) continue;
-        if (!message && !postback) continue;
-
-        const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
-        if (providerId) {
-          const duplicate = await this.messageRepository.findOne({
-            where: { platform, provider_message_id: providerId },
-          });
-          if (duplicate) continue;
-        }
-
-        const rows = await this.buildRows(companyId, message, postback);
-        if (!rows.length) continue;
-
-        const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
-        const conversation = await this.ensureConversation(user.id);
-
-        for (const [index, row] of rows.entries()) {
-          await this.messageRepository.save(this.messageRepository.create({
-            conversation_id: conversation.id,
-            direction: isEcho ? 'outbound' : 'inbound',
-            delivery_status: isEcho ? 'sent' : null,
-            message_type: row.message_type,
-            platform,
-            // one Meta message can carry several attachments → keep ids unique
-            provider_message_id: providerId ? (index === 0 ? providerId : `${providerId}:${index}`) : null,
-            content: row.content,
-            media_url: row.media_url,
-            source: isEcho ? 'meta-echo' : 'meta-webhook',
-          }));
-          saved++;
-        }
-
-        // live update for the inbox (the chat list + open chat refresh instantly)
-        this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
-          conversation_id: conversation.id,
-          platform,
-          direction: isEcho ? 'outbound' : 'inbound',
-        });
-        if (isEcho) continue; // the bot answers customers, not the Page's own messages
-
-        // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
-        // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).
-        if (SalesBotHook.isActive()) {
-          await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
-        }
+        saved += await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-webhook');
       }
     }
     // ad tracking: Click-to-Messenger / Instagram ad referrals on the saved messages
     MarketingHook.capture(body, platform);
     return { ok: true, saved };
+  }
+
+  /** One Messenger / Instagram event (from the webhook or the backup poll) → contact, conversation, messages, bot. */
+  private async handleEvent(connection: MetaPageConnection, companyId: number, platform: 'messenger' | 'instagram', accountId: string,
+    event: MessagingEvent, source: string): Promise<number> {
+    let saved = 0;
+    const message = event.message;
+    const postback = event.postback;
+    // echo = a message the Page itself sent (Messenger app, Business Suite, another tool) → customer is the recipient
+    const isEcho = Boolean(message?.is_echo);
+    const senderId = String((isEcho ? event.recipient?.id : event.sender?.id) ?? '').trim();
+    if (!senderId || senderId === accountId) return saved;
+    const statusHandled = await this.applyMessageStatus(companyId, platform, accountId, senderId, event);
+    if (statusHandled) {
+      return 1;
+    }
+    if (message?.is_deleted) return saved;
+    // sent through this app (agent reply, bot, private reply) → already saved when it was sent
+    if (isEcho && String(message?.app_id ?? '') === String(process.env.META_APP_ID ?? '').trim()) return saved;
+    if (!message && !postback) return saved;
+
+    const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
+    if (providerId) {
+      const duplicate = await this.messageRepository.findOne({
+        where: { platform, provider_message_id: providerId },
+      });
+      if (duplicate) return saved;
+    }
+
+    const rows = await this.buildRows(companyId, message, postback);
+    if (!rows.length) return saved;
+
+    const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
+    const conversation = await this.ensureConversation(user.id);
+    if (isEcho) {
+      // same text already saved as our own reply (bot / agent / private reply) a moment ago → not a new message
+      const same = await this.messageRepository.createQueryBuilder('m')
+        .where('m.conversation_id = :id', { id: conversation.id })
+        .andWhere("m.direction::text = 'outbound'")
+        .andWhere('m.content = :content', { content: rows[0].content })
+        .andWhere("m.created_at > NOW() - INTERVAL '30 minutes'")
+        .getOne();
+      if (same) return saved;
+    }
+
+    for (const [index, row] of rows.entries()) {
+      await this.messageRepository.save(this.messageRepository.create({
+        conversation_id: conversation.id,
+        direction: isEcho ? 'outbound' : 'inbound',
+        delivery_status: isEcho ? 'sent' : null,
+        message_type: row.message_type,
+        platform,
+        // one Meta message can carry several attachments → keep ids unique
+        provider_message_id: providerId ? (index === 0 ? providerId : `${providerId}:${index}`) : null,
+        content: row.content,
+        media_url: row.media_url,
+        source: isEcho ? 'meta-echo' : source,
+      }));
+      saved++;
+    }
+
+    // live update for the inbox (the chat list + open chat refresh instantly)
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+      conversation_id: conversation.id,
+      platform,
+      direction: isEcho ? 'outbound' : 'inbound',
+    });
+    if (isEcho) return saved; // the bot answers customers, not the Page's own messages
+
+    // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
+    // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).
+    if (SalesBotHook.isActive()) {
+      await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
+    }
+    return saved;
+  }
+
+  /* ───────── backup: pull new messages every minute (when Meta's webhook does not arrive) ───────── */
+
+  onModuleInit() {
+    this.pollTimer = setInterval(() => void this.pollConversations(), 60_000);
+  }
+
+  onModuleDestroy() {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+  }
+
+  private async pollConversations() {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      const connections = await this.connectionRepository.find({ where: { status: 'CONNECTED' } });
+      for (const connection of connections) {
+        if (!connection.page_id || !connection.page_access_token) continue;
+        await this.pollAccount(connection, 'messenger', connection.page_id).catch((error: unknown) =>
+          this.logger.warn(`messenger poll ${connection.page_id}: ${error instanceof Error ? error.message : String(error)}`));
+        if (connection.instagram_business_account_id) {
+          await this.pollAccount(connection, 'instagram', connection.instagram_business_account_id).catch((error: unknown) =>
+            this.logger.warn(`instagram poll ${connection.instagram_business_account_id}: ${error instanceof Error ? error.message : String(error)}`));
+        }
+      }
+    } catch (error) {
+      this.logger.warn(`message poll: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private async pollAccount(connection: MetaPageConnection, platform: 'messenger' | 'instagram', accountId: string) {
+    type GraphMessage = {
+      id: string; message?: string; created_time?: string; from?: { id?: string }; to?: { data?: Array<{ id?: string }> };
+      attachments?: { data?: Array<{ mime_type?: string; name?: string; file_url?: string; image_data?: { url?: string }; video_data?: { url?: string } }> };
+    };
+    const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
+    const params = new URLSearchParams({
+      platform, limit: '10', access_token: connection.page_access_token,
+      fields: 'updated_time,messages.limit(10){id,message,created_time,from,to,attachments{mime_type,name,file_url,image_data,video_data}}',
+    });
+    const res = await fetch(`https://graph.facebook.com/${version}/${connection.page_id}/conversations?${params.toString()}`, { signal: AbortSignal.timeout(20_000) });
+    const json = (await res.json().catch(() => ({}))) as { data?: Array<{ updated_time?: string; messages?: { data?: GraphMessage[] } }>; error?: { message?: string } };
+    if (!res.ok) throw new Error(json.error?.message ?? `Meta returned ${res.status}`);
+
+    const cutoff = Date.now() - 15 * 60_000; // only recent messages – never import old history as new chats
+    const companyId = Number(connection.company_id);
+    for (const thread of json.data ?? []) {
+      if (thread.updated_time && new Date(thread.updated_time).getTime() < cutoff) continue;
+      for (const m of [...(thread.messages?.data ?? [])].reverse()) {
+        if (!m.id || !m.created_time || new Date(m.created_time).getTime() < cutoff) continue;
+        const fromId = String(m.from?.id ?? '');
+        const isEcho = fromId === accountId;
+        const customerId = isEcho ? String(m.to?.data?.[0]?.id ?? '') : fromId;
+        if (!customerId) continue;
+        const attachments: Attachment[] = (m.attachments?.data ?? []).map((a) => {
+          const url = a.image_data?.url ?? a.video_data?.url ?? a.file_url ?? '';
+          const type = a.image_data ? 'image' : a.video_data ? 'video' : String(a.mime_type ?? '').startsWith('audio') ? 'audio' : 'file';
+          return { type, title: a.name, payload: { url } };
+        });
+        const event: MessagingEvent = {
+          sender: { id: isEcho ? accountId : customerId }, recipient: { id: isEcho ? customerId : accountId },
+          message: { mid: m.id, text: m.message ?? '', is_echo: isEcho, attachments: attachments.length ? attachments : undefined },
+        };
+        await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-poll');
+      }
+    }
   }
 
   /* ───────── message → rows in the formats the inbox understands ───────── */
