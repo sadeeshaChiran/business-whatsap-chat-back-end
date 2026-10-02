@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsNumber,
   IsOptional,
@@ -53,6 +54,11 @@ export class CreateProductVariantDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   weight?: number;
+
+  @ApiPropertyOptional({ example: true, description: 'false = this option is not available right now' })
+  @IsOptional()
+  @IsBoolean()
+  available?: boolean;
 
   @ApiPropertyOptional({ example: 'RED-M-01', maxLength: 100 })
   @IsOptional()

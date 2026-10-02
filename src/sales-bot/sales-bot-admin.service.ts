@@ -67,7 +67,7 @@ export class SalesBotAdminService {
   /* ───────────────────────── Services ───────────────────────── */
 
   private serviceView(row: BotService) {
-    return { id: row.id, name: row.name, description: row.description, price: num(row.price), price_note: row.price_note, duration_min: row.duration_min, is_active: row.is_active };
+    return { id: row.id, name: row.name, description: row.description, price: num(row.price), price_note: row.price_note, duration_min: row.duration_min, is_active: row.is_active, is_available: row.is_available !== false };
   }
 
   async listServices(user: AuthenticatedUser) {
@@ -80,7 +80,7 @@ export class SalesBotAdminService {
     const company = await this.adminCompany(user);
     const saved = await this.serviceRepository.save(this.serviceRepository.create({
       company_id: Number(company.id), name: dto.name.trim(), description: dto.description?.trim() ?? '', price: dto.price,
-      price_note: dto.price_note?.trim() ?? '', duration_min: dto.duration_min ?? null, is_active: dto.is_active ?? true,
+      price_note: dto.price_note?.trim() ?? '', duration_min: dto.duration_min ?? null, is_active: dto.is_active ?? true, is_available: dto.is_available ?? true,
     }));
     return this.serviceView(saved);
   }
@@ -95,6 +95,7 @@ export class SalesBotAdminService {
     if (dto.price_note !== undefined) row.price_note = dto.price_note.trim();
     if (dto.duration_min !== undefined) row.duration_min = dto.duration_min ?? null;
     if (dto.is_active !== undefined) row.is_active = dto.is_active;
+    if (dto.is_available !== undefined) row.is_available = dto.is_available;
     return this.serviceView(await this.serviceRepository.save(row));
   }
 
@@ -356,7 +357,8 @@ export class SalesBotAdminService {
   async report(user: AuthenticatedUser, daysRaw?: number) {
     const company = await this.adminCompany(user);
     const companyId = Number(company.id);
-    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365);
+    const maxDays = (await this.planService.limitsForCompany(companyId)).numbers.reports_days;
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365, maxDays ?? 365);
     const [summary] = await this.dataSource.query(
       `WITH since AS (SELECT NOW() - make_interval(days => $2::int) AS t)
        SELECT
@@ -393,7 +395,7 @@ export class SalesBotAdminService {
     const orders = num(summary?.orders);
     const bookings = num(summary?.bookings);
     return {
-      days, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
+      days, max_days: maxDays, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
       handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
       ai_credits: Math.round((num(summary?.ai_tokens) / (await this.planService.tokensPerCredit())) * 10) / 10,
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),

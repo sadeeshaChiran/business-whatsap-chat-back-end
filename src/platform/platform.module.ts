@@ -1,3 +1,4 @@
+import { FeatureGuard } from './feature.guard';
 import { Global, Logger, Module, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource, TypeOrmModule } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -28,8 +29,8 @@ import { TokenQuotaService } from './token-quota.service';
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([PlatformPackage, CompanySubscription, TokenAdjustment, PlatformPayment, PlatformSetting, TokenPack, Company, User])],
   controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController],
-  providers: [PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor],
-  exports: [PlanService, TokenQuotaService],
+  providers: [FeatureGuard, PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor],
+  exports: [PlanService, TokenQuotaService, FeatureGuard],
 })
 export class PlatformModule implements OnModuleInit {
   private readonly logger = new Logger(PlatformModule.name);

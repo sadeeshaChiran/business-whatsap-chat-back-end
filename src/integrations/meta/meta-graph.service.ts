@@ -91,7 +91,9 @@ export class MetaGraphService {
 
   private graphUrl(path: string, cfg: MetaGraphConfig): string {
     const normalized = path.startsWith('/') ? path : `/${path}`;
-    return `https://graph.facebook.com/${cfg.graphVersion}${normalized}`;
+    // META_GRAPH_BASE_URL is only for automated tests (a local fake Meta server) – leave it empty in production
+    const base = (process.env.META_GRAPH_BASE_URL?.trim() || 'https://graph.facebook.com').replace(/\/+$/, '');
+    return `${base}/${cfg.graphVersion}${normalized}`;
   }
 
   private async graphRequest<T>(
@@ -556,5 +558,25 @@ export class MetaGraphService {
     } catch (error) {
       return { ok: false, data: null, error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  /**
+   * Embedded Signup fallback: the business token's granular scopes list the shared WhatsApp Business Accounts;
+   * returns the first phone number found (the one the customer just set up in most cases).
+   */
+  async discoverSharedWhatsappNumber(accessToken: string): Promise<{ waba_id: string; phone_number_id: string } | null> {
+    const cfg = this.getConfig();
+    const appToken = `${cfg.appId}|${cfg.appSecret}`;
+    const debug = await this.healthGet<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>(
+      '/debug_token', appToken, { input_token: accessToken });
+    const wabaIds = Array.from(new Set((debug.data?.data?.granular_scopes ?? [])
+      .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
+      .flatMap((s) => s.target_ids ?? [])));
+    for (const wabaId of wabaIds) {
+      const numbers = await this.healthGet<{ data?: Array<{ id: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name' });
+      const first = numbers.data?.data?.[0];
+      if (first?.id) return { waba_id: wabaId, phone_number_id: first.id };
+    }
+    return null;
   }
 }

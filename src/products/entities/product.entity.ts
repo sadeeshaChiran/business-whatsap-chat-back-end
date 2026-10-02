@@ -107,4 +107,8 @@ export class Product {
 
   @UpdateDateColumn({ type: 'timestamp', name: 'updated_at' })
   updated_at: Date;
+
+  /** Available / Unavailable (replaces stock counts – default available) */
+  @Column({ type: 'boolean', default: true })
+  is_available: boolean;
 }

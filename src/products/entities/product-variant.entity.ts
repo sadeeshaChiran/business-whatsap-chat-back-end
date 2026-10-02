@@ -18,6 +18,8 @@ export type ProductVariantOption = {
   use_default_image?: boolean;
   /** Weight of this variant in kg (optional; product weight is used when empty) */
   weight?: number;
+  /** false = this option is not available right now (missing = available) */
+  available?: boolean;
 };
 
 @Entity()

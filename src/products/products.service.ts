@@ -1,5 +1,7 @@
+import { PlanService } from '../platform/plan.service';
 import {
   BadRequestException,
+  Optional,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -23,6 +25,7 @@ type ImportVariant = {
   image_url?: string;
   use_default_image?: boolean;
   weight?: number;
+  available?: boolean;
 };
 
 type ImportLine = {
@@ -40,6 +43,7 @@ type ImportLine = {
   coverImageUrl: string;
   sellingPoints?: string;
   showToBot?: boolean;
+  available?: boolean;
   variant?: ImportVariant;
   legacyAttributeGroups?: Map<string, string[]>;
 };
@@ -59,6 +63,7 @@ type ImportProductGroup = {
   coverImageUrl: string;
   sellingPoints?: string;
   showToBot?: boolean;
+  available?: boolean;
   variants: ImportVariant[];
 };
 
@@ -73,7 +78,29 @@ export class ProductsService {
     private readonly productCategoryRepository: Repository<ProductCatergory>,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
+    @Optional() private readonly planService?: PlanService,
   ) {}
+
+  /** Package limit: max products (null = unlimited). */
+  private async assertProductRoom(companyId: number, adding: number) {
+    if (!this.planService || adding <= 0) return;
+    const limits = await this.planService.limitsForCompany(companyId);
+    if (limits.max_products == null) return;
+    const current = await this.productRepository.count({ where: { company_id: companyId, is_deleted: false } as never });
+    if (current + adding > limits.max_products) {
+      // suggest a HIGHER package (more expensive than the current one) that allows more products
+      const currentPrice = Number(limits.package?.price_monthly ?? 0);
+      const upgrade = (await this.planService.packages())
+        .filter((p) => p.is_active && p.is_public && p.id !== limits.package?.id && Number(p.price_monthly) > currentPrice
+          && (p.max_products == null || p.max_products > limits.max_products!))
+        .sort((a, b) => Number(a.price_monthly) - Number(b.price_monthly))[0];
+      throw new ForbiddenException({
+        statusCode: 403, error: 'Forbidden', code: 'LIMIT_REACHED', feature: 'max_products', upgrade_to: upgrade?.name ?? null,
+        message: `Your ${limits.package?.name ?? ''} package allows ${limits.max_products} products (you have ${current}` +
+          `${adding > 1 ? `, adding ${adding}` : ''}).${upgrade ? ` Upgrade to ${upgrade.name} for more.` : ''}`,
+      });
+    }
+  }
 
   private async assertProductBusiness(companyId: number) {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
@@ -253,6 +280,9 @@ export class ProductsService {
         if (variant.weight !== undefined && variant.weight !== null && Number.isFinite(Number(variant.weight)) && Number(variant.weight) >= 0) {
           withPricing.weight = Number(variant.weight);
         }
+        if (variant.available === false) {
+          withPricing.available = false;
+        }
         if (variant.image_url?.trim()) {
           withPricing.image_url = variant.image_url.trim();
           withPricing.use_default_image = false;
@@ -381,6 +411,7 @@ export class ProductsService {
   }
 
   async create(createProductDto: CreateProductDto, user: AuthenticatedUser) {
+    await this.assertProductRoom(Number(user.company_id), 1);
     await this.assertProductBusiness(user.company_id);
 
     const category = await this.findCategoryForCompany(
@@ -429,6 +460,7 @@ export class ProductsService {
       selling_points: createProductDto.selling_points?.trim() ?? '',
       related_product_ids: await this.normalizeRelatedProductIds(createProductDto.related_product_ids, user.company_id),
       show_to_bot: createProductDto.show_to_bot ?? true,
+      is_available: createProductDto.is_available ?? true,
       variant_image_match: this.normalizeVariantImageMatch(
         createProductDto.variant_image_match,
       ),
@@ -510,6 +542,9 @@ export class ProductsService {
     }
     if (updateProductDto.related_product_ids !== undefined) {
       product.related_product_ids = await this.normalizeRelatedProductIds(updateProductDto.related_product_ids, user.company_id, product.id);
+    }
+    if (updateProductDto.is_available !== undefined) {
+      product.is_available = updateProductDto.is_available;
     }
     if (updateProductDto.show_to_bot !== undefined) {
       product.show_to_bot = updateProductDto.show_to_bot;
@@ -788,6 +823,11 @@ export class ProductsService {
       variant.quantity = variantQuantity;
     }
 
+    const variantAvailableRaw = this.getRowValue(row, [/variant[_\s-]?available/]);
+    if (variantAvailableRaw !== undefined && String(variantAvailableRaw).trim() !== '' && !this.normalizeBoolean(variantAvailableRaw)) {
+      variant.available = false;
+    }
+
     const variantWeight = this.normalizePrice(
       this.getRowValue(row, [/variant[_\s-]?weight/, /^variant weight$/]),
     );
@@ -872,6 +912,7 @@ export class ProductsService {
       this.getRowValue(row, [/selling[_\s-]?points?/, /^usp$/]) ?? '',
     ).trim();
     const showToBotRaw = this.getRowValue(row, [/show[_\s-]?to[_\s-]?bot/]);
+    const availableRaw = this.getRowValue(row, [/^available$/, /^is[_\s-]?available$/, /^availability$/]);
     const parsedQuantity = Number(String(quantityRaw ?? '').trim() || 0);
     const status = String(statusRaw ?? '').trim() || 'In Stock';
     const variant = this.extractVariantCombinationFromRow(row);
@@ -897,6 +938,7 @@ export class ProductsService {
       coverImageUrl,
       ...(sellingPoints ? { sellingPoints } : {}),
       ...(showToBotRaw !== undefined && String(showToBotRaw).trim() !== '' ? { showToBot: this.normalizeBoolean(showToBotRaw) } : {}),
+      ...(availableRaw !== undefined && String(availableRaw).trim() !== '' ? { available: this.normalizeBoolean(availableRaw) } : {}),
       ...(variant ? { variant } : {}),
       ...(legacyAttributeGroups.size ? { legacyAttributeGroups } : {}),
     };
@@ -935,6 +977,7 @@ export class ProductsService {
           coverImageUrl: line.coverImageUrl,
           sellingPoints: line.sellingPoints,
           showToBot: line.showToBot,
+          available: line.available,
           variants: [],
         });
       } else {
@@ -1078,6 +1121,7 @@ export class ProductsService {
         weight: Number(group.weight),
         ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
         ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
+        ...(group.available !== undefined ? { is_available: group.available } : {}),
         is_deleted: false,
         category,
       }),
@@ -1102,6 +1146,12 @@ export class ProductsService {
     const rawRows = this.readImportRows(file);
     const groupedRows = this.normalizeImportRows(rawRows);
     const createdProducts: Product[] = [];
+    // package limit: only products that do not exist yet count
+    const existingNames = new Set(
+      (await this.productRepository.find({ where: { company_id: user.company_id, is_deleted: false } as never, select: ['name'] as never }))
+        .map((p) => String(p.name).trim().toLowerCase()),
+    );
+    await this.assertProductRoom(Number(user.company_id), groupedRows.filter((g) => !existingNames.has(String(g.name ?? '').trim().toLowerCase())).length);
 
     for (const group of groupedRows) {
       createdProducts.push(await this.persistImportGroup(group, user));
@@ -1111,5 +1161,24 @@ export class ProductsService {
       imported_count: createdProducts.length,
       items: createdProducts,
     };
+  }
+
+  /** One tap from the list / app: the whole product, or one variant option (by its value, e.g. "Red / M"). */
+  async setAvailability(id: number, available: boolean, variantValue: string | undefined, user: AuthenticatedUser) {
+    const product = await this.productRepository.findOne({ where: { id, company_id: user.company_id, is_deleted: false } as never, relations: ['variants'] });
+    if (!product) throw new NotFoundException('Product not found');
+    if (!variantValue) {
+      product.is_available = available;
+      await this.productRepository.save(product);
+      return { id: product.id, is_available: product.is_available };
+    }
+    const row = (product as unknown as { variants?: Array<{ id: number; variants: Array<Record<string, unknown>> }> }).variants?.[0];
+    const wanted = variantValue.trim().toLowerCase();
+    const option = row?.variants?.find((v) => String(v.variant_value ?? '').trim().toLowerCase() === wanted);
+    if (!row || !option) throw new NotFoundException('Variant not found');
+    if (available) delete option.available;
+    else option.available = false;
+    await this.productVariantRepository.update(row.id, { variants: row.variants } as never);
+    return { id: product.id, variant_value: option.variant_value, available };
   }
 }

@@ -32,4 +32,8 @@ export class BotService {
 
   @UpdateDateColumn({ type: 'timestamptz', name: 'updated_at' })
   updated_at: Date;
+
+  /** Available / Unavailable right now (the bot says “not available now”) */
+  @Column({ type: 'boolean', default: true })
+  is_available: boolean;
 }

@@ -1,3 +1,4 @@
+import { LIMIT_CATALOG, cleanLimits, resolveLimits } from './package-limits';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -107,6 +108,7 @@ export class SuperAdminService {
     if (!company) throw new NotFoundException('Company not found.');
     const sub = await this.quota.ensure(id);
     const now = new Date();
+    this.planService.forgetCompany(id);
     if (dto.package_id !== undefined) {
       const pkg = await this.packageRepository.findOne({ where: { id: dto.package_id } });
       if (!pkg) throw new BadRequestException('Package not found.');
@@ -171,6 +173,7 @@ export class SuperAdminService {
       id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description,
       price_monthly: num(pkg.price_monthly), price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month),
       max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
+      limits: resolveLimits(pkg), raw_limits: pkg.limits ?? {},
       is_active: pkg.is_active, is_public: pkg.is_public, sort_order: pkg.sort_order,
     };
   }
@@ -180,6 +183,7 @@ export class SuperAdminService {
     if (await this.packageRepository.findOne({ where: { code } })) throw new ConflictException(`Package code "${code}" already exists.`);
     const saved = await this.packageRepository.save(this.packageRepository.create({
       ...dto, code, name: dto.name.trim(), description: dto.description?.trim() ?? '', features: dto.features ?? [],
+      limits: cleanLimits(dto.limits),
       max_agents: dto.max_agents ?? null, max_products: dto.max_products ?? null,
     }));
     this.planService.forget();
@@ -189,10 +193,18 @@ export class SuperAdminService {
   async updatePackage(id: number, dto: UpdatePackageDto) {
     const pkg = await this.packageRepository.findOne({ where: { id } });
     if (!pkg) throw new NotFoundException('Package not found.');
-    Object.assign(pkg, Object.fromEntries(Object.entries(dto).filter(([, value]) => value !== undefined)));
+    const { limits, ...rest } = dto;
+    Object.assign(pkg, Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)));
+    // merge: keys the super admin did not send keep their value
+    if (limits !== undefined) pkg.limits = { ...(pkg.limits ?? {}), ...cleanLimits(limits) };
     const saved = await this.packageRepository.save(pkg);
     this.planService.forget();
     return this.packageView(saved);
+  }
+
+  /** What a package can switch on / limit (for the package editor). */
+  limitCatalog() {
+    return LIMIT_CATALOG;
   }
 
   /* ───────────── Credits ───────────── */

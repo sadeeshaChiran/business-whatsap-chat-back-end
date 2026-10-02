@@ -2536,7 +2536,15 @@ export class BotAdminService {
         : { company_id: companyId, page_id: accountId, status: 'CONNECTED' },
       order: { updated_at: 'DESC' },
     });
-    if (!connection?.page_access_token) throw new BadRequestException('Connect a Meta Page before replying.');
+    if (!connection?.page_access_token) {
+      const old = await this.metaPageConnectionRepository.findOne({
+        where: normalized === 'instagram' ? { company_id: companyId, instagram_business_account_id: accountId } : { company_id: companyId, page_id: accountId },
+        order: { updated_at: 'DESC' },
+      });
+      throw new BadRequestException(old
+        ? `This customer wrote to your previous ${normalized === 'instagram' ? 'Instagram account' : 'Facebook Page'}${old.page_name ? ` (${old.page_name})` : ''}, which is no longer connected. Reconnect it to reply here.`
+        : 'Connect a Meta Page before replying.');
+    }
     const sendAccountId = normalized === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
     if (!sendAccountId) throw new BadRequestException('The selected Meta channel is not connected.');
     return { connection, sendAccountId, platform: normalized };

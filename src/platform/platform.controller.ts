@@ -1,3 +1,4 @@
+import { resolveLimits } from './package-limits';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -53,6 +54,9 @@ export class SuperAdminController {
   @Get('credit-settings')
   creditSettings() { return this.service.creditSettings(); }
 
+  @Get('limit-catalog')
+  limitCatalog() { return this.service.limitCatalog(); }
+
   @Put('credit-settings')
   setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit); }
 }
@@ -63,11 +67,14 @@ export class SuperAdminController {
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 export class BillingController {
-  constructor(private readonly quota: TokenQuotaService) {}
+  constructor(private readonly quota: TokenQuotaService, private readonly planService: PlanService) {}
 
+  /** Credits + what the package includes (website / app lock menus from this). */
   @Get('usage')
-  usage(@CurrentUser() user: AuthenticatedUser) {
-    return this.quota.usage(Number(user.company_id));
+  async usage(@CurrentUser() user: AuthenticatedUser) {
+    const companyId = Number(user.company_id);
+    const [usage, limits] = await Promise.all([this.quota.usage(companyId), this.planService.limitsView(companyId)]);
+    return { ...usage, limits };
   }
 }
 
@@ -87,6 +94,7 @@ export class PublicPackagesController {
         price_yearly: Number(pkg.price_yearly), tokens_per_month: Number(pkg.tokens_per_month),
         credits_per_month: PlanService.credits(Number(pkg.tokens_per_month), tpc),
         max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
+        limits: resolveLimits(pkg),
       }));
   }
 }

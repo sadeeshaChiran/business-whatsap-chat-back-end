@@ -48,6 +48,11 @@ export class CreateBotServiceDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  /** Available / Unavailable right now (the bot says “not available now”) */
+  @IsOptional()
+  @IsBoolean()
+  is_available?: boolean;
 }
 
 export class UpdateBotServiceDto {
@@ -81,6 +86,11 @@ export class UpdateBotServiceDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  /** Available / Unavailable right now (the bot says “not available now”) */
+  @IsOptional()
+  @IsBoolean()
+  is_available?: boolean;
 }
 
 /* ───────── Delivery zones ───────── */

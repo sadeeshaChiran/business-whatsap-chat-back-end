@@ -1,3 +1,4 @@
+import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
 import {
   Body,
   Controller,
@@ -97,6 +98,8 @@ export class BotAdminController {
   }
 
   @Patch('conversations/:id/lead-stage')
+  @UseGuards(FeatureGuard)
+  @RequiresFeature('lead_management')
   updateLeadStage(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseIntPipe) id: number,

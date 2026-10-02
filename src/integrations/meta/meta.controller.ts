@@ -1,3 +1,4 @@
+import { FeatureGuard, RequiresAnyFeature } from '../../platform/feature.guard';
 import {
   BadRequestException,
   Body,
@@ -87,14 +88,22 @@ export class MetaController {
   ) {
     const company = await this.assertAdmin(user);
     const existing = await this.whatsappChannelService.getForCompany(user.company_id);
-    const phoneNumberId = body.phone_number_id.trim();
-    if (existing?.meta_phone_number_id && existing.meta_phone_number_id !== phoneNumberId) {
-      throw new BadRequestException('A different WhatsApp number cannot replace this workspace account. Existing chats and contacts were kept.');
-    }
+    if (body.phone_number_id) await this.companyService.assertWhatsappNumberFree(Number(company.id), body.phone_number_id.trim());
 
     const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code);
+    // Meta's browser message can get lost (popup closed early, blockers): then find the shared account + number from the token
+    let wabaId = body.waba_id?.trim() ?? '';
+    let phoneNumberId = body.phone_number_id?.trim() ?? '';
+    if (!wabaId || !phoneNumberId) {
+      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken);
+      if (!found) throw new BadRequestException('Meta did not share a WhatsApp number. Run the setup again and choose (or add) a phone number.');
+      wabaId = found.waba_id;
+      phoneNumberId = found.phone_number_id;
+      await this.companyService.assertWhatsappNumberFree(Number(company.id), phoneNumberId);
+    }
+    const replaced = existing?.meta_phone_number_id && existing.meta_phone_number_id !== phoneNumberId ? existing.meta_phone_number_id : null;
     const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
-    await this.metaGraphService.subscribeWhatsappApp(body.waba_id.trim(), accessToken);
+    await this.metaGraphService.subscribeWhatsappApp(wabaId, accessToken);
     // Cloud API numbers must be registered before they can send / receive (6-digit two-step PIN)
     const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? '')) ? String(process.env.WHATSAPP_REGISTRATION_PIN) : String(Math.floor(100000 + Math.random() * 900000));
     const registration = await this.metaGraphService.registerWhatsappNumber(phoneNumberId, accessToken, pin);
@@ -106,11 +115,11 @@ export class MetaController {
       || process.env.PUBLIC_API_BASE_URL?.trim()
       || process.env.API_BASE_URL?.trim()
       || '';
-    const savedCompany = await this.companyService.update(company.id, {
+    const savedCompany = await this.companyService.update(Number(company.id), {
       phone: phone.display_phone_number.replace(/\D/g, ''),
       whatsapp_provider_type: 'meta',
       meta_phone_number_id: phoneNumberId,
-      meta_waba_id: body.waba_id.trim(),
+      meta_waba_id: wabaId,
       meta_access_token: accessToken,
       meta_verify_token: verifyToken,
       meta_webhook_base_url: webhookBase,
@@ -122,6 +131,7 @@ export class MetaController {
       subscribed: true,
       registered: registration.registered,
       registration_message: registration.registered ? null : `The number could not be registered for the Cloud API: ${registration.message}`,
+      replaced_previous_number: Boolean(replaced),
     };
   }
   /**
@@ -174,6 +184,8 @@ export class MetaController {
   }
 
   @Get('auth-url')
+  @UseGuards(FeatureGuard)
+  @RequiresAnyFeature('messenger', 'instagram')
   async getAuthUrl(
     @CurrentUser() user: AuthenticatedUser,
     @Query('return_path') returnPath?: string,
@@ -186,6 +198,8 @@ export class MetaController {
   }
 
   @Get('pending-pages')
+  @UseGuards(FeatureGuard)
+  @RequiresAnyFeature('messenger', 'instagram')
   async listPendingPages(@CurrentUser() user: AuthenticatedUser) {
     await this.assertAdmin(user);
     const pages = await this.metaPageConnectionService.listPendingPageChoices(
@@ -195,6 +209,8 @@ export class MetaController {
   }
 
   @Post('connect')
+  @UseGuards(FeatureGuard)
+  @RequiresAnyFeature('messenger', 'instagram')
   async connectPage(
     @CurrentUser() user: AuthenticatedUser,
     @Body() body: ConnectMetaPageDto,

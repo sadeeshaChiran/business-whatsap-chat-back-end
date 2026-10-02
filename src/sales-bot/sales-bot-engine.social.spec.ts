@@ -1,7 +1,7 @@
 import { SalesBotEngineService } from './sales-bot-engine.service';
 
 /** The bot must answer Messenger / Instagram chats through the Meta Page, never through WhatsApp. */
-function build(platform: string, botResult: Record<string, unknown> = {}) {
+function build(platform: string, botResult: Record<string, unknown> = {}, packageFeatures: Record<string, boolean> = {}) {
   const saved: any[] = [];
   const qbQueue: any[][] = [];
   const qb: any = {
@@ -34,7 +34,7 @@ function build(platform: string, botResult: Record<string, unknown> = {}) {
     { getAdapterForChannel: () => adapter } as never,
     { trigger: jest.fn() } as never,
     { sendInvoiceForCompany: jest.fn() } as never, // bot-admin (invoices)
-    { planAllowsBot: async () => true } as never, // packages
+    { planAllowsBot: async () => true, hasFeature: async (_company: number, key: string) => packageFeatures[key] !== false } as never, // packages + limits
     { canBotReply: async () => true } as never, // token quota
     social as never,
   );
@@ -60,6 +60,19 @@ describe('SalesBotEngineService on Messenger / Instagram', () => {
     await (t.engine as any).turn(7, 21);
     const out = t.saved.find((row) => row.direction === 'outbound');
     expect(out).toEqual(expect.objectContaining({ provider_message_id: null, delivery_status: 'failed' }));
+  });
+
+  it.each(['messenger', 'instagram'])('does not reply on %s when the package does not include it', async (platform) => {
+    const t = build(platform, {}, { [platform]: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.reply).not.toHaveBeenCalled(); // no AI call, no credits used
+    expect(t.social.sendText).not.toHaveBeenCalled();
+  });
+
+  it('still replies on WhatsApp when Messenger / Instagram are not in the package', async () => {
+    const t = build('whatsapp', {}, { messenger: false, instagram: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.adapter.sendText).toHaveBeenCalled();
   });
 
   it('still sends WhatsApp chats through the WhatsApp adapter', async () => {

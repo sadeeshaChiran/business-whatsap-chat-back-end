@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
 
 export class PackageDto {
   @IsString() @MinLength(2) @MaxLength(40) @Matches(/^[a-z0-9_-]+$/, { message: 'code: lowercase letters, numbers, - and _ only' })
@@ -29,6 +29,10 @@ export class PackageDto {
   @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true })
   features?: string[];
 
+  /** Feature switches / numbers – see package-limits.ts (unknown keys are ignored) */
+  @IsOptional() @IsObject()
+  limits?: Record<string, boolean | number | null>;
+
   @IsOptional() @IsBoolean()
   is_active?: boolean;
 
@@ -48,6 +52,7 @@ export class UpdatePackageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) max_agents?: number | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) max_products?: number | null;
   @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) features?: string[];
+  @IsOptional() @IsObject() limits?: Record<string, boolean | number | null>;
   @IsOptional() @IsBoolean() is_active?: boolean;
   @IsOptional() @IsBoolean() is_public?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() sort_order?: number;

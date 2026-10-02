@@ -36,6 +36,10 @@ export class PlatformPackage {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   features: string[];
 
+  /** Feature switches and numbers (see package-limits.ts), editable by the super admin */
+  @Column({ type: 'jsonb', default: () => "'{}'" })
+  limits: Record<string, boolean | number | null>;
+
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
 
