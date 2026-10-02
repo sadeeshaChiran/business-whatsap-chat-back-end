@@ -35,6 +35,14 @@ export class CompanyService {
     private readonly planService: PlanService,
   ) {}
 
+  /** A WhatsApp Cloud number can belong to one workspace only. */
+  async assertWhatsappNumberFree(companyId: number, phoneNumberId: string) {
+    const other = await this.whatsappChannelsRepository.findOne({ where: { meta_phone_number_id: phoneNumberId } as never });
+    if (other && Number((other as unknown as { company_id: number }).company_id) !== Number(companyId)) {
+      throw new BadRequestException('This WhatsApp number is already connected to another Agent Metra workspace. Disconnect it there first.');
+    }
+  }
+
   private whatsappAccountIdentity(provider: 'evolution' | 'meta', channel: WhatsappChannel | null, update?: UpdateCompanyDto): string {
     return provider === 'meta'
       ? (update?.meta_phone_number_id ?? channel?.meta_phone_number_id ?? '').trim()
@@ -200,7 +208,7 @@ export class CompanyService {
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
-    if (id !== user.company_id) {
+    if (Number(id) !== Number(user.company_id)) {
       throw new NotFoundException('Company not found');
     }
     let company = await this.companyRepository.findOne({ where: { id } });
@@ -217,7 +225,7 @@ export class CompanyService {
     updateCompanyDto: UpdateCompanyDto,
     user: AuthenticatedUser,
   ) {
-    if (id !== user.company_id) {
+    if (Number(id) !== Number(user.company_id)) {
       throw new NotFoundException('Company not found');
     }
 
@@ -311,13 +319,11 @@ export class CompanyService {
     );
 
     if (whatsappAccountChanged) {
-      if (existingChannel?.status === 'CONNECTED' && previousProvider !== nextProvider) {
-        throw new BadRequestException('This workspace supports one WhatsApp account. Switching providers would mix existing chats; the current account and history were kept.');
-      }
-      if (existingChannel?.meta_phone_number_id && existingChannel.meta_phone_number_id !== updateCompanyDto.meta_phone_number_id?.trim()) {
-        throw new BadRequestException(
-          'A different WhatsApp number cannot replace the connected number in this workspace. Existing chats and contacts were kept.',
-        );
+      // Replacing the number / switching provider is allowed at any time: chats belong to the company and the
+      // customer, so the history stays and replies simply go out from the new account.
+      // Only a number that another workspace already uses is refused (messages would reach the wrong business).
+      if (nextProvider === 'meta' && updateCompanyDto.meta_phone_number_id?.trim()) {
+        await this.assertWhatsappNumberFree(Number(company.id), updateCompanyDto.meta_phone_number_id.trim());
       }
 
       whatsappPatch.status = 'DISCONNECTED';
@@ -363,7 +369,7 @@ export class CompanyService {
   }
 
   async remove(id: number, user: AuthenticatedUser) {
-    if (id !== user.company_id) {
+    if (Number(id) !== Number(user.company_id)) {
       throw new NotFoundException('Company not found');
     }
     const company = await this.companyRepository.findOne({ where: { id } });

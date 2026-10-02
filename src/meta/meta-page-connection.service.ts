@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -106,6 +106,15 @@ export class MetaPageConnectionService {
     }
 
     const now = new Date();
+    const elsewhere = await this.connectionRepository.findOne({ where: { page_id: pageId, status: 'CONNECTED' } });
+    if (elsewhere && Number(elsewhere.company_id) !== Number(companyId)) {
+      throw new BadRequestException('This Facebook Page is already connected to another Agent Metra workspace. Disconnect it there first.');
+    }
+    // one active Page per workspace: switching Pages disconnects the previous one (its chats stay in the inbox)
+    await this.connectionRepository.update(
+      { company_id: companyId, status: 'CONNECTED' } as never,
+      { status: 'DISCONNECTED', updated_at: now } as never,
+    );
     const existing = await this.connectionRepository.findOne({
       where: { company_id: companyId, page_id: pageId },
     });

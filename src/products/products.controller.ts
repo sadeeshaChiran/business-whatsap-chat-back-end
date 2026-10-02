@@ -1,3 +1,4 @@
+import { ProductAvailabilityDto } from './dto/product-availability.dto';
 import {
   Body,
   Controller,
@@ -10,6 +11,7 @@ import {
   UploadedFile,
   UseGuards,
   UseInterceptors,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -80,6 +82,12 @@ export class ProductsController {
   @ApiParam({ name: 'id', type: Number })
   findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.productsService.findOne(+id, user);
+  }
+
+  /** Quick switch: { "available": false } or { "available": true, "variant_value": "Red / M" } */
+  @Patch(':id/availability')
+  setAvailability(@Param('id', ParseIntPipe) id: number, @Body() dto: ProductAvailabilityDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.productsService.setAvailability(id, dto.available, dto.variant_value, user);
   }
 
   @Patch(':id')

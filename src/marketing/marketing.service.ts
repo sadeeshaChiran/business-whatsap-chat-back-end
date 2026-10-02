@@ -1,4 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { PlanService } from '../platform/plan.service';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
@@ -30,6 +31,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     @InjectDataSource() private readonly dataSource: DataSource,
     @InjectRepository(BotConversation) private readonly conversationRepository: Repository<BotConversation>,
     @InjectRepository(BotMessage) private readonly messageRepository: Repository<BotMessage>,
+    @Optional() private readonly planService?: PlanService,
   ) {}
 
   onModuleInit() {
@@ -489,6 +491,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (params.length !== template.variables || params.some((p) => !p)) throw new BadRequestException(`This template needs ${template.variables} value(s).`);
     const contacts = await this.audienceContacts(companyId, dto.audience ?? {});
     if (!contacts.length) throw new BadRequestException('No WhatsApp contacts match this audience.');
+    // package limit: broadcast messages per calendar month (queued + sent)
+    const perMonth = this.planService ? (await this.planService.limitsForCompany(companyId)).numbers.broadcasts_per_month : null;
+    if (perMonth != null) {
+      const [used] = await this.dataSource.query(`
+        SELECT COUNT(*)::int AS n FROM marketing_broadcast_recipient r JOIN marketing_broadcast b ON b.id = r.broadcast_id
+         WHERE b.company_id = $1 AND r.status IN ('queued', 'sent') AND b.created_at >= date_trunc('month', NOW())`, [companyId]);
+      const left = Math.max(0, perMonth - num(used?.n));
+      if (contacts.length > left) {
+        throw new ForbiddenException({ statusCode: 403, error: 'Forbidden', code: 'LIMIT_REACHED', feature: 'broadcasts_per_month',
+          message: `Your package allows ${perMonth.toLocaleString()} broadcast messages per month – ${left.toLocaleString()} left, this broadcast needs ${contacts.length.toLocaleString()}. Choose a smaller group or upgrade.` });
+      }
+    }
     const scheduled = dto.send_now ? new Date() : dto.scheduled_at ? new Date(dto.scheduled_at) : null;
     if (scheduled && Number.isNaN(scheduled.getTime())) throw new BadRequestException('scheduled_at must be a date.');
     const [broadcast] = await this.dataSource.query(`

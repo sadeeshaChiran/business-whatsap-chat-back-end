@@ -109,6 +109,11 @@ export class CreateProductDto {
   @IsBoolean()
   show_to_bot?: boolean;
 
+  @ApiPropertyOptional({ example: true, description: 'Available / Unavailable (default available)' })
+  @IsOptional()
+  @IsBoolean()
+  is_available?: boolean;
+
   @ApiPropertyOptional({ type: [CreateProductVariantDto] })
   @IsOptional()
   @IsArray()

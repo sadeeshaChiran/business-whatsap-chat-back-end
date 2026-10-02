@@ -61,6 +61,14 @@ function holdMessage(language: string): string {
   return 'One moment please, our team is checking your order and will confirm it shortly.';
 }
 
+/** Sent when the customer tries to order something that is not available right now. */
+function unavailableMessage(language: string, item: string): string {
+  if (language === 'sinhala') return `සමාවෙන්න, ${item} දැනට ලබා ගත නොහැක. වෙන එකක් බලමුද?`;
+  if (language === 'tamil') return `மன்னிக்கவும், ${item} தற்போது கிடைக்கவில்லை. வேறு ஏதாவது பார்க்கலாமா?`;
+  if (language === 'sinhala_latin') return `Sorry, ${item} dan available naha. Wena ekak balamuda?`;
+  return `Sorry, ${item} is not available right now. Would you like to choose something else?`;
+}
+
 /** Sent when an order change could not be applied automatically. */
 function changeHoldMessage(language: string): string {
   if (language === 'sinhala') return 'ඔයාගේ වෙනස අපි සටහන් කරගත්තා. අපේ team එක check කරලා ඉක්මනින්ම confirm කරනවා.';
@@ -194,6 +202,9 @@ export class SalesBotEngineService implements OnModuleInit {
   /** Should the bot answer this chat right now? */
   private async botMayReply(company: Company | null, conversation: BotConversation, channelUser: BotChannelUser, simulated: boolean) {
     if (!company || !(await this.planService.planAllowsBot(company.plan)) || !company.bot_enabled) return false;
+    // package limits: Messenger / Instagram must be included in the package
+    const social = socialPlatformOf(channelUser.platform);
+    if (social && !(await this.planService.hasFeature(Number(company.id), social))) return false;
     // tokens used up / package expired / suspended → the bot stops, the chat stays with the agents
     if (!(await this.tokenQuota.canBotReply(Number(company.id)))) return false;
     if (conversation.status === 'active' || conversation.status === 'closed') return false; // an agent is handling it
@@ -520,6 +531,9 @@ export class SalesBotEngineService implements OnModuleInit {
       if (orderOutcome === 'summary' && session.pending_order) {
         replyOverride = summaryMessage(result.language, session.pending_order);
       }
+      if (orderOutcome.startsWith('unavailable:')) {
+        replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
+      }
       if (orderOutcome.startsWith('blocked:')) {
         replyOverride = holdMessage(result.language);
         await this.handoff(companyId, conversation, channelUser, 'order_check', `Order needs a check: ${orderOutcome.slice(8)}`);
@@ -532,6 +546,7 @@ export class SalesBotEngineService implements OnModuleInit {
       if (change.intent) intents.add(change.intent);
       if (change.invoice) invoiceOrderIds.push(change.invoice);
       if (change.hold) replyOverride = changeHoldMessage(result.language);
+      if (change.unavailable) replyOverride = unavailableMessage(result.language, change.unavailable);
       if (change.handoff) {
         await this.handoff(companyId, conversation, channelUser, 'bot_handoff', change.handoff);
         intents.add('handoff');
@@ -658,7 +673,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** Pending → the bot edits the order. Confirmed / Processing → request only. Shipped → request + a person. */
   private async handleOrderChange(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string }> {
+    change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string; unavailable?: string }> {
     const order = await this.findOpenOrder(companyId, channelUser.id, change.order_id);
     const request = String(change.request ?? '').trim() || 'wants to change the order';
     if (!order) return { intent: null };
@@ -676,6 +691,8 @@ export class SalesBotEngineService implements OnModuleInit {
     let weight = Number(order.total_weight_kg ?? 0);
     if (change.items?.length) {
       const priced = await this.priceItems(companyId, change.items);
+      // an item that is not available now → tell the customer, the order stays as it is
+      if (priced.problem.startsWith('unavailable:')) return { intent: null, unavailable: priced.problem.slice(12) };
       if (priced.problem || !priced.items.length) {
         await this.appendOrderNote(order.id, `🔔 Customer asked to change the order (not applied automatically: ${priced.problem || 'no items'}): ${request}`);
         await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${order.id}`, `${who}: ${request}`, conversation.id, order.id);
@@ -746,6 +763,7 @@ export class SalesBotEngineService implements OnModuleInit {
         relations: ['variants'],
       });
       if (!product) return { items: priced, problem: `unknown_product_${item.product_id}` };
+      if (product.is_available === false) return { items: priced, problem: `unavailable:${product.name}` };
       const options = productOptions(product);
       let unit = Number(product.price) || 0;
       let variantName = '';
@@ -757,6 +775,7 @@ export class SalesBotEngineService implements OnModuleInit {
         const byName = options.findIndex((option) => variantLabel(option).toLowerCase() === wanted || String(option.variant_value ?? '').trim().toLowerCase() === wanted);
         const index = byId && (!wanted || variantLabel(byId).toLowerCase() === wanted) ? Number(item.variant_id) - 1 : byName;
         if (index < 0) return { items: priced, problem: `choose_variant_for_${product.name}` };
+        if (options[index].available === false) return { items: priced, problem: `unavailable:${product.name} (${variantLabel(options[index])})` };
         unit = variantPrice(product, options[index]);
         variantName = variantLabel(options[index]);
         variantId = index + 1;
@@ -806,6 +825,10 @@ export class SalesBotEngineService implements OnModuleInit {
       return 'pending';
     }
 
+    // Not available right now → the bot tells the customer and keeps helping (no hand-over)
+    if (problem.startsWith('unavailable:')) {
+      return problem;
+    }
     // Something a person must look at (unknown product / variant, zero total)
     if (problem || subtotal <= 0) {
       session.pending_order = pending;

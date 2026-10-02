@@ -1,3 +1,4 @@
+import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
 import {
   Body, Controller, Delete, Get, Injectable, Logger, Module, NotFoundException, OnModuleDestroy, OnModuleInit, Param, ParseIntPipe, Post, Query, UseGuards,
 } from '@nestjs/common';
@@ -253,7 +254,8 @@ export class MobileService {
 @Controller('mobile')
 @ApiTags('Mobile app')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('mobile_app')
 export class MobileController {
   constructor(private readonly mobile: MobileService) {}
 

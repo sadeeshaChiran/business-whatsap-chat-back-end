@@ -10,13 +10,14 @@ import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 
-export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; image_url: string | null; weight_kg: number | null };
+export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; available?: boolean; image_url: string | null; weight_kg: number | null };
 export type ContextProduct = {
   id: number;
   name: string;
   category: string;
   price: number;
   stock: number | null;
+  available?: boolean;
   photo_count: number;
   image_urls: string[];
   description: string;
@@ -32,7 +33,7 @@ export type SalesBotContext = {
     payment_methods: string; tone: string; greeting: string; default_language: string; bot_name: string;
   };
   products: ContextProduct[];
-  services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null }>;
+  services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null; available: boolean }>;
   /** included_kg + per_extra_kg set = weight rule (fee = fee + extra kg × per_extra_kg) */
   delivery_zones: Array<{ area: string; fee: number; days: string; included_kg: number | null; per_extra_kg: number | null }>;
   policies: Array<{ question: string; answer: string }>;
@@ -104,10 +105,9 @@ export function optionWeight(option: ProductVariantOption): number | null {
   return option.weight != null && Number.isFinite(kg) && kg > 0 ? kg : null;
 }
 
+/** Availability → what the Python bot reads as stock: 0 = not available now, null = available (no counts). */
 function productStock(product: Product): number | null {
-  if (/out\s*of\s*stock/i.test(product.status ?? '')) return 0;
-  const quantity = toNumber(product.quantity);
-  return quantity > 0 ? quantity : null; // 0 usually means "not tracked"
+  return product.is_available === false ? 0 : null;
 }
 
 /**
@@ -196,6 +196,7 @@ export class SalesBotContextService {
       services: services.map((service) => ({
         service_id: service.id, name: service.name, description: service.description,
         price: toNumber(service.price), price_note: service.price_note, duration_min: service.duration_min,
+        available: service.is_available !== false,
       })),
       delivery_zones: zones.map((zone) => ({
         area: zone.area, fee: toNumber(zone.fee), days: zone.days,
@@ -248,6 +249,7 @@ export class SalesBotContextService {
       category: product.category?.name ?? '',
       price: toNumber(product.price),
       stock: productStock(product),
+      available: product.is_available !== false,
       photo_count: images.length,
       image_urls: images,
       description: String(product.description ?? '').slice(0, 600),
@@ -257,7 +259,8 @@ export class SalesBotContextService {
         variant_id: index + 1,
         name: variantLabel(option),
         price: variantPrice(product, option),
-        stock: typeof option.quantity === 'number' && option.quantity > 0 ? option.quantity : null,
+        stock: product.is_available === false || option.available === false ? 0 : null,
+        available: product.is_available !== false && option.available !== false,
         image_url: option.image_url?.trim() || null,
         weight_kg: optionWeight(option) ?? productWeight(product),
       })),

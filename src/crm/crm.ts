@@ -1,3 +1,4 @@
+import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
 import {
   BadRequestException, Body, Controller, Get, Injectable, Logger, Module, NotFoundException, OnModuleDestroy, OnModuleInit,
   Param, ParseIntPipe, Patch, Post, Query, Res, UploadedFile, UseGuards, UseInterceptors,
@@ -348,7 +349,8 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
 @Controller('crm')
 @ApiTags('CRM')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('crm')
 export class CrmController {
   constructor(private readonly crm: CrmService) {}
 
