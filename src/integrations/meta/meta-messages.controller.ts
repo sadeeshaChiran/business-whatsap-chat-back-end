@@ -36,6 +36,7 @@ type MessagingEvent = {
     mid?: string;
     text?: string;
     is_echo?: boolean;
+    app_id?: number | string;
     is_deleted?: boolean;
     attachments?: Attachment[];
     quick_reply?: { payload?: string };
@@ -115,16 +116,20 @@ export class MetaMessagesController {
       const companyId = Number(connection.company_id);
 
       for (const event of entry.messaging ?? []) {
-        const senderId = String(event.sender?.id ?? '').trim();
         const message = event.message;
         const postback = event.postback;
+        // echo = a message the Page itself sent (Messenger app, Business Suite, another tool) → customer is the recipient
+        const isEcho = Boolean(message?.is_echo);
+        const senderId = String((isEcho ? event.recipient?.id : event.sender?.id) ?? '').trim();
         if (!senderId || senderId === accountId) continue;
         const statusHandled = await this.applyMessageStatus(companyId, platform, accountId, senderId, event);
         if (statusHandled) {
           saved++;
           continue;
         }
-        if (message?.is_echo || message?.is_deleted) continue;
+        if (message?.is_deleted) continue;
+        // sent through this app (agent reply, bot, private reply) → already saved when it was sent
+        if (isEcho && String(message?.app_id ?? '') === String(process.env.META_APP_ID ?? '').trim()) continue;
         if (!message && !postback) continue;
 
         const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
@@ -144,14 +149,15 @@ export class MetaMessagesController {
         for (const [index, row] of rows.entries()) {
           await this.messageRepository.save(this.messageRepository.create({
             conversation_id: conversation.id,
-            direction: 'inbound',
+            direction: isEcho ? 'outbound' : 'inbound',
+            delivery_status: isEcho ? 'sent' : null,
             message_type: row.message_type,
             platform,
             // one Meta message can carry several attachments → keep ids unique
             provider_message_id: providerId ? (index === 0 ? providerId : `${providerId}:${index}`) : null,
             content: row.content,
             media_url: row.media_url,
-            source: 'meta-webhook',
+            source: isEcho ? 'meta-echo' : 'meta-webhook',
           }));
           saved++;
         }
@@ -160,8 +166,9 @@ export class MetaMessagesController {
         this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
           conversation_id: conversation.id,
           platform,
-          direction: 'inbound',
+          direction: isEcho ? 'outbound' : 'inbound',
         });
+        if (isEcho) continue; // the bot answers customers, not the Page's own messages
 
         // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
         // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).
