@@ -16,6 +16,7 @@ export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'broadcasts', label: 'WhatsApp broadcasts', kind: 'feature', group: 'Marketing', description: 'Send approved templates to customer groups.' },
   { key: 'broadcasts_per_month', label: 'Broadcast messages per month', kind: 'number', group: 'Marketing', description: 'Empty = unlimited.' },
   { key: 'reports_days', label: 'Report history (days)', kind: 'number', group: 'Reports', description: 'How far back Bot reports go. Empty = unlimited.' },
+  { key: 'social', label: 'Social – comments, posts & analytics', kind: 'feature', group: 'Marketing', description: 'Facebook / Instagram comment replies (AI), posting & scheduling, Page and Instagram analytics.' },
   { key: 'mobile_app', label: 'Mobile app', kind: 'feature', group: 'Apps', description: 'Use the Agent Metra Android / iPhone app.' },
 ];
 

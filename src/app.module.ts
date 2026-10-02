@@ -29,6 +29,7 @@ import { VerificationModule } from './verification/verification';
 import { CrmModule } from './crm/crm';
 import { MobileModule } from './mobile/mobile';
 import { MarketingModule } from './marketing/marketing.controller';
+import { SocialModule } from './social/social.controller';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -71,6 +72,7 @@ const supabaseModules: Array<DynamicModule | typeof CustomersModule> = [
     CrmModule,
     MobileModule,
     MarketingModule,
+    SocialModule,
     SalesBotModule,
   ],
   controllers: [AppController],

@@ -48,5 +48,6 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
   ],
   controllers: [SalesBotController],
   providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, PusherService, MetaSocialSenderService],
+  exports: [SalesBotContextService],
 })
 export class SalesBotModule {}
