@@ -168,23 +168,35 @@ export class MetaGraphService {
     return { app_id: cfg.appId, config_id: whatsappConfigId, graph_version: cfg.graphVersion };
   }
 
-  async exchangeEmbeddedSignupCode(code: string): Promise<string> {
+  /**
+   * Swaps the Embedded Signup code for a business token. Meta only accepts the swap when it matches how the code
+   * was created, so we try, in order: no redirect_uri (documented for Embedded Signup), an empty redirect_uri, the
+   * dashboard page the popup was opened from, and META_OAUTH_REDIRECT_URI. A rejected attempt does not use up the code.
+   */
+  async exchangeEmbeddedSignupCode(code: string, pageUrl?: string): Promise<string> {
     const cfg = this.getConfig();
-    const body = new URLSearchParams({
-      client_id: cfg.appId,
-      client_secret: cfg.appSecret,
-      code: code.trim(),
-    });
-    const response = await fetch(this.graphUrl('/oauth/access_token', cfg), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-    const payload = (await response.json()) as { access_token?: string } & GraphErrorBody;
-    if (!response.ok || !payload.access_token?.trim()) {
-      throw new BadRequestException(payload.error?.message ?? 'Meta did not return a WhatsApp access token.');
+    const candidates: Array<string | null> = [null, ''];
+    for (const uri of [pageUrl?.trim(), pageUrl?.trim().replace(/\/+$/, '') + '/', cfg.redirectUri?.trim()]) {
+      if (uri && uri !== '/' && !candidates.includes(uri)) candidates.push(uri);
     }
-    return payload.access_token.trim();
+    let lastError = 'Meta did not return a WhatsApp access token.';
+    for (const redirectUri of candidates) {
+      const params = new URLSearchParams({ client_id: cfg.appId, client_secret: cfg.appSecret, code: code.trim() });
+      if (redirectUri !== null) params.set('redirect_uri', redirectUri);
+      const response = await fetch(`${this.graphUrl('/oauth/access_token', cfg)}?${params.toString()}`, { method: 'GET' });
+      const payload = (await response.json().catch(() => ({}))) as { access_token?: string } & GraphErrorBody;
+      if (response.ok && payload.access_token?.trim()) return payload.access_token.trim();
+      lastError = payload.error?.message ?? lastError;
+      // only a redirect_uri mismatch is worth another try (expired / used codes fail the same way every time)
+      if (!/redirect_uri/i.test(lastError)) break;
+    }
+    if (/redirect_uri/i.test(lastError)) {
+      throw new BadRequestException(`Meta: ${lastError} – In the Meta app open Facebook Login for Business → Settings and add your dashboard address (${pageUrl || 'https://your-dashboard'}) to "Valid OAuth Redirect URIs", then try again.`);
+    }
+    if (/expired|has been used|already been used/i.test(lastError)) {
+      throw new BadRequestException('The Meta code expired before it reached the server (codes last only a few minutes). Please run the setup again.');
+    }
+    throw new BadRequestException(`Meta: ${lastError}`);
   }
 
   /**

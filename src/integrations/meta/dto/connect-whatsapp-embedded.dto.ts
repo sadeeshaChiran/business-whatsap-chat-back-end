@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class ConnectWhatsappEmbeddedDto {
   @IsString()
@@ -15,4 +15,10 @@ export class ConnectWhatsappEmbeddedDto {
   @IsString()
   @Matches(/^\d+$/)
   phone_number_id?: string;
+
+  /** The dashboard page the Meta popup was opened from (used for the code swap when Meta needs a redirect_uri). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  page_url?: string;
 }
