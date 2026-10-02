@@ -22,6 +22,8 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SocialService.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private syncTimer: NodeJS.Timeout | null = null;
+  private syncing = false;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -32,9 +34,13 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     SocialHook.register((body) => this.captureWebhook(body));
     this.timer = setInterval(() => void this.publishDue(), 60_000);
+    this.syncTimer = setInterval(() => void this.autoSync(), 2 * 60_000);
   }
 
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.syncTimer) clearInterval(this.syncTimer);
+  }
 
   /* ───────────────────────── basics ───────────────────────── */
 
@@ -190,9 +196,33 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   /** Pulls comments of the latest posts (works without the webhook; also fills post text / links). */
   async sync(user: AuthenticatedUser) {
-    const companyId = await this.adminCompany(user);
+    return this.syncCompany(await this.adminCompany(user));
+  }
+
+  /** Every 2 minutes: pull new comments for companies with AI on, so auto-reply works even when Meta's webhook does not arrive. */
+  async autoSync() {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      const rows = await this.dataSource.query(`
+        SELECT DISTINCT s.company_id FROM social_settings s
+          JOIN meta_page_connections m ON m.company_id = s.company_id AND m.status = 'CONNECTED'
+         WHERE s.auto_reply <> 'off'`);
+      for (const row of rows) {
+        await this.syncCompany(Number(row.company_id)).catch((error: unknown) =>
+          this.logger.warn(`auto sync ${row.company_id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      this.logger.warn(`auto sync: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async syncCompany(companyId: number) {
     const page = await this.page(companyId);
     let added = 0;
+    const fresh: Array<{ id: number; created: Date }> = [];
     try {
       const posts = await graphRequest<{ data: Array<{ id: string; message?: string; permalink_url?: string }> }>(
         'GET', `/${page.page_id}/posts`, page.page_access_token, { fields: 'id,message,permalink_url,created_time', limit: '15' });
@@ -210,7 +240,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
             author_name: c.from?.name ?? '', message: c.message ?? '', post_text: post.message ?? '', post_link: post.permalink_url ?? null,
             created_time: c.created_time ? new Date(c.created_time) : new Date(), is_hidden: c.is_hidden,
           });
-          if (saved.isNew) added += 1;
+          if (saved.isNew) { added += 1; fresh.push({ id: saved.id, created: c.created_time ? new Date(c.created_time) : new Date() }); }
         }
       }
       if (page.instagram_business_account_id) {
@@ -227,7 +257,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
                 platform: 'instagram', comment_id: c.id, post_id: m.id, author_id: c.from?.id ?? null, author_name: c.username ?? c.from?.username ?? '',
                 message: c.text ?? '', post_text: m.caption ?? '', post_link: m.permalink ?? null, created_time: c.timestamp ? new Date(c.timestamp) : new Date(), is_hidden: c.hidden,
               });
-              if (saved.isNew) added += 1;
+              if (saved.isNew) { added += 1; fresh.push({ id: saved.id, created: c.timestamp ? new Date(c.timestamp) : new Date() }); }
             }
             for (const r of c.replies?.data ?? []) {
               if (r.from?.id === page.instagram_business_account_id) await this.markAnswered(c.id, r.text ?? '', r.id, r.timestamp ? new Date(r.timestamp) : new Date());
@@ -238,6 +268,9 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.graphError(error);
     }
+    // the webhook may not have delivered these: auto-answer only recent ones, never old history
+    const cutoff = Date.now() - 2 * 86_400_000;
+    for (const c of fresh) if (c.created.getTime() > cutoff) await this.autoHandle(companyId, c.id);
     await this.dataSource.query(`
       INSERT INTO social_settings (company_id, last_sync_at) VALUES ($1, NOW())
       ON CONFLICT (company_id) DO UPDATE SET last_sync_at = NOW()`, [companyId]);
@@ -405,6 +438,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const settings = await this.settings(companyId);
     if (settings.auto_reply === 'off') return;
     try {
+      if ((await this.comment(companyId, id)).status !== 'open') return; // already answered / hidden
       const ai = await this.suggestFor(companyId, id);
       if (ai.hide && settings.auto_hide_spam) {
         const c = await this.comment(companyId, id);
