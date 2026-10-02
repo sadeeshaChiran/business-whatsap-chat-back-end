@@ -1,3 +1,4 @@
+import { SocialHook } from '../../common/social-hook';
 import { MarketingHook } from '../../common/marketing-hook';
 import {
   Body, Controller, ForbiddenException, Get, Headers, Post, Query, Req,
@@ -96,6 +97,8 @@ export class MetaMessagesController {
     }
 
     let saved = 0;
+    // comments and posts (Page "feed" / Instagram "comments") go to the Social section
+    SocialHook.capture(body);
     const platform = body?.object === 'instagram' ? 'instagram' : body?.object === 'page' ? 'messenger' : null;
     if (!platform) return { ok: true, saved };
 

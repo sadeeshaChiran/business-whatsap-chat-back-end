@@ -41,7 +41,9 @@ export class MetaGraphService {
       process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
     const scopes =
       process.env.META_OAUTH_SCOPES?.trim() ||
-      'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management';
+      'pages_show_list,pages_read_engagement,pages_messaging,pages_manage_metadata,instagram_basic,instagram_manage_messages,business_management,' +
+      // Social section: comments, posts, insights
+      'pages_manage_engagement,pages_read_user_content,pages_manage_posts,read_insights,instagram_manage_comments,instagram_content_publish,instagram_manage_insights';
     const configId = process.env.META_OAUTH_CONFIG_ID?.trim() ?? '';
 
     if (!appId || !appSecret || !redirectUri) {
@@ -205,7 +207,7 @@ export class MetaGraphService {
    */
   async subscribePageMessaging(pageId: string, pageAccessToken: string): Promise<void> {
     const cfg = this.getConfig();
-    const params = new URLSearchParams({ subscribed_fields: 'messages,messaging_postbacks,message_deliveries,message_reads' });
+    const params = new URLSearchParams({ subscribed_fields: 'messages,messaging_postbacks,message_deliveries,message_reads,feed' });
     const url = `${this.graphUrl(`/${encodeURIComponent(pageId)}/subscribed_apps`, cfg)}?${params.toString()}`;
     const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${pageAccessToken}` } });
     const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
