@@ -90,7 +90,7 @@ export class MetaController {
     const existing = await this.whatsappChannelService.getForCompany(user.company_id);
     if (body.phone_number_id) await this.companyService.assertWhatsappNumberFree(Number(company.id), body.phone_number_id.trim());
 
-    const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code);
+    const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code, body.page_url);
     // Meta's browser message can get lost (popup closed early, blockers): then find the shared account + number from the token
     let wabaId = body.waba_id?.trim() ?? '';
     let phoneNumberId = body.phone_number_id?.trim() ?? '';
