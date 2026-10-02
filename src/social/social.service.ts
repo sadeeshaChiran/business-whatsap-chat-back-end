@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
+import { PusherService } from '../common/pusher.service';
 import { SocialHook } from '../common/social-hook';
 import { GraphError, graphRequest } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
@@ -20,6 +21,7 @@ const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) 
 @Injectable()
 export class SocialService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SocialService.name);
+  private readonly pusher = new PusherService();
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private syncTimer: NodeJS.Timeout | null = null;
@@ -338,8 +340,14 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const sender = c.platform === 'instagram' ? page.instagram_business_account_id : page.page_id;
     if (!sender) throw new BadRequestException('Instagram is not linked to this Page.');
     try {
-      await graphRequest('POST', `/${sender}/messages`, page.page_access_token, { recipient: { comment_id: c.comment_id }, message: { text } });
+      const sent = await graphRequest<{ recipient_id?: string; message_id?: string }>('POST', `/${sender}/messages`, page.page_access_token,
+        { recipient: { comment_id: c.comment_id }, message: { text } });
       await this.dataSource.query(`UPDATE social_comment SET private_reply = $2, private_replied_at = NOW(), updated_at = NOW() WHERE id = $1`, [id, text]);
+      if (sent?.recipient_id) {
+        await this.saveToInbox(companyId, c.platform === 'instagram' ? 'instagram' : 'messenger', sender, String(sent.recipient_id),
+          c.author_name ?? '', text, sent.message_id ?? null).catch((error: unknown) =>
+          this.logger.warn(`private reply ${id} → inbox: ${error instanceof Error ? error.message : String(error)}`));
+      }
     } catch (error) {
       this.graphError(error, ' (private replies work within 7 days of the comment)');
     }
@@ -392,6 +400,31 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     await this.comment(companyId, id);
     await this.dataSource.query(`UPDATE social_comment SET status = CASE WHEN $2 THEN 'done' WHEN our_reply IS NOT NULL THEN 'replied' ELSE 'open' END, updated_at = NOW() WHERE id = $1`, [id, done]);
     return this.comment(companyId, id);
+  }
+
+  /** Shows a private reply in the chat inbox (same contact + conversation the customer's Messenger / Instagram answers will use). */
+  private async saveToInbox(companyId: number, platform: 'messenger' | 'instagram', accountId: string, customerId: string, name: string, text: string, mid: string | null) {
+    let [user] = await this.dataSource.query(
+      `SELECT id FROM bot_channel_user WHERE company_id = $1 AND platform = $2 AND source_account_id = $3 AND external_user_id = $4 LIMIT 1`,
+      [companyId, platform, accountId, customerId]);
+    if (!user) {
+      [user] = await this.dataSource.query(`
+        INSERT INTO bot_channel_user (company_id, platform, external_user_id, source_account_id, display_name, language, language_locked, bot_enabled, manual_mode, last_seen_at)
+        VALUES ($1, $2, $3, $4, $5, 'English', FALSE, FALSE, FALSE, NOW()) RETURNING id`,
+        [companyId, platform, customerId, accountId, (name || customerId).slice(0, 250)]);
+    }
+    let [conversation] = await this.dataSource.query(
+      `SELECT id, status FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1`, [user.id]);
+    if (!conversation || conversation.status === 'closed') {
+      [conversation] = await this.dataSource.query(`
+        INSERT INTO bot_conversation (bot_channel_user_id, status, assignment_mode, last_message_at) VALUES ($1, 'open', 'unassigned', NOW()) RETURNING id`, [user.id]);
+    } else {
+      await this.dataSource.query(`UPDATE bot_conversation SET last_message_at = NOW() WHERE id = $1`, [conversation.id]);
+    }
+    await this.dataSource.query(`
+      INSERT INTO bot_message (conversation_id, direction, message_type, platform, provider_message_id, delivery_status, content, source)
+      VALUES ($1, 'outbound', 'text', $2, $3, 'sent', $4, 'social-private-reply')`, [conversation.id, platform, mid, text]);
+    this.pusher.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversation.id, platform, direction: 'outbound' });
   }
 
   /* ───── AI ───── */

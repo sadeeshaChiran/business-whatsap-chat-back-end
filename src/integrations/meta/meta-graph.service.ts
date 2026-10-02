@@ -207,7 +207,7 @@ export class MetaGraphService {
    */
   async subscribePageMessaging(pageId: string, pageAccessToken: string): Promise<void> {
     const cfg = this.getConfig();
-    const params = new URLSearchParams({ subscribed_fields: 'messages,messaging_postbacks,message_deliveries,message_reads,feed' });
+    const params = new URLSearchParams({ subscribed_fields: 'messages,message_echoes,messaging_postbacks,message_deliveries,message_reads,feed' });
     const url = `${this.graphUrl(`/${encodeURIComponent(pageId)}/subscribed_apps`, cfg)}?${params.toString()}`;
     const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${pageAccessToken}` } });
     const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
