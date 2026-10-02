@@ -1,7 +1,7 @@
 import { SocialHook } from '../../common/social-hook';
 import { MarketingHook } from '../../common/marketing-hook';
 import {
-  Body, Controller, ForbiddenException, Get, Headers, Logger, OnModuleDestroy, OnModuleInit, Post, Query, Req,
+  Body, Controller, ForbiddenException, Get, Headers, Logger, Post, Query, Req,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
@@ -51,11 +51,9 @@ type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'>;
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 @Controller('integrations/meta/messages')
-export class MetaMessagesController implements OnModuleInit, OnModuleDestroy {
+export class MetaMessagesController {
   private readonly pusherService = new PusherService();
   private readonly logger = new Logger(MetaMessagesController.name);
-  private pollTimer: NodeJS.Timeout | null = null;
-  private polling = false;
   constructor(
     @InjectRepository(MetaPageConnection)
     private readonly connectionRepository: Repository<MetaPageConnection>,
@@ -131,7 +129,7 @@ export class MetaMessagesController implements OnModuleInit, OnModuleDestroy {
     return { ok: true, saved };
   }
 
-  /** One Messenger / Instagram event (from the webhook or the backup poll) → contact, conversation, messages, bot. */
+  /** One Messenger / Instagram webhook event → contact, conversation, messages, bot. */
   private async handleEvent(connection: MetaPageConnection, companyId: number, platform: 'messenger' | 'instagram', accountId: string,
     event: MessagingEvent, source: string): Promise<number> {
     let saved = 0;
@@ -204,75 +202,6 @@ export class MetaMessagesController implements OnModuleInit, OnModuleDestroy {
       await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
     }
     return saved;
-  }
-
-  /* ───────── backup: pull new messages every minute (when Meta's webhook does not arrive) ───────── */
-
-  onModuleInit() {
-    this.pollTimer = setInterval(() => void this.pollConversations(), 60_000);
-  }
-
-  onModuleDestroy() {
-    if (this.pollTimer) clearInterval(this.pollTimer);
-  }
-
-  private async pollConversations() {
-    if (this.polling) return;
-    this.polling = true;
-    try {
-      const connections = await this.connectionRepository.find({ where: { status: 'CONNECTED' } });
-      for (const connection of connections) {
-        if (!connection.page_id || !connection.page_access_token) continue;
-        await this.pollAccount(connection, 'messenger', connection.page_id).catch((error: unknown) =>
-          this.logger.warn(`messenger poll ${connection.page_id}: ${error instanceof Error ? error.message : String(error)}`));
-        if (connection.instagram_business_account_id) {
-          await this.pollAccount(connection, 'instagram', connection.instagram_business_account_id).catch((error: unknown) =>
-            this.logger.warn(`instagram poll ${connection.instagram_business_account_id}: ${error instanceof Error ? error.message : String(error)}`));
-        }
-      }
-    } catch (error) {
-      this.logger.warn(`message poll: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      this.polling = false;
-    }
-  }
-
-  private async pollAccount(connection: MetaPageConnection, platform: 'messenger' | 'instagram', accountId: string) {
-    type GraphMessage = {
-      id: string; message?: string; created_time?: string; from?: { id?: string }; to?: { data?: Array<{ id?: string }> };
-      attachments?: { data?: Array<{ mime_type?: string; name?: string; file_url?: string; image_data?: { url?: string }; video_data?: { url?: string } }> };
-    };
-    const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
-    const params = new URLSearchParams({
-      platform, limit: '10', access_token: connection.page_access_token,
-      fields: 'updated_time,messages.limit(10){id,message,created_time,from,to,attachments{mime_type,name,file_url,image_data,video_data}}',
-    });
-    const res = await fetch(`https://graph.facebook.com/${version}/${connection.page_id}/conversations?${params.toString()}`, { signal: AbortSignal.timeout(20_000) });
-    const json = (await res.json().catch(() => ({}))) as { data?: Array<{ updated_time?: string; messages?: { data?: GraphMessage[] } }>; error?: { message?: string } };
-    if (!res.ok) throw new Error(json.error?.message ?? `Meta returned ${res.status}`);
-
-    const cutoff = Date.now() - 15 * 60_000; // only recent messages – never import old history as new chats
-    const companyId = Number(connection.company_id);
-    for (const thread of json.data ?? []) {
-      if (thread.updated_time && new Date(thread.updated_time).getTime() < cutoff) continue;
-      for (const m of [...(thread.messages?.data ?? [])].reverse()) {
-        if (!m.id || !m.created_time || new Date(m.created_time).getTime() < cutoff) continue;
-        const fromId = String(m.from?.id ?? '');
-        const isEcho = fromId === accountId;
-        const customerId = isEcho ? String(m.to?.data?.[0]?.id ?? '') : fromId;
-        if (!customerId) continue;
-        const attachments: Attachment[] = (m.attachments?.data ?? []).map((a) => {
-          const url = a.image_data?.url ?? a.video_data?.url ?? a.file_url ?? '';
-          const type = a.image_data ? 'image' : a.video_data ? 'video' : String(a.mime_type ?? '').startsWith('audio') ? 'audio' : 'file';
-          return { type, title: a.name, payload: { url } };
-        });
-        const event: MessagingEvent = {
-          sender: { id: isEcho ? accountId : customerId }, recipient: { id: isEcho ? customerId : accountId },
-          message: { mid: m.id, text: m.message ?? '', is_echo: isEcho, attachments: attachments.length ? attachments : undefined },
-        };
-        await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-poll');
-      }
-    }
   }
 
   /* ───────── message → rows in the formats the inbox understands ───────── */
