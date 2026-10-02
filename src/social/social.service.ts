@@ -22,6 +22,8 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SocialService.name);
   private timer: NodeJS.Timeout | null = null;
   private running = false;
+  private syncTimer: NodeJS.Timeout | null = null;
+  private syncing = false;
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
@@ -32,9 +34,13 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     SocialHook.register((body) => this.captureWebhook(body));
     this.timer = setInterval(() => void this.publishDue(), 60_000);
+    this.syncTimer = setInterval(() => void this.autoSync(), 2 * 60_000);
   }
 
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleDestroy() {
+    if (this.timer) clearInterval(this.timer);
+    if (this.syncTimer) clearInterval(this.syncTimer);
+  }
 
   /* ───────────────────────── basics ───────────────────────── */
 
@@ -190,7 +196,30 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   /** Pulls comments of the latest posts (works without the webhook; also fills post text / links). */
   async sync(user: AuthenticatedUser) {
-    const companyId = await this.adminCompany(user);
+    return this.syncCompany(await this.adminCompany(user));
+  }
+
+  /** Every 2 minutes: pull new comments for companies with AI on, so auto-reply works even when Meta's webhook does not arrive. */
+  async autoSync() {
+    if (this.syncing) return;
+    this.syncing = true;
+    try {
+      const rows = await this.dataSource.query(`
+        SELECT DISTINCT s.company_id FROM social_settings s
+          JOIN meta_page_connections m ON m.company_id = s.company_id AND m.status = 'CONNECTED'
+         WHERE s.auto_reply <> 'off'`);
+      for (const row of rows) {
+        await this.syncCompany(Number(row.company_id)).catch((error: unknown) =>
+          this.logger.warn(`auto sync ${row.company_id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      this.logger.warn(`auto sync: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  private async syncCompany(companyId: number) {
     const page = await this.page(companyId);
     let added = 0;
     const fresh: Array<{ id: number; created: Date }> = [];
