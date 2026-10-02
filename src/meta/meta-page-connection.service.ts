@@ -81,6 +81,7 @@ export class MetaPageConnectionService {
       id: page.id,
       name: page.name,
       has_instagram: Boolean(page.instagram_business_account_id),
+      instagram_username: page.instagram_username ?? null,
     }));
   }
 
