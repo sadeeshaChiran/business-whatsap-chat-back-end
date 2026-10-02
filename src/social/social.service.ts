@@ -193,6 +193,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const companyId = await this.adminCompany(user);
     const page = await this.page(companyId);
     let added = 0;
+    const fresh: Array<{ id: number; created: Date }> = [];
     try {
       const posts = await graphRequest<{ data: Array<{ id: string; message?: string; permalink_url?: string }> }>(
         'GET', `/${page.page_id}/posts`, page.page_access_token, { fields: 'id,message,permalink_url,created_time', limit: '15' });
@@ -210,7 +211,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
             author_name: c.from?.name ?? '', message: c.message ?? '', post_text: post.message ?? '', post_link: post.permalink_url ?? null,
             created_time: c.created_time ? new Date(c.created_time) : new Date(), is_hidden: c.is_hidden,
           });
-          if (saved.isNew) added += 1;
+          if (saved.isNew) { added += 1; fresh.push({ id: saved.id, created: c.created_time ? new Date(c.created_time) : new Date() }); }
         }
       }
       if (page.instagram_business_account_id) {
@@ -227,7 +228,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
                 platform: 'instagram', comment_id: c.id, post_id: m.id, author_id: c.from?.id ?? null, author_name: c.username ?? c.from?.username ?? '',
                 message: c.text ?? '', post_text: m.caption ?? '', post_link: m.permalink ?? null, created_time: c.timestamp ? new Date(c.timestamp) : new Date(), is_hidden: c.hidden,
               });
-              if (saved.isNew) added += 1;
+              if (saved.isNew) { added += 1; fresh.push({ id: saved.id, created: c.timestamp ? new Date(c.timestamp) : new Date() }); }
             }
             for (const r of c.replies?.data ?? []) {
               if (r.from?.id === page.instagram_business_account_id) await this.markAnswered(c.id, r.text ?? '', r.id, r.timestamp ? new Date(r.timestamp) : new Date());
@@ -238,6 +239,9 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.graphError(error);
     }
+    // the webhook may not have delivered these: auto-answer only recent ones, never old history
+    const cutoff = Date.now() - 2 * 86_400_000;
+    for (const c of fresh) if (c.created.getTime() > cutoff) await this.autoHandle(companyId, c.id);
     await this.dataSource.query(`
       INSERT INTO social_settings (company_id, last_sync_at) VALUES ($1, NOW())
       ON CONFLICT (company_id) DO UPDATE SET last_sync_at = NOW()`, [companyId]);
@@ -405,6 +409,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const settings = await this.settings(companyId);
     if (settings.auto_reply === 'off') return;
     try {
+      if ((await this.comment(companyId, id)).status !== 'open') return; // already answered / hidden
       const ai = await this.suggestFor(companyId, id);
       if (ai.hide && settings.auto_hide_spam) {
         const c = await this.comment(companyId, id);
