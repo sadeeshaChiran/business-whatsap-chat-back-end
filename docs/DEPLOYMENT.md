@@ -63,10 +63,20 @@ server {
 }
 ```
 
-## 4. AI sales bot
+## 4. AI sales bot (`agent-metra-sales-bot`, FastAPI)
 
-No change: deploy it as before and set `SALES_BOT_URL` + `SALES_BOT_API_KEY` in the API `.env`.
-The old MySQL knowledge bot is no longer needed (AI knowledge and documents are read by the sales bot straight from Supabase).
+Reply logic unchanged. In its `.env`:
+
+| Setting | Value |
+| --- | --- |
+| `GEMINI_API_KEY` | **new** Google AI key (the old one was committed in the bot's git history) |
+| `BOT_API_KEY` | **new** long random value – the same value as `SALES_BOT_API_KEY` in the API `.env` |
+| `BOT_MODEL`, `THINKING_LEVEL` | as before (e.g. `gemini-3.8-flash`, `low`) |
+| `EXPLICIT_CACHE=true` | keep on – about 70–80 % cheaper input per message |
+| `DATABASE_URL` | leave empty – the API sends all business data with each message |
+
+Run one uvicorn process: `uvicorn app.main:app --host 127.0.0.1 --port 8000`, keep the port private, and set
+`SALES_BOT_URL=http://127.0.0.1:8000` in the API `.env`. The old MySQL knowledge bot is not needed any more.
 
 ## 5. After deploy – 5 minute smoke test
 
