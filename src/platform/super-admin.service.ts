@@ -55,9 +55,9 @@ export class SuperAdminService {
 
   async companies(query: ListQueryDto) {
     const search = String(query.search ?? '').trim().toLowerCase();
-    const rows: Array<{ id: number; name: string; plan: string; created_at: Date; admin_email: string | null; agents: number; last_active: Date | null }> =
+    const rows: Array<{ id: number; name: string; plan: string; status: string; created_at: Date; admin_email: string | null; agents: number; last_active: Date | null }> =
       await this.dataSource.query(`
-        SELECT c.id, c.company_name AS name, c.plan, c.created_at,
+        SELECT c.id, c.company_name AS name, c.plan, c.status, c.created_at,
                (SELECT email FROM app_user u WHERE u.id = c.admin_user_id) AS admin_email,
                (SELECT COUNT(*) FROM app_user u WHERE u.company_id = c.id)::int AS agents,
                (SELECT MAX(created_at) FROM bot_ai_usage a WHERE a.company_id = c.id) AS last_active
@@ -66,19 +66,31 @@ export class SuperAdminService {
             OR EXISTS (SELECT 1 FROM app_user u WHERE u.company_id = c.id AND LOWER(u.email) LIKE '%' || $1 || '%')
          ORDER BY c.id DESC LIMIT 500`, [search]);
     const out: Array<Record<string, any> & { package_name: string | null; blocked: boolean; percent: number }> = [];
-    for (const row of rows) {
-      const usage = await this.quota.usage(Number(row.id));
-      const [cost] = await this.dataSource.query(
-        `SELECT COALESCE(SUM(cost_usd), 0) AS cost FROM bot_ai_usage WHERE company_id = $1 AND created_at >= $2`,
-        [row.id, usage.token_period_start]);
-      out.push({
-        id: Number(row.id), name: row.name, admin_email: row.admin_email, agents: num(row.agents),
-        created_at: row.created_at, last_active: row.last_active,
-        package_id: usage.package?.id ?? null, package_name: usage.package?.name ?? null, plan: row.plan,
-        billing_cycle: usage.billing_cycle, status: usage.status, period_end: usage.period_end,
-        tokens_used: usage.used, tokens_quota: usage.quota, tokens_extra: usage.extra, percent: usage.percent,
-        token_period_end: usage.token_period_end, blocked: usage.blocked, blocked_reason: usage.blocked_reason,
-        cost_this_period_usd: num(cost?.cost),
+    // usage per company, 8 at a time (was one by one – slow with many companies)
+    for (let index = 0; index < rows.length; index += 8) {
+      const chunk = rows.slice(index, index + 8);
+      const usages = await Promise.all(chunk.map((row) => this.quota.usage(Number(row.id))));
+      const costs: Array<{ company_id: number; cost: string }> = chunk.length
+        ? await this.dataSource.query(
+            `SELECT a.company_id, COALESCE(SUM(a.cost_usd), 0) AS cost
+               FROM bot_ai_usage a
+               JOIN UNNEST($1::bigint[], $2::timestamptz[]) AS p(company_id, since) ON p.company_id = a.company_id AND a.created_at >= p.since
+              GROUP BY a.company_id`,
+            [chunk.map((row) => Number(row.id)), usages.map((usage) => usage.token_period_start)],
+          )
+        : [];
+      const costById = new Map(costs.map((row) => [Number(row.company_id), num(row.cost)]));
+      chunk.forEach((row, i) => {
+        const usage = usages[i];
+        out.push({
+          id: Number(row.id), name: row.name, admin_email: row.admin_email, agents: num(row.agents),
+          created_at: row.created_at, last_active: row.last_active, company_status: row.status ?? 'ACTIVE',
+          package_id: usage.package?.id ?? null, package_name: usage.package?.name ?? null, plan: row.plan,
+          billing_cycle: usage.billing_cycle, status: usage.status, period_end: usage.period_end,
+          tokens_used: usage.used, tokens_quota: usage.quota, tokens_extra: usage.extra, percent: usage.percent,
+          token_period_end: usage.token_period_end, blocked: usage.blocked, blocked_reason: usage.blocked_reason,
+          cost_this_period_usd: costById.get(Number(row.id)) ?? 0,
+        });
       });
     }
     return out;
@@ -97,6 +109,7 @@ export class SuperAdminService {
         FROM generate_series(CURRENT_DATE - 29, CURRENT_DATE, INTERVAL '1 day') d ORDER BY d`, [id]);
     return {
       id: Number(company.id), name: company.name, plan: company.plan, business_category: company.business_category,
+      status: company.status ?? 'ACTIVE',
       usage,
       adjustments: adjustments.map((row) => ({ ...row, tokens: num(row.tokens), active: !row.expires_at || new Date(row.expires_at) > new Date() })),
       daily: daily.map((row) => ({ day: row.day, tokens: num(row.tokens), cost_usd: num(row.cost), replies: num(row.replies) })),

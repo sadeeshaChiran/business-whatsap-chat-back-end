@@ -1,46 +1,24 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Patch,
-  Param,
-  Delete,
-  ParseIntPipe,
-} from '@nestjs/common';
-import { IndustryService } from './industry.service';
-import { CreateIndustryDto } from './dto/create-industry.dto';
-import { UpdateIndustryDto } from './dto/update-industry.dto';
+import { Controller, Get, Module, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { InjectRepository, TypeOrmModule } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AuthModule } from '../../auth/auth.module';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { Industry } from './entities/industry.entity';
 
+/** Business types for the company profile (read-only). */
 @Controller('industry')
+@ApiTags('Company')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 export class IndustryController {
-  constructor(private readonly industryService: IndustryService) {}
-
-  @Post()
-  create(@Body() createIndustryDto: CreateIndustryDto) {
-    return this.industryService.create(createIndustryDto);
-  }
+  constructor(@InjectRepository(Industry) private readonly industries: Repository<Industry>) {}
 
   @Get()
-  findAll() {
-    return this.industryService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return this.industryService.findOne(id);
-  }
-
-  @Patch(':id')
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() updateIndustryDto: UpdateIndustryDto,
-  ) {
-    return this.industryService.update(id, updateIndustryDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.industryService.remove(id);
+  list() {
+    return this.industries.find({ where: { is_active: true }, order: { name: 'ASC' } });
   }
 }
+
+@Module({ imports: [AuthModule, TypeOrmModule.forFeature([Industry])], controllers: [IndustryController] })
+export class IndustryModule {}

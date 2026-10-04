@@ -1,7 +1,8 @@
+import { SkipThrottle } from '@nestjs/throttler';
 import { SocialHook } from '../../common/social-hook';
 import { MarketingHook } from '../../common/marketing-hook';
 import {
-  Body, Controller, ForbiddenException, Get, Headers, Logger, Post, Query, Req,
+  Body, Controller, ForbiddenException, Get, Headers, HttpCode, Logger, Post, Query, Req,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
@@ -81,6 +82,8 @@ export class MetaMessagesController {
   }
 
   @Post('webhook')
+  @SkipThrottle()
+  @HttpCode(200)
   @RawResponse()
   async receive(
     @Body() body: WebhookBody,

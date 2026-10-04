@@ -7,6 +7,7 @@ import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, Is
 import type { Response } from 'express';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
@@ -72,6 +73,7 @@ class CreateAudienceDto {
 @ApiTags('Marketing')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, FeatureGuard)
+@AdminOnly()
 export class MarketingController {
   constructor(private readonly marketing: MarketingService) {}
 

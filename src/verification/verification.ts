@@ -1,5 +1,6 @@
+import { BrandingService } from '../platform/branding.service';
 import {
-  BadRequestException, Body, ConflictException, Controller, HttpException, HttpStatus, Injectable, Module, NotFoundException, Post,
+  BadRequestException, Body, ConflictException, Controller, HttpCode, HttpException, HttpStatus, Injectable, Module, NotFoundException, Post,
   UnauthorizedException, UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -14,6 +15,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { RegisterDto } from '../auth/dto/register.dto';
+import { ForgotPasswordDto, ResetPasswordDto } from '../auth/dto/password.dto';
+import { Throttle } from '@nestjs/throttler';
 import { codeEmail, otpDevMode, sendEmail, sendPhoneCode } from './senders';
 
 const CODE_TTL_MIN = 10;
@@ -83,7 +86,9 @@ export class VerificationService {
   ) {}
 
   private secret() {
-    return String(process.env.JWT_SECRET ?? process.env.OTP_SECRET ?? 'agent-metra');
+    const secret = String(process.env.OTP_SECRET || process.env.JWT_SECRET || '').trim();
+    if (!secret) throw new Error('JWT_SECRET is required');
+    return secret;
   }
 
   private hash(code: string, reference: string) {
@@ -110,7 +115,7 @@ export class VerificationService {
   private async issue(purpose: string, reference: string, target: string, channel: 'email' | 'whatsapp', intro: string) {
     const [recent] = await this.dataSource.query(
       `SELECT MAX(created_at) AS last, COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 hour')::int AS hour
-         FROM verification_code WHERE target = $1`, [target]);
+         FROM verification_code WHERE target = $1 AND purpose = $2`, [target, purpose]);
     if (recent?.last && Date.now() - new Date(recent.last).getTime() < RESEND_SECONDS * 1000) {
       throw new HttpException(`Please wait ${RESEND_SECONDS} seconds before asking for a new code.`, HttpStatus.TOO_MANY_REQUESTS);
     }
@@ -121,7 +126,7 @@ export class VerificationService {
     let sentVia: string | null = null;
     if (channel === 'email') {
       const { text, html } = codeEmail(code, intro);
-      sentVia = (await sendEmail(target, `${code} is your Agent Metra code`, text, html)) ? 'email' : null;
+      sentVia = (await sendEmail(target, `${code} is your ${BrandingService.current().name} code`, text, html)) ? 'email' : null;
     } else {
       sentVia = await sendPhoneCode(target, code);
     }
@@ -170,7 +175,7 @@ export class VerificationService {
     await this.dataSource.query(
       `INSERT INTO pending_registration (id, email, whatsapp, payload, expires_at) VALUES ($1, $2, $3, $4, NOW() + make_interval(mins => $5::int))`,
       [id, email, whatsapp, payload, REGISTRATION_TTL_MIN]);
-    const emailResult = await this.issue('register_email', id, email, 'email', 'Welcome to Agent Metra! Use this code to confirm your email address.');
+    const emailResult = await this.issue('register_email', id, email, 'email', `Welcome to ${BrandingService.current().name}! Use this code to confirm your email address.`);
     const phoneResult = await this.issue('register_whatsapp', id, whatsapp, 'whatsapp', '').catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
     return {
       registration_id: id, email, whatsapp,
@@ -217,7 +222,7 @@ export class VerificationService {
     } catch {
       throw new UnauthorizedException('Your password is not correct.');
     }
-    return this.issue('change_email', `user-${user.id}`, email, 'email', 'Use this code to confirm your new email address for Agent Metra.');
+    return this.issue('change_email', `user-${user.id}`, email, 'email', `Use this code to confirm your new email address for ${BrandingService.current().name}.`);
   }
 
   async changeEmailVerify(user: AuthenticatedUser, dto: CodeDto) {
@@ -241,6 +246,35 @@ export class VerificationService {
     await this.dataSource.query(`UPDATE app_user SET whatsapp_number = $2, whatsapp_verified_at = NOW() WHERE id = $1`, [user.id, whatsapp]);
     return { whatsapp_number: whatsapp };
   }
+
+  /* ───── Forgot password ───── */
+
+  /** Sends a reset code to the account email. The answer is the same whether the email exists or not. */
+  async forgotPasswordStart(dto: ForgotPasswordDto) {
+    const email = dto.email.trim().toLowerCase();
+    const generic = { sent: true, message: 'If an account uses this email, a 6-digit code was sent to it.' };
+    const [user] = await this.dataSource.query(
+      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1`, [email]);
+    if (!user || user.access_disabled) return generic;
+    try {
+      const result = await this.issue('reset_password', `reset-${user.id}`, email, 'email',
+        `Use this code to reset your ${BrandingService.current().name} password. If you did not ask for it, you can ignore this email.`);
+      return { ...generic, ...(otpDevMode() ? { dev_code: (result as { dev_code?: string }).dev_code } : {}) };
+    } catch (error) {
+      if (error instanceof HttpException && error.getStatus() === HttpStatus.TOO_MANY_REQUESTS) throw error;
+      return generic;
+    }
+  }
+
+  async forgotPasswordReset(dto: ResetPasswordDto) {
+    const email = dto.email.trim().toLowerCase();
+    const [user] = await this.dataSource.query(
+      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1`, [email]);
+    if (!user || user.access_disabled) throw new BadRequestException('The code is not correct. Ask for a new code.');
+    await this.check('reset_password', `reset-${user.id}`, dto.code);
+    await this.authService.setPassword(Number(user.id), dto.new_password);
+    return { reset: true, message: 'Your password was changed. Log in with the new password.' };
+  }
 }
 
 @Controller('auth')
@@ -250,13 +284,16 @@ export class VerificationController {
 
   /** 1) Sign-up details → codes sent to email and WhatsApp */
   @Post('register/start')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   start(@Body() dto: RegisterStartDto) { return this.service.registerStart(dto); }
 
   @Post('register/resend')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   resend(@Body() dto: RegisterResendDto) { return this.service.registerResend(dto); }
 
   /** 2) Both codes → account created, logged in */
   @Post('register/verify')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   verify(@Body() dto: RegisterVerifyDto) { return this.service.registerVerify(dto); }
 
   @Post('change-email/start')
@@ -274,6 +311,17 @@ export class VerificationController {
   @Post('change-whatsapp/verify')
   @ApiBearerAuth() @UseGuards(JwtAuthGuard)
   changeWhatsappVerify(@CurrentUser() user: AuthenticatedUser, @Body() dto: CodeDto) { return this.service.changeWhatsappVerify(user, dto); }
+
+  /** Forgot password: 1) email → code sent  2) email + code + new password */
+  @Post('password/forgot')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  forgotPassword(@Body() dto: ForgotPasswordDto) { return this.service.forgotPasswordStart(dto); }
+
+  @Post('password/reset')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  resetPassword(@Body() dto: ResetPasswordDto) { return this.service.forgotPasswordReset(dto); }
 }
 
 @Module({

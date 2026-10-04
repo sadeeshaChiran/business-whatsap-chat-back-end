@@ -13,6 +13,7 @@ import { memoryStorage } from 'multer';
 import { DataSource } from 'typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 
@@ -293,7 +294,8 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     }
     const headers = ['id', 'name', 'channel', 'phone', 'email', 'tags', 'lead_stage', 'orders', 'total_spent', 'deal_value', 'last_activity'];
     const cell = (value: unknown) => {
-      const text = Array.isArray(value) ? value.join(';') : value instanceof Date ? value.toISOString() : value == null ? '' : String(value);
+      let text = Array.isArray(value) ? value.join(';') : value instanceof Date ? value.toISOString() : value == null ? '' : String(value);
+      if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`; // no spreadsheet formulas from customer names
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
     return [headers.join(','), ...all.map((row: Record<string, unknown>) => headers.map((key) => cell(row[key])).join(','))].join('\n');
@@ -358,6 +360,7 @@ export class CrmController {
   contacts(@CurrentUser() user: AuthenticatedUser, @Query() query: ContactsQueryDto) { return this.crm.contacts(user, query); }
 
   @Get('contacts/export')
+  @AdminOnly()
   async export(@CurrentUser() user: AuthenticatedUser, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="contacts-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -365,6 +368,7 @@ export class CrmController {
   }
 
   @Post('contacts/import')
+  @AdminOnly()
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
   import(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { buffer: Buffer }) { return this.crm.importCsv(user, file); }

@@ -1,110 +1,82 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Agent Metra – API (NestJS)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+The main backend of Agent Metra: login and roles, companies (workspaces), team, WhatsApp / Messenger / Instagram
+inboxes, AI sales bot, products, orders, CRM, marketing, automation flows, billing and the super-admin platform.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Stack: NestJS 11 · TypeORM · PostgreSQL (Supabase) · Pusher (real-time) · Meta Graph / Evolution API.
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Integrations
-
-- **Meta Facebook Page + Instagram posts** (Settings connect, read posts/photos — not messaging): see [../docs/META_PAGE_SETUP.md](../docs/META_PAGE_SETUP.md)
-- **WhatsApp (Evolution API)**: see Evolution env vars in `.env.example`
-
-## Project setup
+## Quick start
 
 ```bash
-$ npm install
+npm ci
+cp .env.example .env          # fill in at least PRODUCT_DATABASE_URL and JWT_SECRET
+npm run build
+npm run start:prod            # http://localhost:3001/v1/api
 ```
 
-## Compile and run the project
+Database changes run automatically on start-up (`src/database/run-startup-migrations.ts` runs the files in
+`migrations/` in order; every file is safe to run again). No manual SQL is needed for a new or existing database.
+
+## Roles
+
+| Role | Who | Can do |
+| --- | --- | --- |
+| `super_admin` | Metrocoding staff (`SUPER_ADMIN_EMAILS`) | Platform: all companies, packages, payments, suspend / activate a company, branding (logo, name, colour, contact details) |
+| `admin` | Company owner (`companies.admin_user_id`) | Everything inside their own company: settings, channels, team, products, billing, AI, marketing |
+| `agent` | Employee added by the admin | Their chats, the queue, orders, customers, own profile and password |
+
+Rules are enforced on the server (`@AdminOnly()` / `@Roles()` on controllers, company id always taken from the
+login token, never from the request). `npm run routes` prints every route with its protection.
+
+## Security built in
+
+- Login tokens signed with `JWT_SECRET` (required, no default). "Sign out everywhere", password change, disabling an
+  agent or suspending a company invalidate existing logins at once (`token_version`).
+- Login lockout after 8 wrong passwords (15 min), generic error messages, rate limits on login / sign-up / codes.
+- Passwords: minimum 8 characters with letters and numbers; forgot / reset password by email or WhatsApp code.
+- Helmet security headers, strict CORS (`CORS_ORIGINS`), body size limit, compression.
+- Webhooks: Meta signature (`META_APP_SECRET`) checked, Evolution webhooks need `EVOLUTION_WEBHOOK_TOKEN`,
+  n8n calls need `N8N_INTERNAL_API_KEY`; real-time channels are private (`POST /realtime/auth`).
+- Secrets (tokens, API keys) are never returned to agents; CSV exports are protected against formula injection.
+- One error format for every failure: `{ success: false, statusCode, message, errors?, data: null }` with a
+  user-friendly message; internal details are logged, never sent.
+
+## AI sales bot
+
+The AI replies come from the separate Python sales bot (`SALES_BOT_URL`, see `docs/SALES_BOT.md`). The API gives it
+everything from Supabase on each message (products, prices, delivery zones, AI knowledge). AI knowledge and uploaded
+documents (PDF / Word / text, read on the server – no AI cost) are saved straight to Supabase; there is no separate
+sync step and no MySQL. The old "knowledge bot" (Flask + MySQL) is no longer used.
+
+## Tests
+
+Use a **test** database (the tests create workspaces). Start the API with `OTP_DEV_MODE=true` first.
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm test                      # unit tests (jest)
+npm run test:security         # 60 security tests: roles, tenant isolation, tokens, webhooks, rate limits…
+npm run test:perf             # speed + load test → test/performance-result.json
 ```
 
-## Run tests
+Environment for the API tests: `API_URL=http://localhost:3001/v1/api` and `TEST_DATABASE_URL=postgresql://…`.
 
-```bash
-# unit tests
-$ npm run test
+## Folder map
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+```
+src/auth            login, Google login, password change / reset, guards, roles
+src/verification    sign-up with email / WhatsApp code
+src/company         company profile + industries (read-only list)
+src/users           team (agents), work status
+src/bot-admin       inbox, conversations, customers, orders, agent routing
+src/integrations    WhatsApp (Meta + Evolution), Messenger / Instagram, webhooks
+src/sales-bot       AI sales bot settings + orders
+src/products        products, categories, import
+src/crm  src/marketing  src/social  src/automation
+src/billing  src/platform   packages, payments (PayHere / bank slip), super admin, branding
+src/notifications   bell notifications     src/realtime   Pusher channel auth
+migrations/         SQL run on start-up
+test/               security + performance suites
+docs/               feature notes and sample import file
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
-
-
-
-
-python api/scripts/seed_sample_products.py --company-id 12 --created-by 5
-# Remove old seed rows for that company, then insert again
-python api/scripts/seed_sample_products.py --company-id 12 --reset
+See `docs/DEPLOYMENT.md` for the going-live checklist.

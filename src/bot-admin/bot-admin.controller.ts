@@ -19,6 +19,7 @@ import { memoryStorage } from 'multer';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { BotAdminService } from './bot-admin.service';
 import { CreateBotTrainingDto } from './dto/create-bot-training.dto';
@@ -78,10 +79,10 @@ export class BotAdminController {
   @Post('user/:id/toggle')
   toggleUser(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() payload: ToggleBotUserDto,
   ) {
-    return this.botAdminService.toggleUser(user, Number(id), payload);
+    return this.botAdminService.toggleUser(user, id, payload);
   }
 
   @Get('conversations')
@@ -192,7 +193,7 @@ export class BotAdminController {
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('before_id') beforeId?: string,
@@ -201,7 +202,7 @@ export class BotAdminController {
   ) {
     return this.botAdminService.getConversation(
       user,
-      Number(id),
+      id,
       page == null ? undefined : Number(page),
       limit == null ? undefined : Number(limit),
       {
@@ -305,6 +306,7 @@ export class BotAdminController {
     return this.botAdminService.toggleOwnStatus(user);
   }
 
+  @AdminOnly()
   @Post('train')
   train(
     @CurrentUser() user: AuthenticatedUser,
@@ -313,8 +315,9 @@ export class BotAdminController {
     return this.botAdminService.createTraining(user, payload);
   }
 
+  @AdminOnly()
   @Post('train/upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -334,11 +337,13 @@ export class BotAdminController {
     return this.botAdminService.uploadTrainingFile(user, file, category, content);
   }
 
+  @AdminOnly()
   @Get('train/history')
   getTrainingHistory(@CurrentUser() user: AuthenticatedUser) {
     return this.botAdminService.getTrainingHistory(user);
   }
 
+  @AdminOnly()
   @Patch('train/:id')
   updateTraining(
     @CurrentUser() user: AuthenticatedUser,
@@ -347,6 +352,7 @@ export class BotAdminController {
   ) {
     return this.botAdminService.updateTraining(user, id, payload);
   }
+  @AdminOnly()
   @Delete('train/:id')
   deleteTraining(
     @CurrentUser() user: AuthenticatedUser,
@@ -371,18 +377,18 @@ export class BotAdminController {
   @Post('orders/:id/status')
   updateOrderStatus(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() payload: UpdateOrderStatusDto,
   ) {
-    return this.botAdminService.updateOrderStatus(user, Number(id), payload);
+    return this.botAdminService.updateOrderStatus(user, id, payload);
   }
 
   @Post('orders/:id/send-invoice')
   sendOrderInvoice(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
   ) {
-    return this.botAdminService.sendOrderInvoice(user, Number(id));
+    return this.botAdminService.sendOrderInvoice(user, id);
   }
 
   @Post('orders/:id/note')

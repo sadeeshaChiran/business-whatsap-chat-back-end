@@ -25,54 +25,38 @@ function baseChannel(overrides: Partial<WhatsappChannel> = {}): WhatsappChannel 
   } as WhatsappChannel;
 }
 
-describe('buildWhatsappChannelPatch', () => {
-  it('sets meta provider, CONNECTED status, and fixes instance_name on meta save', () => {
+describe('buildWhatsappChannelPatch (Meta Cloud API settings)', () => {
+  it('sets meta provider and CONNECTED status when number id + token exist', () => {
     const patch = buildWhatsappChannelPatch(
       13,
       'Chu.lk',
-      {
-        whatsapp_provider_type: 'meta',
-        meta_phone_number_id: '1131918370007812',
-      },
+      { whatsapp_provider_type: 'meta', meta_phone_number_id: '1131918370007812' },
       baseChannel(),
     );
-
     expect(patch.provider_type).toBe('meta');
     expect(patch.status).toBe('CONNECTED');
     expect(patch.meta_phone_number_id).toBe('1131918370007812');
-    expect(patch.instance_name).not.toBe('1131918370007812');
-    expect(patch.evolution_instance_name).toBeTruthy();
+    expect(patch.instance_name).toBe('1131918370007812');
   });
 
-  it('preserves explicit evolution instance name when switching to meta', () => {
+  it('stays DISCONNECTED without an access token', () => {
     const patch = buildWhatsappChannelPatch(
       13,
       'Chu.lk',
-      {
-        whatsapp_provider_type: 'meta',
-        whatsapp_instance_name: 'chu.lk whatsapp bot',
-        meta_phone_number_id: '1131918370007812',
-      },
-      baseChannel(),
+      { whatsapp_provider_type: 'meta', meta_phone_number_id: '555' },
+      baseChannel({ meta_access_token: null, meta_phone_number_id: null, instance_name: '' }),
     );
-
-    expect(patch.instance_name).toBe('chu.lk whatsapp bot');
-    expect(patch.evolution_instance_name).toBe('chu.lk whatsapp bot');
+    expect(patch.status).toBe('DISCONNECTED');
+    expect(patch.instance_name).toBe('555');
   });
 
-  it('sets evolution provider and instance when switching back', () => {
+  it('falls back to meta-<company id> when no number is known', () => {
     const patch = buildWhatsappChannelPatch(
       13,
       'Chu.lk',
-      {
-        whatsapp_provider_type: 'evolution',
-        whatsapp_instance_name: 'chu.lk whatsapp bot',
-      },
-      baseChannel({ provider_type: 'meta', status: 'CONNECTED' }),
+      { whatsapp_provider_type: 'meta' },
+      baseChannel({ meta_access_token: null, meta_phone_number_id: null, instance_name: '' }),
     );
-
-    expect(patch.provider_type).toBe('evolution');
-    expect(patch.instance_name).toBe('chu.lk whatsapp bot');
-    expect(patch.evolution_instance_name).toBe('chu.lk whatsapp bot');
+    expect(patch.instance_name).toBe('meta-13');
   });
 });

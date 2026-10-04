@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   UseGuards,
@@ -16,6 +17,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { AdminOnly } from '../../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
 import { CreateProductCatergoryDto } from './dto/create-product_catergory.dto';
 import { UpdateProductCatergoryDto } from './dto/update-product_catergory.dto';
@@ -30,6 +32,7 @@ export class ProductCatergoryController {
     private readonly productCatergoryService: ProductCatergoryService,
   ) {}
 
+  @AdminOnly()
   @Post()
   @ApiOperation({ summary: 'Create a product category' })
   create(
@@ -48,29 +51,31 @@ export class ProductCatergoryController {
   @Get(':id')
   @ApiOperation({ summary: 'Get one product category by id' })
   @ApiParam({ name: 'id', type: Number })
-  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.productCatergoryService.findOne(+id, user);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.productCatergoryService.findOne(id, user);
   }
 
+  @AdminOnly()
   @Patch(':id')
   @ApiOperation({ summary: 'Update a product category' })
   @ApiParam({ name: 'id', type: Number })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() updateProductCatergoryDto: UpdateProductCatergoryDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.productCatergoryService.update(
-      +id,
+      id,
       updateProductCatergoryDto,
       user,
     );
   }
 
+  @AdminOnly()
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a product category' })
   @ApiParam({ name: 'id', type: Number })
-  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.productCatergoryService.remove(+id, user);
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.productCatergoryService.remove(id, user);
   }
 }

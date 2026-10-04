@@ -40,7 +40,9 @@ export async function graphRequest<T>(method: 'GET' | 'POST' | 'DELETE', path: s
 export const ADS_SCOPES = 'ads_read,ads_management,business_management';
 
 function sign(text: string) {
-  return createHmac('sha256', env('JWT_SECRET') || 'agent-metra').update(text).digest('base64url');
+  const secret = env('META_OAUTH_STATE_SECRET') || env('JWT_SECRET');
+  if (!secret) throw new Error('JWT_SECRET is required');
+  return createHmac('sha256', secret).update(text).digest('base64url');
 }
 
 export function adsState(companyId: number, userId: number) {

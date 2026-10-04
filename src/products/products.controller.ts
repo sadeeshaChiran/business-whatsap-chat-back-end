@@ -25,6 +25,7 @@ import {
 } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CreateProductDto } from './dto/create-product.dto';
 import { ImportProductsFileDto } from './dto/import-products-file.dto';
@@ -38,6 +39,7 @@ import { ProductsService } from './products.service';
 export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
+  @AdminOnly()
   @Post()
   @ApiOperation({ summary: 'Create a product with optional variants' })
   create(
@@ -47,6 +49,7 @@ export class ProductsController {
     return this.productsService.create(createProductDto, user);
   }
 
+  @AdminOnly()
   @Post('import')
   @ApiOperation({ summary: 'Import products from CSV or Excel' })
   @ApiConsumes('multipart/form-data')
@@ -80,31 +83,34 @@ export class ProductsController {
   @Get(':id')
   @ApiOperation({ summary: 'Get one product by id' })
   @ApiParam({ name: 'id', type: Number })
-  findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.productsService.findOne(+id, user);
+  findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.productsService.findOne(id, user);
   }
 
   /** Quick switch: { "available": false } or { "available": true, "variant_value": "Red / M" } */
+  @AdminOnly()
   @Patch(':id/availability')
   setAvailability(@Param('id', ParseIntPipe) id: number, @Body() dto: ProductAvailabilityDto, @CurrentUser() user: AuthenticatedUser) {
     return this.productsService.setAvailability(id, dto.available, dto.variant_value, user);
   }
 
+  @AdminOnly()
   @Patch(':id')
   @ApiOperation({ summary: 'Update a product and replace variants if provided' })
   @ApiParam({ name: 'id', type: Number })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() updateProductDto: UpdateProductDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.productsService.update(+id, updateProductDto, user);
+    return this.productsService.update(id, updateProductDto, user);
   }
 
+  @AdminOnly()
   @Delete(':id')
   @ApiOperation({ summary: 'Soft delete a product' })
   @ApiParam({ name: 'id', type: Number })
-  remove(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-    return this.productsService.remove(+id, user);
+  remove(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthenticatedUser) {
+    return this.productsService.remove(id, user);
   }
 }

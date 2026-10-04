@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  Matches,
   IsEmail,
   IsIn,
   IsOptional,
@@ -36,8 +37,9 @@ export class RegisterDto {
 
   @ApiProperty({ example: 'StrongPass123', minLength: 6 })
   @IsString()
-  @MinLength(6)
-  @MaxLength(255)
+  @MinLength(8)
+  @MaxLength(128)
+  @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, { message: 'Password must have at least 8 characters with letters and numbers.' })
   password: string;
 
   @ApiProperty({ type: () => RegisterCompanyDto })

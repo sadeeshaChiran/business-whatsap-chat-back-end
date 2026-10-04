@@ -7,6 +7,8 @@ import { ProductsService } from './products.service';
 import { Product } from './entities/product.entity';
 import { ProductVariant } from './entities/product-variant.entity';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
+import { Company } from '../company/entities/company.entity';
+import { PlanService } from '../platform/plan.service';
 
 describe('ProductsService', () => {
   let service: ProductsService;
@@ -48,6 +50,8 @@ describe('ProductsService', () => {
           provide: getRepositoryToken(ProductCatergory),
           useValue: productCategoryRepository,
         },
+        { provide: getRepositoryToken(Company), useValue: { findOne: jest.fn(async () => ({ id: 1, plan: 'free' })) } },
+        { provide: PlanService, useValue: { maxProducts: jest.fn(async () => null) } },
       ],
     }).compile();
 
@@ -183,7 +187,7 @@ describe('ProductsService', () => {
     it('parses the bundled sample import file', () => {
       const samplePath = path.resolve(
         __dirname,
-        '../../scripts/sample_product_import.csv',
+        '../../docs/samples/sample_product_import.csv',
       );
       const csv = fs.readFileSync(samplePath, 'utf8');
       const rows = csv
