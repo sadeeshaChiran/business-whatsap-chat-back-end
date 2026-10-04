@@ -5,6 +5,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AdminOnly, Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import {
@@ -19,6 +20,7 @@ import { SalesBotAdminService } from './sales-bot-admin.service';
 @ApiTags('Sales Bot')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@AdminOnly()
 export class SalesBotController {
   constructor(private readonly service: SalesBotAdminService) {}
 
@@ -77,6 +79,7 @@ export class SalesBotController {
 
   /* What the business sells (products / services / both) – any signed-in user */
   @Get('sales-bot/sells')
+  @Roles('admin', 'agent')
   sells(@CurrentUser() user: AuthenticatedUser) {
     return this.service.getSellsInfo(user);
   }

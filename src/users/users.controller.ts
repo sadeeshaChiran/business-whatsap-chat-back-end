@@ -1,86 +1,85 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Body,
-  Param,
-  UseGuards,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { UsersService } from './users.service';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Company } from '../company/entities/company.entity';
-import { Repository } from 'typeorm';
+import { CreateAgentDto, ResetAgentPasswordDto, UpdateAgentDto } from './dto/agent.dto';
 import { UpdateAgentWorkStatusDto } from './dto/update-agent-work-status.dto';
+import { UsersService } from './users.service';
 
+/**
+ * Team management. The company admin (owner) manages agents (employees).
+ * Agents can only read the team board.
+ */
 @Controller('users')
 @ApiTags('Users / Agents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(
-    private readonly usersService: UsersService,
-    @InjectRepository(Company)
-    private readonly companyRepository: Repository<Company>,
-  ) {}
+  constructor(private readonly usersService: UsersService) {}
 
-  private async assertAdmin(user: AuthenticatedUser) {
-    const company = await this.companyRepository.findOne({
-      where: { id: user.company_id },
-    });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
-      throw new ForbiddenException('Only the company admin can manage agents.');
-    }
-  }
-
-  /** Read-only: any company member can see agents + their conversation stats */
+  /** Team board: any company member can see agents + their chat counts (no private data). */
   @Get('agents/stats')
-  async getAgentsWithStats(@CurrentUser() user: AuthenticatedUser) {
+  getAgentsWithStats(@CurrentUser() user: AuthenticatedUser) {
     return this.usersService.getAgentsWithStats(user.company_id);
   }
 
   @Get('agents')
-  async getAgents(@CurrentUser() user: AuthenticatedUser) {
-    await this.assertAdmin(user);
+  @AdminOnly()
+  getAgents(@CurrentUser() user: AuthenticatedUser) {
     return this.usersService.getAgents(user.company_id);
   }
 
   @Post('agents')
-  async createAgent(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() body: { name: string; email: string; password?: string },
-  ) {
-    await this.assertAdmin(user);
-    // Provide a default password if not provided
-    const password = body.password || 'AgentPassword123!';
-    return this.usersService.createAgent(
-      user.company_id,
-      body.name,
-      body.email,
-      password,
-    );
+  @AdminOnly()
+  createAgent(@CurrentUser() user: AuthenticatedUser, @Body() body: CreateAgentDto) {
+    return this.usersService.createAgent(user.company_id, body);
+  }
+
+  @Patch('agents/:id')
+  @AdminOnly()
+  updateAgent(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: UpdateAgentDto) {
+    return this.usersService.updateAgent(user, id, body);
   }
 
   @Patch('agents/:id/work-status')
-  async updateAgentWorkStatus(
+  @AdminOnly()
+  updateAgentWorkStatus(
     @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
+    @Param('id', ParseIntPipe) id: number,
     @Body() body: UpdateAgentWorkStatusDto,
   ) {
-    await this.assertAdmin(user);
-    return this.usersService.updateAgentWorkStatus(user.company_id, Number(id), body.status);
+    return this.usersService.updateAgentWorkStatus(user.company_id, id, body.status);
   }
+
   @Post('agents/:id/toggle')
-  async toggleAgent(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
-  ) {
-    await this.assertAdmin(user);
-    return this.usersService.toggleAgent(user.company_id, Number(id));
+  @HttpCode(200)
+  @AdminOnly()
+  toggleAgent(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.usersService.toggleAgent(user.company_id, id);
+  }
+
+  /** Set a new password for an agent (the agent is signed out everywhere). */
+  @Post('agents/:id/reset-password')
+  @HttpCode(200)
+  @AdminOnly()
+  resetAgentPassword(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: ResetAgentPasswordDto) {
+    return this.usersService.resetAgentPassword(user, id, body.password);
+  }
+
+  /** Remove access: the agent cannot log in, open chats go back to the queue, the seat is freed. */
+  @Post('agents/:id/disable')
+  @HttpCode(200)
+  @AdminOnly()
+  disableAgent(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.usersService.setAgentAccess(user, id, false);
+  }
+
+  @Post('agents/:id/enable')
+  @HttpCode(200)
+  @AdminOnly()
+  enableAgent(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.usersService.setAgentAccess(user, id, true);
   }
 }

@@ -7,8 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Company } from '../company/entities/company.entity';
@@ -58,6 +57,7 @@ import {
   readChatMedia,
   saveChatMedia,
 } from './chat-media.store';
+import { readDocumentText, splitIntoPieces } from './document-knowledge';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -95,8 +95,12 @@ type CompanyContactRow = {
   labels?: Array<{ id: number; name: string; color_code: string }>;
 };
 
+/** Evolution chat list cache (per instance, 15 s) – shared by all requests of this process. */
+const evolutionChatsCache = new Map<string, { chats: Awaited<ReturnType<EvolutionService['findChats']>>; expiresAt: number }>();
+
 @Injectable()
 export class BotAdminService {
+
   constructor(
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
@@ -325,6 +329,8 @@ export class BotAdminService {
   }
 
   private async assertCompanyAccess(user: AuthenticatedUser) {
+    // JwtAuthGuard already loaded the account and its workspace
+    if (user.role && Number(user.company_id) > 0) return;
     const company = await this.getCompanyForUser(user);
 
     if (!company) {
@@ -342,6 +348,10 @@ export class BotAdminService {
   }
 
   private async assertAdminAccess(user: AuthenticatedUser) {
+    if (user.role) {
+      if (user.role !== 'admin') throw new ForbiddenException('Only the company admin can do this.');
+      return;
+    }
     const company = await this.getCompanyForUser(user);
     if (!company || Number(company.admin_user_id) !== Number(user.id)) {
       throw new ForbiddenException('Only the company admin can manage bot settings.');
@@ -353,10 +363,12 @@ export class BotAdminService {
     user: AuthenticatedUser,
     conversationId: number,
   ) {
-    const company = await this.getCompanyForUser(user);
-    if (!company) throw new ForbiddenException('Company not found.');
-
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    let isAdmin = user.role === 'admin';
+    if (!user.role) {
+      const company = await this.getCompanyForUser(user);
+      if (!company) throw new ForbiddenException('Company not found.');
+      isAdmin = Number(company.admin_user_id) === Number(user.id);
+    }
     const conv = isAdmin
       ? await this.findConversationForCompany(conversationId, user.company_id)
       : await this.findConversationForCompany(
@@ -1551,61 +1563,68 @@ export class BotAdminService {
       .getMany();
 
     const conversationIds = all.map((conv) => conv.id);
-    const previewByConversation = new Map<
-      number,
-      { content: string; direction: string; created_at: Date }
-    >();
+    const previewByConversation = new Map<number, { content: string; direction: string; created_at: Date }>();
+    const unreadByConversation = new Map<number, number>();
 
     if (conversationIds.length > 0) {
-      const latestMessages = await this.messageRepository
-        .createQueryBuilder('m')
-        .where('m.conversation_id IN (:...conversationIds)', { conversationIds })
-        .orderBy('m.conversation_id', 'ASC')
-        .addOrderBy('m.id', 'DESC')
-        .getMany();
-
+      // one row per conversation (latest message) + unread inbound counts – two queries for the whole list
+      const [latestMessages, unreadRows] = await Promise.all([
+        this.messageRepository.query(
+          `SELECT DISTINCT ON (m.conversation_id) m.conversation_id, m.content, m.direction::text AS direction, m.created_at
+             FROM bot_message m
+            WHERE m.conversation_id = ANY($1::int[])
+            ORDER BY m.conversation_id, m.id DESC`,
+          [conversationIds],
+        ) as Promise<Array<{ conversation_id: number; content: string; direction: string; created_at: Date }>>,
+        this.messageRepository.query(
+          `SELECT m.conversation_id, COUNT(*)::int AS unread
+             FROM bot_message m
+             JOIN bot_conversation c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ANY($1::int[])
+              AND m.direction::text = 'inbound'
+              AND m.created_at > COALESCE(c.agent_last_read_at, c.assigned_at - INTERVAL '1 millisecond', 'epoch'::timestamptz)
+            GROUP BY m.conversation_id`,
+          [conversationIds],
+        ) as Promise<Array<{ conversation_id: number; unread: number }>>,
+      ]);
       for (const message of latestMessages) {
-        if (!previewByConversation.has(message.conversation_id)) {
-          previewByConversation.set(message.conversation_id, {
-            content: message.content,
-            direction: message.direction,
-            created_at: message.created_at,
-          });
-        }
+        previewByConversation.set(Number(message.conversation_id), {
+          content: message.content,
+          direction: message.direction,
+          created_at: message.created_at,
+        });
       }
+      for (const row of unreadRows) unreadByConversation.set(Number(row.conversation_id), Number(row.unread) || 0);
     }
 
-    const rows = await Promise.all(
-      all.map(async (conv) => {
-        const unreadCount = await this.countUnreadInboundMessages(conv);
-        const preview = previewByConversation.get(conv.id);
-        return {
+    const rows = all.map((conv) => {
+      const preview = previewByConversation.get(conv.id);
+      return {
+        id: conv.id,
+        status: conv.status,
+        assigned_agent_id: conv.assigned_agent_id,
+        assigned_at: conv.assigned_at,
+        last_message_at: conv.last_message_at,
+        unread_count: unreadByConversation.get(conv.id) ?? 0,
+        last_message_preview: preview?.content?.trim() || null,
+        last_message_direction: preview?.direction ?? null,
+        channelUser: conv.channelUser
+          ? {
+              id: conv.channelUser.id,
+              display_name: conv.channelUser.display_name,
+              external_user_id: conv.channelUser.external_user_id,
+              platform: conv.channelUser.platform,
+              bot_enabled: conv.channelUser.bot_enabled,
+              manual_mode: conv.channelUser.manual_mode,
+            }
+          : null,
+        conversation: {
           id: conv.id,
           status: conv.status,
-          assigned_agent_id: conv.assigned_agent_id,
-          assigned_at: conv.assigned_at,
           last_message_at: conv.last_message_at,
-          unread_count: unreadCount,
-          last_message_preview: preview?.content?.trim() || null,
-          last_message_direction: preview?.direction ?? null,
-          channelUser: conv.channelUser
-            ? {
-                id: conv.channelUser.id,
-                display_name: conv.channelUser.display_name,
-                external_user_id: conv.channelUser.external_user_id,
-                platform: conv.channelUser.platform,
-                bot_enabled: conv.channelUser.bot_enabled,
-                manual_mode: conv.channelUser.manual_mode,
-              }
-            : null,
-          conversation: {
-            id: conv.id,
-            status: conv.status,
-            last_message_at: conv.last_message_at,
-          },
-        };
-      }),
-    );
+        },
+      };
+    });
 
     return rows.sort((left, right) => {
       const leftActive = String(left.status).toLowerCase() === 'active' ? 0 : 1;
@@ -1661,8 +1680,9 @@ export class BotAdminService {
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('conversation.id', 'DESC')
-      .skip(offset)
-      .take(limit)
+      // many-to-one join: plain OFFSET/LIMIT is safe and avoids TypeORM's extra DISTINCT query
+      .offset(offset)
+      .limit(limit)
       .getMany();
 
     const conversationIds = conversations.map((conversation) => Number(conversation.id));
@@ -1691,16 +1711,22 @@ export class BotAdminService {
       // Unread = customer messages after the later of: last time the team opened the chat,
       // or the last reply sent to the customer (by an agent, admin or the bot).
       const unread: Array<{ conversation_id: number; unread: number }> = await this.messageRepository.query(
-        `SELECT m.conversation_id, COUNT(*)::int AS unread
+        // last reply per chat computed once (was a sub-query per message: ~5x faster)
+        `WITH last_out AS (
+           SELECT o.conversation_id, MAX(o.created_at) AS at
+             FROM bot_message o
+            WHERE o.conversation_id = ANY($1) AND o.direction::text = 'outbound'
+            GROUP BY o.conversation_id
+         )
+         SELECT m.conversation_id, COUNT(*)::int AS unread
            FROM bot_message m
            JOIN bot_conversation c ON c.id = m.conversation_id
+           LEFT JOIN last_out lo ON lo.conversation_id = m.conversation_id
           WHERE m.conversation_id = ANY($1)
             AND m.direction::text = 'inbound'
             AND m.created_at > GREATEST(
                   COALESCE(c.agent_last_read_at::timestamp, 'epoch'::timestamp),
-                  COALESCE((SELECT MAX(o.created_at) FROM bot_message o
-                             WHERE o.conversation_id = m.conversation_id
-                               AND o.direction::text = 'outbound'), 'epoch'::timestamp))
+                  COALESCE(lo.at, 'epoch'::timestamp))
           GROUP BY m.conversation_id`,
         [conversationIds],
       );
@@ -1808,14 +1834,43 @@ export class BotAdminService {
       })[0];
     };
 
-    const rows: CompanyContactRow[] = customers.map((customer) => {
-      const channelUser = this.findChannelUserForPhone(
-        channelUsers.filter((item) => item.platform === 'whatsapp'),
-        customer.customer_phone,
-      );
-      const conversation = latestConversation(channelUser);
+    // Phone matching through lookup maps (was a nested loop: slow with thousands of customers).
+    // Two numbers are the same when their digits match after leading zeros are removed.
+    const phoneKey = (value: string) => {
+      const digits = this.normalizePhoneKey(value ?? '');
+      return digits ? digits.replace(/^0+/, '') || digits : '';
+    };
+    const whatsappByPhone = new Map<string, BotChannelUser>();
+    for (const channelUser of channelUsers) {
+      if (channelUser.platform !== 'whatsapp') continue;
+      const key = phoneKey(channelUser.external_user_id);
+      if (key && !whatsappByPhone.has(key)) whatsappByPhone.set(key, channelUser);
+    }
+    const conversationView = (conversation: BotConversation | undefined) =>
+      conversation
+        ? {
+            id: conversation.id,
+            status: conversation.status,
+            lead_stage: conversation.lead_stage || 'new',
+            lead_details: conversation.lead_details ?? null,
+            assigned_agent_id: conversation.assigned_agent_id,
+            last_message_at: conversation.last_message_at,
+          }
+        : null;
 
-      return {
+    const listedChannelUserIds = new Set<number>();
+    const listedWhatsappPhones = new Set<string>();
+    const remember = (row: CompanyContactRow) => {
+      if (row.channelUser) listedChannelUserIds.add(row.channelUser.id);
+      if (row.channelUser?.platform === 'whatsapp') {
+        const key = phoneKey(row.customer.customer_phone);
+        if (key) listedWhatsappPhones.add(key);
+      }
+    };
+
+    const rows: CompanyContactRow[] = customers.map((customer) => {
+      const channelUser = whatsappByPhone.get(phoneKey(customer.customer_phone));
+      const row: CompanyContactRow = {
         customer: {
           id: customer.id,
           customer_phone: customer.customer_phone,
@@ -1824,36 +1879,22 @@ export class BotAdminService {
           last_seen_at: customer.last_seen_at,
         },
         channelUser: channelUser ? mapChannelUser(channelUser) : null,
-        conversation: conversation
-          ? {
-              id: conversation.id,
-              status: conversation.status,
-              lead_stage: conversation.lead_stage || 'new',
-              lead_details: conversation.lead_details ?? null,
-              assigned_agent_id: conversation.assigned_agent_id,
-              last_message_at: conversation.last_message_at,
-            }
-          : null,
+        conversation: conversationView(latestConversation(channelUser)),
         evolution_remote_jid: null as string | null,
         last_message_preview: null as string | null,
       };
+      remember(row);
+      return row;
     });
 
     for (const channelUser of channelUsers) {
-      const alreadyListed = rows.some(
-        (row) =>
-          row.channelUser?.id === channelUser.id ||
-          (channelUser.platform === 'whatsapp' && row.channelUser?.platform === 'whatsapp' && this.phoneKeysEquivalent(
-            row.customer.customer_phone,
-            channelUser.external_user_id,
-          )),
-      );
+      const alreadyListed =
+        listedChannelUserIds.has(channelUser.id) ||
+        (channelUser.platform === 'whatsapp' && listedWhatsappPhones.has(phoneKey(channelUser.external_user_id)));
       if (alreadyListed) {
         continue;
       }
-
-      const conversation = latestConversation(channelUser);
-      rows.push({
+      const row: CompanyContactRow = {
         customer: {
           id: 0,
           customer_phone: channelUser.external_user_id,
@@ -1862,19 +1903,12 @@ export class BotAdminService {
           last_seen_at: channelUser.last_seen_at ?? channelUser.created_at,
         },
         channelUser: mapChannelUser(channelUser),
-        conversation: conversation
-          ? {
-              id: conversation.id,
-              status: conversation.status,
-              lead_stage: conversation.lead_stage || 'new',
-              lead_details: conversation.lead_details ?? null,
-              assigned_agent_id: conversation.assigned_agent_id,
-              last_message_at: conversation.last_message_at,
-            }
-          : null,
+        conversation: conversationView(latestConversation(channelUser)),
         evolution_remote_jid: null,
         last_message_preview: null,
-      });
+      };
+      rows.push(row);
+      remember(row);
     }
 
     return this.mergeEvolutionInboxChats(companyId, rows, channelUsers);
@@ -1901,7 +1935,14 @@ export class BotAdminService {
     }
 
     try {
-      const chats = await this.evolutionService.findChats(instance, apikey);
+      // the chat list is asked from Evolution at most every 15 s per instance (it is slow and called on every inbox refresh)
+      const cacheKey = `${instance}:${apikey.slice(-6)}`;
+      const cached = evolutionChatsCache.get(cacheKey);
+      const chats = cached && cached.expiresAt > Date.now() ? cached.chats : await this.evolutionService.findChats(instance, apikey);
+      if (!cached || cached.expiresAt <= Date.now()) {
+        if (evolutionChatsCache.size > 500) evolutionChatsCache.clear();
+        evolutionChatsCache.set(cacheKey, { chats, expiresAt: Date.now() + 15_000 });
+      }
       const instanceRows: CompanyContactRow[] = [];
 
       for (const chat of chats) {
@@ -3169,29 +3210,6 @@ export class BotAdminService {
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {
     await this.assertCompanyAccess(user);
-
-    // Call the Python bot's AI extraction endpoint for better Q&A generation
-    try {
-      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: user.company_id,
-          admin_user_id: user.id,
-          content: payload.answer, // Use the pasted content as raw input
-          category: payload.category?.trim() ?? 'Manual',
-          language: payload.language?.trim() ?? 'English',
-        }),
-      });
-
-      if (response.ok) {
-        return response.json();
-      }
-    } catch (error) {
-      console.error('Failed to call bot extraction endpoint:', error);
-    }
-
-    // Fallback to simple creation if bot is down or fails
     const item = this.trainingRepository.create({
       company_id: user.company_id,
       question: payload.question.trim(),
@@ -3200,59 +3218,36 @@ export class BotAdminService {
       language: payload.language?.trim() ?? 'English',
       is_active: true,
     });
-
     return this.trainingRepository.save(item);
   }
 
-  async uploadTrainingFile(
-    user: AuthenticatedUser,
-    file: any,
-    category?: string,
-    content?: string,
-  ) {
+  /**
+   * Business document (PDF / Word / text) → knowledge pieces the sales bot reads directly.
+   * No AI call, so importing costs nothing; size is capped so the bot prompt stays small.
+   */
+  async uploadTrainingFile(user: AuthenticatedUser, file: any, category?: string, _content?: string) {
     await this.assertCompanyAccess(user);
-
-    // Convert file to base64 with proper data URL prefix so the bot can detect the mime type
-    const mimeType = file.mimetype || 'image/jpeg';
-    const imageBase64 = `data:${mimeType};base64,${file.buffer.toString('base64')}`;
-    const rawContent = content?.trim()
-      ? content.trim()
-      : `This is an image of a product named "${file.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ')}". Extract training Q&A pairs about it.`;
-    
-    try {
-      const response = await fetch(`${this.getBotServiceBaseUrl()}/external/admin/training/upload-raw-content`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: user.company_id,
-          admin_user_id: user.id,
-          content: rawContent,
-          image_base64: imageBase64,
-          category: category?.trim() ?? 'Document',
-        }),
-      });
-
-      if (response.ok) {
-        return response.json();
-      }
-      
-      const errBody = await response.text();
-      console.error('Bot training upload failed:', response.status, errBody);
-    } catch (error) {
-      console.error('Failed to connect to Python bot for file training:', error);
-    }
-
-    // Fallback: simple record (not ideal, but prevents crash)
-    const item = this.trainingRepository.create({
+    const text = await readDocumentText(file);
+    const { pieces, truncated } = splitIntoPieces(text);
+    const title = String(file.originalname ?? 'Document').replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().slice(0, 120) || 'Document';
+    const rows = pieces.map((answer, index) => this.trainingRepository.create({
       company_id: user.company_id,
-      question: `Document: ${file.originalname}`,
-      answer: `[Processing Failed] Content from ${file.originalname}`,
-      category: category?.trim() ?? 'Document',
+      question: pieces.length > 1 ? `Document: ${title} (part ${index + 1} of ${pieces.length})` : `Document: ${title}`,
+      answer,
+      category: category?.trim() || 'Document',
       language: 'English',
       is_active: true,
-    });
-
-    return this.trainingRepository.save(item);
+    }));
+    const saved = await this.trainingRepository.save(rows);
+    return {
+      document: title,
+      entries: saved.length,
+      characters: pieces.reduce((n, piece) => n + piece.length, 0),
+      truncated,
+      message: truncated
+        ? `Added the first ${saved.length} parts of "${title}". The rest was skipped to keep AI replies fast and low-cost – split long documents or add the key points as Q&A.`
+        : `Added "${title}" as ${saved.length} knowledge ${saved.length === 1 ? 'entry' : 'entries'}.`,
+    };
   }
 
   async getTrainingHistory(user: AuthenticatedUser) {
@@ -3292,25 +3287,6 @@ export class BotAdminService {
 
     item.is_active = false;
     await this.trainingRepository.save(item);
-
-    try {
-      const response = await fetch(`${this.getBotServiceBaseUrl()}/bot/sync/training/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: user.company_id,
-          user_id: user.id,
-          training_id: id,
-        }),
-      });
-      if (!response.ok) {
-        const body = await response.text();
-        console.error('Bot training vector delete failed:', response.status, body);
-      }
-    } catch (error) {
-      console.error('Failed to delete training vector from bot:', error);
-    }
-
     return { id, removed: true };
   }
 
@@ -3584,7 +3560,7 @@ export class BotAdminService {
       const hasPdf = !!pdfMatch;
       const pdfUrl = hasPdf ? pdfMatch[0] : null;
       const graphVersion =
-        this.getEnvValue('META_GRAPH_API_VERSION') || 'v22.0';
+        process.env.META_GRAPH_API_VERSION?.trim() || 'v22.0';
 
       try {
         let payload: Record<string, unknown>;
@@ -3772,65 +3748,17 @@ export class BotAdminService {
   /**
    * Builds the invoice PDF and stores it with the chat media (served by this API at
    * /public/chat-media/… with a signed link, valid 90 days – needs PUBLIC_API_BASE_URL).
-   * Without PUBLIC_API_BASE_URL the old location (BOT_INVOICE_DIR / BOT_PUBLIC_BASE_URL) is used.
    */
   private writeInvoicePdf(order: BotOrder, company: Company | null): { url: string; buffer: Buffer; fileName: string } {
     const fileName = `invoice-order-${order.id}.pdf`;
     const buffer = Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company)));
     const key = saveChatMedia(Number(order.company_id), buffer, 'application/pdf', fileName);
     const publicUrl = publicChatMediaUrl(key, 90 * 24 * 3600);
-    if (publicUrl) return { url: publicUrl, buffer, fileName };
-
-    const invoiceDir = this.getInvoiceDirectory();
-    mkdirSync(invoiceDir, { recursive: true });
-    writeFileSync(join(invoiceDir, fileName), buffer);
-    return { url: `${this.getBotPublicBaseUrl()}/external/static/invoices/${fileName}`, buffer, fileName };
+    if (!publicUrl) console.warn('[invoice] PUBLIC_API_BASE_URL is not set – the invoice is sent as a file without a download link.');
+    return { url: publicUrl ?? '', buffer, fileName };
   }
 
-  private getInvoiceDirectory() {
-    return resolve(
-      this.getEnvValue('BOT_INVOICE_DIR') ??
-        join(process.cwd(), '..', 'bot', 'app', 'static', 'invoices'),
-    );
-  }
 
-  private getBotPublicBaseUrl() {
-    return (
-      this.getEnvValue('BOT_PUBLIC_BASE_URL') ??
-      this.getEnvValue('BOT_PUBLIC_URL') ??
-      this.getEnvValue('BOT_BASE_URL') ??
-      'http://localhost:5005'
-    ).replace(/\/+$/, '');
-  }
-
-  private getBotServiceBaseUrl() {
-    return (
-      this.getEnvValue('BOT_API_BASE_URL') ??
-      this.getEnvValue('BOT_INTERNAL_BASE_URL') ??
-      this.getEnvValue('BOT_BASE_URL') ??
-      'http://localhost:5005'
-    ).replace(/\/+$/, '');
-  }
-
-  private getEnvValue(key: string) {
-    const direct = process.env[key]?.trim();
-    if (direct) {
-      return direct;
-    }
-
-    const botEnvPath = resolve(process.cwd(), '..', 'bot', '.env');
-    if (!existsSync(botEnvPath)) {
-      return undefined;
-    }
-
-    const content = readFileSync(botEnvPath, 'utf8');
-    const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, 'm'));
-    if (!match) {
-      return undefined;
-    }
-
-    return match[1].trim().replace(/^['"]|['"]$/g, '');
-  }
 
   private buildInvoiceLines(order: BotOrder, company: Company | null) {
     const companyName = company?.name?.trim() || 'Invoice';
@@ -3881,7 +3809,7 @@ export class BotAdminService {
 
   private formatMoney(value: unknown) {
     const amount = Number(value || 0);
-    const symbol = this.getEnvValue('BOT_ORDER_CURRENCY_SYMBOL') ?? 'Rs';
+    const symbol = (process.env.BOT_ORDER_CURRENCY_SYMBOL?.trim() || undefined) ?? 'Rs';
     const separator = symbol.length === 1 ? '' : ' ';
     return `${symbol}${separator}${amount.toLocaleString(undefined, {
       minimumFractionDigits: amount % 1 === 0 ? 0 : 2,

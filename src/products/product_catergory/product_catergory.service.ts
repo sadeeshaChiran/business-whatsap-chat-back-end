@@ -75,16 +75,18 @@ export class ProductCatergoryService {
     await this.assertProductBusiness(user.company_id);
 
     const name = createProductCatergoryDto.name.trim();
-    if (!createProductCatergoryDto.is_common) {
-      await this.ensureCompanyExists(user.company_id);
+    if (createProductCatergoryDto.is_common) {
+      // shared categories are visible to every workspace – only the platform team can create them
+      throw new ForbiddenException('Shared categories are managed by Agent Metra.');
     }
+    await this.ensureCompanyExists(user.company_id);
     await this.ensureUniqueName(user.company_id, name);
 
     const category = this.productCategoryRepository.create({
       name,
       is_active: createProductCatergoryDto.is_active ?? true,
-      is_common: createProductCatergoryDto.is_common ?? false,
-      company_id: createProductCatergoryDto.is_common ? null : user.company_id,
+      is_common: false,
+      company_id: user.company_id,
     });
 
     const savedCategory = await this.productCategoryRepository.save(category);
@@ -135,8 +137,11 @@ export class ProductCatergoryService {
     updateProductCatergoryDto: UpdateProductCatergoryDto,
     user: AuthenticatedUser,
   ) {
-    const category = await this.findOne(id, user);
+    const category = await this.findOwnedCategory(id, user);
     const normalizedName = updateProductCatergoryDto.name?.trim();
+    if (updateProductCatergoryDto.is_common) {
+      throw new ForbiddenException('Shared categories are managed by Agent Metra.');
+    }
 
     if (
       normalizedName !== undefined &&
@@ -146,14 +151,7 @@ export class ProductCatergoryService {
     }
 
     this.productCategoryRepository.merge(category, {
-      ...updateProductCatergoryDto,
-      ...(updateProductCatergoryDto.is_common !== undefined
-        ? {
-            company_id: updateProductCatergoryDto.is_common
-              ? null
-              : (category.company_id ?? user.company_id),
-          }
-        : {}),
+      ...(updateProductCatergoryDto.is_active !== undefined ? { is_active: updateProductCatergoryDto.is_active } : {}),
       ...(normalizedName !== undefined ? { name: normalizedName } : {}),
     });
 
@@ -161,8 +159,17 @@ export class ProductCatergoryService {
     return this.findOne(savedCategory.id, user);
   }
 
-  async remove(id: number, user: AuthenticatedUser) {
+  /** Only the workspace's own categories can be changed (shared ones are read-only). */
+  private async findOwnedCategory(id: number, user: AuthenticatedUser) {
     const category = await this.findOne(id, user);
+    if (category.is_common || Number(category.company_id) !== Number(user.company_id)) {
+      throw new ForbiddenException('Shared categories cannot be changed.');
+    }
+    return category;
+  }
+
+  async remove(id: number, user: AuthenticatedUser) {
+    const category = await this.findOwnedCategory(id, user);
     await this.productCategoryRepository.remove(category);
     return { id };
   }

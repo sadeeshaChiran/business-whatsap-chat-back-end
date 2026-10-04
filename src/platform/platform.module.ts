@@ -14,6 +14,8 @@ import { TokenPack } from './entities/token-pack.entity';
 import { CompanyBillingController, PayhereNotifyController, SuperAdminBillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
 import { SuperAdminExtraController, SuperAdminExtraService } from './super-admin-extra';
+import { PublicBrandingController, SuperAdminBrandingController } from './branding';
+import { BrandingService } from './branding.service';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { BillingController, PublicPackagesController, SuperAdminController } from './platform.controller';
 import { PlanService } from './plan.service';
@@ -28,9 +30,9 @@ import { TokenQuotaService } from './token-quota.service';
 @Global()
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([PlatformPackage, CompanySubscription, TokenAdjustment, PlatformPayment, PlatformSetting, TokenPack, Company, User])],
-  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController],
-  providers: [FeatureGuard, PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor],
-  exports: [PlanService, TokenQuotaService, FeatureGuard],
+  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController, PublicBrandingController, SuperAdminBrandingController],
+  providers: [FeatureGuard, PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor, BrandingService],
+  exports: [PlanService, TokenQuotaService, FeatureGuard, BrandingService],
 })
 export class PlatformModule implements OnModuleInit {
   private readonly logger = new Logger(PlatformModule.name);

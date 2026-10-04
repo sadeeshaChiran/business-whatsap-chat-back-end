@@ -1,3 +1,4 @@
+import { BrandingService } from '../branding.service';
 import { resolveLimits } from '../package-limits';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -314,9 +315,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const year = new Date(payment.paid_at ?? Date.now()).getFullYear();
     payment.invoice_no = payment.invoice_no ?? `AM-${year}-${String(payment.id).padStart(6, '0')}`;
     const method = payment.method === 'payhere' ? 'Card (PayHere)' : payment.method === 'bank_transfer' ? 'Bank transfer' : 'Free / manual';
+    const brand = BrandingService.current();
+    const seller = [brand.company_name, brand.address, [brand.support_email, brand.support_phone].filter(Boolean).join(' · '), brand.website].filter(Boolean);
     const pdf = buildInvoicePdf([
-      { text: 'Agent Metra', size: 22, bold: true, gap: 10 },
-      { text: 'by Metrocoding', size: 11 },
+      { text: brand.name, size: 22, bold: true, gap: 10 },
+      ...(brand.by_line ? [{ text: brand.by_line, size: 11 }] : []),
+      ...seller.map((text) => ({ text, size: 9 })),
       { text: 'INVOICE', size: 16, bold: true, gap: 40 },
       { text: `Invoice no: ${payment.invoice_no}` },
       { text: `Date: ${new Date(payment.paid_at ?? Date.now()).toISOString().slice(0, 10)}` },
@@ -329,7 +333,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       { text: `Amount: ${rs(num(payment.amount))} (${payment.currency})`, bold: true, gap: 24 },
       { text: `Payment method: ${method}` },
       { text: 'Status: PAID', bold: true },
-      { text: 'Thank you for choosing Agent Metra.', gap: 40 },
+      { text: `Thank you for choosing ${brand.name}.`, gap: 40 },
     ]);
     payment.invoice_media_key = saveChatMedia(Number(payment.company_id), pdf, 'application/pdf', `${payment.invoice_no}.pdf`);
     await this.paymentRepository.save(payment);

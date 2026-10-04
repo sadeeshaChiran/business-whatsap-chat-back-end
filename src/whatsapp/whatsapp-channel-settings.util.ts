@@ -60,11 +60,6 @@ export function buildWhatsappChannelPatch(
     whatsappPatch.meta_verify_token =
       updateCompanyDto.meta_verify_token.trim() || null;
   }
-  // Evolution API base configuration is intentionally disabled.
-  // if (updateCompanyDto.evolution_api_base !== undefined) {
-  //   whatsappPatch.evolution_api_base =
-  //     updateCompanyDto.evolution_api_base.trim() || null;
-  // }
   if (updateCompanyDto.meta_webhook_base_url !== undefined) {
     whatsappPatch.meta_webhook_base_url =
       updateCompanyDto.meta_webhook_base_url.trim().replace(/\/+$/, '') || null;
@@ -91,18 +86,7 @@ export function buildWhatsappChannelPatch(
       whatsappPatch.meta_phone_number_id = metaPhoneNumberId;
     }
 
-    const explicitInstance = updateCompanyDto.whatsapp_instance_name?.trim() || '';
     const existingInstance = existingChannel?.instance_name?.trim() || '';
-    // Evolution alias preservation is intentionally disabled for Meta-only settings.
-    // const rawEvolutionAlias = existingChannel?.evolution_instance_name?.trim() || '';
-    // const existingEvolutionAlias =
-    //   rawEvolutionAlias && rawEvolutionAlias !== metaPhoneNumberId &&
-    //   !looksLikeMetaPhoneNumberId(rawEvolutionAlias) ? rawEvolutionAlias : '';
-    // const evolutionAlias = explicitInstance || existingEvolutionAlias ||
-    //   (existingInstance && existingInstance !== metaPhoneNumberId &&
-    //   !looksLikeMetaPhoneNumberId(existingInstance) ? existingInstance : '');
-    // whatsappPatch.evolution_instance_name = evolutionAlias ||
-    //   defaultEvolutionInstanceName(companyId, companyName);
     whatsappPatch.instance_name = metaPhoneNumberId || existingInstance || `meta-${companyId}`;
 
     if (metaPhoneNumberId && metaAccessToken) {
@@ -110,17 +94,6 @@ export function buildWhatsappChannelPatch(
     } else if (updateCompanyDto.whatsapp_provider_type === 'meta') {
       whatsappPatch.status = 'DISCONNECTED';
     }
-  // Legacy Evolution settings branch retained for restoration.
-  // } else if (updateCompanyDto.whatsapp_provider_type === 'evolution') {
-  //   whatsappPatch.provider_type = 'evolution';
-  //   const evolutionInstance = whatsappPatch.instance_name?.trim() ||
-  //     existingChannel?.instance_name?.trim() || '';
-  //   if (evolutionInstance && !looksLikeMetaPhoneNumberId(evolutionInstance)) {
-  //     whatsappPatch.instance_name = evolutionInstance;
-  //     whatsappPatch.evolution_instance_name = evolutionInstance;
-  //     whatsappPatch.status = existingChannel?.status === 'CONNECTED'
-  //       ? 'CONNECTED' : 'DISCONNECTED';
-  //   }
   }
 
   if (updateCompanyDto.name !== undefined) {

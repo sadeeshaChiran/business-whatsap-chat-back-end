@@ -2,14 +2,9 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { IncomeCatergory } from '../../income/income_catergory/entities/income_catergory.entity';
-import { Income } from '../../income/entities/income.entity';
-import { NoteColorTags } from '../../notes/color_tags/entities/color_tag.entity';
-import { Note } from '../../notes/entities/note.entity';
 
 @Entity('companies')
 export class Company {
@@ -69,18 +64,6 @@ export class Company {
 
   @Column({ type: 'int', default: 0 })
   agent_offline_shift_minutes: number;
-
-  @OneToMany(() => IncomeCatergory, (incomeCategory) => incomeCategory.company)
-  incomeCategories: IncomeCatergory[];
-
-  @OneToMany(() => Income, (income) => income.company)
-  incomes: Income[];
-
-  @OneToMany(() => NoteColorTags, (colorTag) => colorTag.company)
-  colorTags: NoteColorTags[];
-
-  @OneToMany(() => Note, (note) => note.company)
-  notes: Note[];
 
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;

@@ -1,3 +1,4 @@
+import { withEvolutionWebhookToken } from '../whatsapp/webhook-auth';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   parseEvolutionFindChats,
@@ -159,7 +160,7 @@ export class EvolutionService {
 
   private getWebhookUrl(): string | null {
     const url = (process.env.EVOLUTION_WEBHOOK_URL ?? '').trim();
-    return url || null;
+    return url ? withEvolutionWebhookToken(url) : null;
   }
 
   private getWebhookEvents(): string[] {

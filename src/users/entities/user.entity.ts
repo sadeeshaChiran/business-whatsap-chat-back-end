@@ -45,6 +45,26 @@ export class User {
   @Column({ type: 'boolean', default: false })
   is_super_admin: boolean;
 
+  /** Raised on password change / reset / removed access – older login tokens stop working */
+  @Column({ type: 'int', default: 0 })
+  token_version: number;
+
+  /** The company admin removed this agent's access – login is refused */
+  @Column({ type: 'boolean', default: false })
+  access_disabled: boolean;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  last_login_at: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  password_changed_at: Date | null;
+
+  @Column({ type: 'int', default: 0, select: false })
+  failed_login_count: number;
+
+  @Column({ type: 'timestamptz', nullable: true, select: false })
+  locked_until: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 
