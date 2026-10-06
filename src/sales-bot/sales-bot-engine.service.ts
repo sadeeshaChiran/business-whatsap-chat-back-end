@@ -44,6 +44,13 @@ type PendingOrder = {
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
 };
 type BotSession = { language?: string; pending_order?: PendingOrder | null };
+/** Splits a bot reply into at most 3 WhatsApp messages at empty lines (extra parts join the last one). */
+export function splitReply(text: string, maxParts = 3): string[] {
+  const parts = String(text ?? '').split(/\n[ \t]*\n+/).map((part) => part.trim()).filter(Boolean);
+  if (parts.length <= maxParts) return parts.length ? parts : [];
+  return [...parts.slice(0, maxParts - 1), parts.slice(maxParts - 1).join('\n')];
+}
+
 /** intent is stored on the bot message, e.g. "lead,handoff" (one reply can do several things). */
 type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[] };
 type LeadStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
@@ -175,13 +182,27 @@ export class SalesBotEngineService implements OnModuleInit {
     return true;
   }
 
-  /** Waits a few seconds so "hi" + "price?" + "blue one" get one reply. */
-  private schedule(companyId: number, conversationId: number, delayMs = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 3000) || 3000) {
+  /** when the first unanswered message of a burst arrived (per conversation) */
+  private readonly burstStart = new Map<number, number>();
+
+  /**
+   * Waits until the customer stops typing, so "hi" + "price?" + "blue one" + "Colombo ta" get ONE reply:
+   * every new message restarts the wait (SALES_BOT_DEBOUNCE_MS, default 4 s), but never longer than
+   * SALES_BOT_DEBOUNCE_MAX_MS (default 15 s) after the first message.
+   */
+  private schedule(companyId: number, conversationId: number, delayMs?: number) {
+    const base = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 4000) || 4000;
+    const max = Math.max(base, Number(process.env.SALES_BOT_DEBOUNCE_MAX_MS ?? 15000) || 15000);
+    const now = Date.now();
+    if (!this.burstStart.has(conversationId)) this.burstStart.set(conversationId, now);
+    const waited = now - (this.burstStart.get(conversationId) ?? now);
+    const wait = delayMs ?? Math.max(300, Math.min(base, max - waited));
     clearTimeout(this.timers.get(conversationId));
     this.timers.set(conversationId, setTimeout(() => {
       this.timers.delete(conversationId);
+      this.burstStart.delete(conversationId);
       void this.run(companyId, conversationId);
-    }, delayMs));
+    }, wait));
   }
 
   private async run(companyId: number, conversationId: number) {
@@ -288,7 +309,15 @@ export class SalesBotEngineService implements OnModuleInit {
 
     await this.sendPhotos(companyId, conversation, channelUser, channel, result.photo_product_ids, simulated);
     const text = outcome.replyOverride ?? result.reply;
-    if (text) await this.sendText(companyId, conversation, channelUser, channel, text, outcome.intent, simulated);
+    if (text) {
+      // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
+      const parts = outcome.replyOverride ? [text] : splitReply(text);
+      const pause = Number(process.env.SALES_BOT_PART_DELAY_MS ?? 900) || 0;
+      for (let index = 0; index < parts.length; index++) {
+        if (index && pause && !simulated) await new Promise((resolve) => setTimeout(resolve, pause));
+        await this.sendText(companyId, conversation, channelUser, channel, parts[index], index === 0 ? outcome.intent : null, simulated);
+      }
+    }
     await this.advanceLead(conversation.id, 'contacted');
 
     // Invoice PDF after a new or changed order (existing invoice feature, on the customer's channel)
