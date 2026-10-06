@@ -106,6 +106,7 @@ export class WhatsappService {
           const messageId = String(item.id ?? '').trim();
           const nextStatus = this.normalizeDeliveryStatus(String(item.status ?? '').trim());
           if (!messageId || !nextStatus) continue;
+          // statuses can arrive out of order: never go back (read → delivered); failed always wins
           const result = await this.messageRepository
             .createQueryBuilder()
             .update(BotMessage)
@@ -113,8 +114,19 @@ export class WhatsappService {
             .where('provider_message_id = :messageId', { messageId })
             .andWhere("platform = 'whatsapp'")
             .andWhere("direction::text = 'outbound'")
+            .andWhere(`(:next = 'failed' OR (COALESCE(delivery_status, '') NOT IN ('failed', 'read') AND NOT (delivery_status = 'delivered' AND :next = 'sent')))`, { next: nextStatus })
             .execute();
           updated += Number(result.affected ?? 0);
+          if (nextStatus === 'failed') {
+            // keep Meta's reason (number not on WhatsApp, 24h window …) for the broadcast report
+            const errors = Array.isArray(item.errors) ? (item.errors as Array<Record<string, unknown>>) : [];
+            const reason = errors
+              .map((e) => String((e.error_data as Record<string, unknown> | undefined)?.details ?? e.title ?? e.message ?? e.code ?? ''))
+              .filter(Boolean).join('; ').slice(0, 500);
+            await this.messageRepository.manager.query(
+              `UPDATE marketing_broadcast_recipient SET error = COALESCE(NULLIF($2, ''), 'failed after sending'), updated_at = NOW() WHERE provider_message_id = $1`,
+              [messageId, reason]).catch(() => undefined);
+          }
         }
       }
     }

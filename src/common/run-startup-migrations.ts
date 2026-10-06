@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { Client } from 'pg';
-import { getSupabaseDatabaseUrl } from './supabase-database';
+import { getDatabaseSsl, getSupabaseDatabaseUrl } from './supabase-database';
 
 const MIGRATION_FILES = [
   'supabase_product_image_url.sql',
@@ -42,6 +42,9 @@ const MIGRATION_FILES = [
   'supabase_package_limits.sql',
   'supabase_availability.sql',
   'supabase_social.sql',
+  'supabase_security.sql',
+  'supabase_package_offers.sql',
+  'supabase_marketing_campaigns.sql',
 ] as const;
 
 function migrationDir(): string | null {
@@ -123,7 +126,7 @@ export async function runStartupMigrations(): Promise<void> {
 
   const client = new Client({
     connectionString: databaseUrl,
-    ssl: { rejectUnauthorized: false },
+    ssl: getDatabaseSsl(),
   });
 
   try {

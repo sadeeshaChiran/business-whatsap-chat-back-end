@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsEmail, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
+/** Base fields of a company (registration creates companies; this is only the base for UpdateCompanyDto). */
 export class CreateCompanyDto {
 	@ApiProperty({ example: 'Acme Pvt Ltd', maxLength: 255 })
 	@IsString()

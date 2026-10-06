@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   Post,
   Query,
   Req,
@@ -12,6 +13,10 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { SkipThrottle } from '@nestjs/throttler';
+import { timingSafeEqual } from 'crypto';
+import { AdminOnly } from '../../auth/decorators/roles.decorator';
+import { assertEvolutionToken, assertMetaSignature, isMetaPayload } from './webhook-auth';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
@@ -47,6 +52,7 @@ export class WhatsappWebhookController {
   @Get('config')
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard)
+  @AdminOnly()
   async getCompanyWhatsappConfig(
     @CurrentUser() user: AuthenticatedUser,
     @Req() req: Request,
@@ -92,35 +98,56 @@ export class WhatsappWebhookController {
   }
 
   @Post('webhook/meta')
+  @SkipThrottle()
+  @HttpCode(200)
   @RawResponse()
-  async handleMetaWebhook(@Body() body: unknown) {
+  async handleMetaWebhook(
+    @Body() body: unknown,
+    @Req() req: Request & { rawBody?: Buffer },
+    @Headers('x-hub-signature-256') signature?: string,
+  ) {
+    assertMetaSignature(req.rawBody, signature);
     const result = await this.whatsappService.processInboundWebhook(body);
     return { ok: true, ...result };
   }
 
   @Post('webhook/evolution')
+  @SkipThrottle()
+  @HttpCode(200)
   @RawResponse()
-  async handleEvolutionWebhook(@Body() body: unknown) {
+  async handleEvolutionWebhook(@Body() body: unknown, @Query('token') token?: string) {
+    assertEvolutionToken(token, body);
     const result = await this.whatsappService.processInboundWebhook(body);
     return { ok: true, ...result };
   }
 
   @Post('webhook')
+  @SkipThrottle()
+  @HttpCode(200)
   @RawResponse()
-  async handleUnifiedWebhook(@Body() body: unknown) {
+  async handleUnifiedWebhook(
+    @Body() body: unknown,
+    @Req() req: Request & { rawBody?: Buffer },
+    @Query('token') token?: string,
+    @Headers('x-hub-signature-256') signature?: string,
+  ) {
+    if (isMetaPayload(body)) assertMetaSignature(req.rawBody, signature);
+    else assertEvolutionToken(token, body);
     const result = await this.whatsappService.processInboundWebhook(body);
     return { ok: true, ...result };
   }
 
   /** n8n bot outbound — uses saved Meta/Evolution credentials from DB (no token in workflow). */
   @Post('n8n/send')
+  @SkipThrottle()
   @RawResponse()
   async n8nSendMessage(
     @Body() body: { company_id?: number; phone?: string; text?: string },
     @Headers('x-n8n-internal-key') apiKey?: string,
   ) {
     const expected = process.env.N8N_INTERNAL_API_KEY?.trim();
-    if (!expected || apiKey?.trim() !== expected) {
+    const supplied = apiKey?.trim() ?? '';
+    if (!expected || expected.length < 16 || supplied.length !== expected.length || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
       throw new UnauthorizedException('Invalid n8n internal key');
     }
 

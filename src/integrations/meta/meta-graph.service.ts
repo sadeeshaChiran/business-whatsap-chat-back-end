@@ -161,13 +161,15 @@ export class MetaGraphService {
     return longToken;
   }
 
+  /** Embedded Signup settings for the browser. enabled=false (not an error) when the server is not set up for it. */
   getEmbeddedSignupConfig() {
-    const cfg = this.getConfig();
     const whatsappConfigId = process.env.META_WHATSAPP_CONFIG_ID?.trim() ?? '';
-    if (!whatsappConfigId) {
-      throw new BadRequestException('WhatsApp automatic setup requires META_WHATSAPP_CONFIG_ID on the API server.');
+    const appId = process.env.META_APP_ID?.trim() ?? '';
+    if (!whatsappConfigId || !appId || !process.env.META_APP_SECRET?.trim()) {
+      return { enabled: false, message: 'One-click WhatsApp connection is not switched on for this platform yet.', app_id: '', config_id: '', graph_version: '' };
     }
-    return { app_id: cfg.appId, config_id: whatsappConfigId, graph_version: cfg.graphVersion };
+    const cfg = this.getConfig();
+    return { enabled: true, app_id: cfg.appId, config_id: whatsappConfigId, graph_version: cfg.graphVersion };
   }
 
   /**

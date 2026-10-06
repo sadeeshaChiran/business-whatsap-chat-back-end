@@ -260,7 +260,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
     let result: SalesBotResult;
     try {
-      const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp');
+      const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId: conversation.id, message });
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
         session: { language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp' },

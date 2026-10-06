@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
@@ -7,6 +8,7 @@ import { SaveAutomationFlowDto } from './dto/save-automation-flow.dto';
 
 @Controller('automation/flows')
 @UseGuards(JwtAuthGuard)
+@AdminOnly()
 export class AutomationController {
   constructor(private readonly service: AutomationService) {}
   @Get() list(@CurrentUser() user: AuthenticatedUser) { return this.service.list(user); }

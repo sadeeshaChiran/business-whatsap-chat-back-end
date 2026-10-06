@@ -6,6 +6,7 @@ import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Ma
 import { memoryStorage } from 'multer';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
@@ -56,6 +57,7 @@ class PostsQueryDto {
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, FeatureGuard)
 @RequiresFeature('social')
+@AdminOnly()
 export class SocialController {
   constructor(private readonly social: SocialService) {}
 

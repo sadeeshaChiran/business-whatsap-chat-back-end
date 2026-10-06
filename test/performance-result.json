@@ -1,0 +1,175 @@
+{
+  "run": "mutv9mb0cd19",
+  "date": "2026-10-04T13:39:28.194Z",
+  "data": {
+    "customers": 300,
+    "messages_per_chat": 40
+  },
+  "endpoints": [
+    {
+      "label": "Login",
+      "path": "/auth/login",
+      "samples": 10,
+      "p50_ms": 72,
+      "p95_ms": 94,
+      "max_ms": 94,
+      "response_kb": 1,
+      "failures": 0
+    },
+    {
+      "label": "Who am I (every page)",
+      "path": "/auth/me",
+      "samples": 30,
+      "p50_ms": 5,
+      "p95_ms": 11,
+      "max_ms": 13,
+      "response_kb": 0.4,
+      "failures": 0
+    },
+    {
+      "label": "Company (every page)",
+      "path": "/company",
+      "samples": 30,
+      "p50_ms": 7,
+      "p95_ms": 12,
+      "max_ms": 12,
+      "response_kb": 1.1,
+      "failures": 0
+    },
+    {
+      "label": "Dashboard numbers",
+      "path": "/bot/stats",
+      "samples": 30,
+      "p50_ms": 6,
+      "p95_ms": 11,
+      "max_ms": 15,
+      "response_kb": 0.1,
+      "failures": 0
+    },
+    {
+      "label": "Inbox list (admin, 60 chats)",
+      "path": "/bot/conversations?page=1&limit=60",
+      "samples": 30,
+      "p50_ms": 22,
+      "p95_ms": 34,
+      "max_ms": 50,
+      "response_kb": 42.9,
+      "failures": 0
+    },
+    {
+      "label": "Open a chat (40 messages)",
+      "path": "/bot/conversations/1205?limit=40",
+      "samples": 30,
+      "p50_ms": 15,
+      "p95_ms": 24,
+      "max_ms": 30,
+      "response_kb": 9.3,
+      "failures": 0
+    },
+    {
+      "label": "Chat queue",
+      "path": "/bot/conversations/unassigned",
+      "samples": 30,
+      "p50_ms": 20,
+      "p95_ms": 32,
+      "max_ms": 128,
+      "response_kb": 71.2,
+      "failures": 0
+    },
+    {
+      "label": "My chats (agent)",
+      "path": "/bot/agent/conversations",
+      "samples": 30,
+      "p50_ms": 21,
+      "p95_ms": 55,
+      "max_ms": 65,
+      "response_kb": 28.6,
+      "failures": 0
+    },
+    {
+      "label": "Orders list",
+      "path": "/bot/orders",
+      "samples": 30,
+      "p50_ms": 16,
+      "p95_ms": 23,
+      "max_ms": 39,
+      "response_kb": 78.7,
+      "failures": 0
+    },
+    {
+      "label": "Contacts / customers page",
+      "path": "/bot/users?page=1&limit=100",
+      "samples": 30,
+      "p50_ms": 21,
+      "p95_ms": 30,
+      "max_ms": 30,
+      "response_kb": 26.7,
+      "failures": 0
+    },
+    {
+      "label": "Notifications bell",
+      "path": "/notifications",
+      "samples": 30,
+      "p50_ms": 4,
+      "p95_ms": 7,
+      "max_ms": 9,
+      "response_kb": 0.4,
+      "failures": 0
+    },
+    {
+      "label": "Team board",
+      "path": "/users/agents/stats",
+      "samples": 30,
+      "p50_ms": 9,
+      "p95_ms": 11,
+      "max_ms": 13,
+      "response_kb": 0.4,
+      "failures": 0
+    },
+    {
+      "label": "Package usage",
+      "path": "/billing/usage",
+      "samples": 30,
+      "p50_ms": 6,
+      "p95_ms": 12,
+      "max_ms": 16,
+      "response_kb": 0.9,
+      "failures": 0
+    }
+  ],
+  "load": [
+    {
+      "label": "Inbox + dashboard mix",
+      "users": 10,
+      "seconds": 15,
+      "requests": 2770,
+      "requests_per_second": 185,
+      "p50_ms": 41,
+      "p95_ms": 98,
+      "p99_ms": 128,
+      "errors": 0
+    },
+    {
+      "label": "Inbox + dashboard mix",
+      "users": 25,
+      "seconds": 15,
+      "requests": 3156,
+      "requests_per_second": 210,
+      "p50_ms": 96,
+      "p95_ms": 206,
+      "p99_ms": 248,
+      "errors": 0
+    },
+    {
+      "label": "Inbox + dashboard mix",
+      "users": 50,
+      "seconds": 15,
+      "requests": 3208,
+      "requests_per_second": 214,
+      "p50_ms": 199,
+      "p95_ms": 429,
+      "p99_ms": 477,
+      "errors": 0
+    }
+  ]
+}

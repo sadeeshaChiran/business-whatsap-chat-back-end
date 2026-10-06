@@ -1,4 +1,5 @@
 import { resolveLimits } from './package-limits';
+import { offerFields } from './package-offer';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -58,7 +59,7 @@ export class SuperAdminController {
   limitCatalog() { return this.service.limitCatalog(); }
 
   @Put('credit-settings')
-  setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit); }
+  setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit, dto.tokens_per_reply); }
 }
 
 /** For every signed-in company user: token usage WITHOUT any cost. */
@@ -86,7 +87,7 @@ export class PublicPackagesController {
 
   @Get()
   async list() {
-    const tpc = await this.planService.tokensPerCredit();
+    const [tpc, perReply] = await Promise.all([this.planService.tokensPerCredit(), this.planService.tokensPerReply()]);
     return (await this.planService.packages())
       .filter((pkg) => pkg.is_active && pkg.is_public)
       .map((pkg) => ({
@@ -94,7 +95,7 @@ export class PublicPackagesController {
         price_yearly: Number(pkg.price_yearly), tokens_per_month: Number(pkg.tokens_per_month),
         credits_per_month: PlanService.credits(Number(pkg.tokens_per_month), tpc),
         max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
-        limits: resolveLimits(pkg),
+        limits: resolveLimits(pkg), ...offerFields(pkg, perReply, Number(pkg.tokens_per_month)),
       }));
   }
 }

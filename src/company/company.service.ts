@@ -8,7 +8,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { Company } from './entities/company.entity';
 import { Industry } from './industry/entities/industry.entity';
@@ -102,6 +101,20 @@ export class CompanyService {
     return stored;
   }
 
+  /** Agents get the workspace without integration secrets (API keys, verify tokens). */
+  private async toApiCompanyFor(user: AuthenticatedUser, company: Company, loginEmail?: string) {
+    const view = await this.toApiCompany(company, loginEmail);
+    if (user.role === 'admin') return view;
+    return {
+      ...view,
+      whatsapp_evaluation_key: null,
+      meta_verify_token: null,
+      evolution_api_base: null,
+      meta_webhook_base_url: null,
+      login_email: '',
+    };
+  }
+
   private async toApiCompany(company: Company, loginEmail?: string) {
     const [industry, channel, metaConnection] = await Promise.all([
       this.loadIndustry(company.industry_id),
@@ -176,11 +189,6 @@ export class CompanyService {
     return company;
   }
 
-  async create(_createCompanyDto: CreateCompanyDto, _user: AuthenticatedUser) {
-    throw new ConflictException(
-      'Authenticated users already belong to one company. Use update instead.',
-    );
-  }
 
   private async clearContactEmailIfMatchesLogin(
     company: Company,
@@ -204,7 +212,7 @@ export class CompanyService {
     }
     const loginEmail = await this.resolveLoginEmail(user);
     company = await this.clearContactEmailIfMatchesLogin(company, loginEmail);
-    return this.toApiCompany(company, loginEmail);
+    return this.toApiCompanyFor(user, company, loginEmail);
   }
 
   async findOne(id: number, user: AuthenticatedUser) {
@@ -217,7 +225,7 @@ export class CompanyService {
     }
     const loginEmail = await this.resolveLoginEmail(user);
     company = await this.clearContactEmailIfMatchesLogin(company, loginEmail);
-    return this.toApiCompany(company, loginEmail);
+    return this.toApiCompanyFor(user, company, loginEmail);
   }
 
   async update(
@@ -365,18 +373,7 @@ export class CompanyService {
 
     const refreshed = await this.reloadCompany(Number(company.id));
     const loginEmail = await this.resolveLoginEmail(user);
-    return this.toApiCompany(refreshed, loginEmail);
+    return this.toApiCompanyFor(user, refreshed, loginEmail);
   }
 
-  async remove(id: number, user: AuthenticatedUser) {
-    if (Number(id) !== Number(user.company_id)) {
-      throw new NotFoundException('Company not found');
-    }
-    const company = await this.companyRepository.findOne({ where: { id } });
-    if (!company) {
-      throw new NotFoundException('Company not found');
-    }
-    await this.companyRepository.remove(company);
-    return { id };
-  }
 }

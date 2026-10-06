@@ -25,6 +25,11 @@ export class NotificationsController {
     return this.notificationsService.generateNotifications(user);
   }
 
+  @Post('read-all')
+  markAllAsRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.notificationsService.markAllAsRead(user);
+  }
+
   @Patch(':id/read')
   markAsRead(
     @CurrentUser() user: AuthenticatedUser,

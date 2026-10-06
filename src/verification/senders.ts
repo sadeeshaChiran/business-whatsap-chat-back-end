@@ -1,3 +1,4 @@
+import { BrandingService } from '../platform/branding.service';
 import { Logger } from '@nestjs/common';
 import nodemailer from 'nodemailer';
 
@@ -71,7 +72,7 @@ export async function sendSmsCode(phone: string, code: string): Promise<boolean>
   try {
     const params = new URLSearchParams({
       user_id: env('NOTIFYLK_USER_ID'), api_key: env('NOTIFYLK_API_KEY'), sender_id: env('NOTIFYLK_SENDER_ID') || 'NotifyDEMO',
-      to: phone, message: `Your Agent Metra code is ${code}. It is valid for 10 minutes.`,
+      to: phone, message: `Your ${BrandingService.current().name} code is ${code}. It is valid for 10 minutes.`,
     });
     const response = await fetch(`https://app.notify.lk/api/v1/send?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
     return response.ok;
@@ -88,12 +89,20 @@ export async function sendPhoneCode(phone: string, code: string): Promise<'whats
   return null;
 }
 
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
 export function codeEmail(code: string, intro: string) {
-  const text = `${intro}\n\nYour code: ${code}\n\nIt is valid for 10 minutes. If you did not ask for this, ignore this email.\n\nAgent Metra by Metrocoding`;
+  const brand = BrandingService.current();
+  const name = escapeHtml(brand.name);
+  const byLine = escapeHtml(brand.by_line);
+  const color = /^#[0-9a-f]{6}$/i.test(brand.primary_color) ? brand.primary_color : '#4f46e5';
+  const contact = [brand.support_email, brand.support_phone, brand.website].filter(Boolean).map(escapeHtml).join(' · ');
+  const text = `${intro}\n\nYour code: ${code}\n\nIt is valid for 10 minutes. If you did not ask for this, ignore this email.\n\n${brand.name} ${brand.by_line}`.trim();
   const html = `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;padding:24px;color:#0f172a">
-    <p style="font-size:20px;font-weight:800;margin:0">Agent Metra</p><p style="color:#059669;font-size:11px;letter-spacing:2px;margin:0 0 24px">BY METROCODING</p>
-    <p>${intro}</p>
-    <p style="font-size:32px;font-weight:800;letter-spacing:8px;background:#ecfdf5;border-radius:12px;padding:16px;text-align:center">${code}</p>
-    <p style="color:#64748b;font-size:13px">The code is valid for 10 minutes. If you did not ask for this, you can ignore this email.</p></div>`;
+    <p style="font-size:20px;font-weight:800;margin:0">${name}</p>${byLine ? `<p style="color:${color};font-size:11px;letter-spacing:2px;margin:0 0 24px;text-transform:uppercase">${byLine}</p>` : '<div style="height:24px"></div>'}
+    <p>${escapeHtml(intro)}</p>
+    <p style="font-size:32px;font-weight:800;letter-spacing:8px;background:${color}14;border-radius:12px;padding:16px;text-align:center">${code}</p>
+    <p style="color:#64748b;font-size:13px">The code is valid for 10 minutes. If you did not ask for this, you can ignore this email.</p>
+    ${contact ? `<p style="color:#94a3b8;font-size:12px;margin-top:24px">${contact}</p>` : ''}</div>`;
   return { text, html };
 }

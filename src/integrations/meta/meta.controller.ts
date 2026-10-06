@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -47,9 +48,7 @@ export class MetaController {
       where: { id: user.company_id },
     });
     if (!company || Number(company.admin_user_id) !== Number(user.id)) {
-      throw new BadRequestException(
-        'Only the company admin can manage Facebook Page connections.',
-      );
+      throw new ForbiddenException('Only the company admin can manage Facebook Page connections.');
     }
     return company;
   }

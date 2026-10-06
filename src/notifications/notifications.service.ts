@@ -1,20 +1,14 @@
-import { Injectable } from '@nestjs/common';
-import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { subDays } from 'date-fns';
-import { DataSource, Repository } from 'typeorm';
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { Expense } from '../expenses/entities/expense.entity';
-import { Income } from '../income/entities/income.entity';
-import { Note } from '../notes/entities/note.entity';
-import { ReportQueryDto } from '../reports/dto/report-query.dto';
-import { ReportsService } from '../reports/reports.service';
 import { NotificationsQueryDto } from './dto/notifications-query.dto';
 
 type NotificationType = 'REMINDER' | 'RISK' | 'INFO';
 type NotificationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
-type RelatedEntityType = 'expense' | 'income' | 'note' | 'order' | 'conversation' | null;
+type RelatedEntityType = 'order' | 'conversation' | 'queue' | null;
 
-type NotificationItem = {
+export type NotificationItem = {
   id: string;
   type: NotificationType;
   title: string;
@@ -27,457 +21,189 @@ type NotificationItem = {
   updated_at: string;
 };
 
-type CachedFeed = {
-  expiresAt: number;
-  items: NotificationItem[];
-};
+const FEED_CACHE_MS = 20_000;
 
+/**
+ * Bell notifications:
+ *  • sales bot alerts (special notes, order changes, cancellation requests) – last 14 days
+ *  • admin: chats waiting in the unassigned queue
+ *  • agent: chats assigned to me that wait for "Accept"
+ * Read state is stored per user in user_notification_read.
+ */
 @Injectable()
 export class NotificationsService {
-  private readonly feedCache = new Map<number, CachedFeed>();
-  private readonly readState = new Map<number, Set<string>>();
-  private readonly cacheTtlMs = 60_000;
+  private readonly logger = new Logger(NotificationsService.name);
+  private readonly feedCache = new Map<number, { expiresAt: number; items: NotificationItem[] }>();
 
-  constructor(
-    @InjectRepository(Expense)
-    private readonly expenseRepository: Repository<Expense>,
-    @InjectRepository(Income)
-    private readonly incomeRepository: Repository<Income>,
-    @InjectRepository(Note)
-    private readonly noteRepository: Repository<Note>,
-    private readonly reportsService: ReportsService,
-    @InjectDataSource()
-    private readonly dataSource: DataSource,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  async getNotifications(
-    user: AuthenticatedUser,
-    query: NotificationsQueryDto,
-  ) {
-    const items = await this.getOrBuildFeed(user);
-    let filtered = items;
-
-    if (query.unread === 'true') {
-      filtered = filtered.filter((item) => !item.is_read);
-    }
-
-    if (query.type) {
-      filtered = filtered.filter((item) => item.type === query.type);
-    }
-
-    return filtered.sort(
-      (left, right) =>
-        new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-    );
+  async getNotifications(user: AuthenticatedUser, query: NotificationsQueryDto) {
+    const items = await this.feed(user);
+    const readIds = await this.readKeys(user.id, items.map((item) => item.id));
+    let result = items.map((item) => ({ ...item, is_read: readIds.has(item.id) }));
+    if (query.unread === 'true') result = result.filter((item) => !item.is_read);
+    if (query.type) result = result.filter((item) => item.type === query.type);
+    return result;
   }
 
+  /** Rebuild now (bell "refresh"). */
   async generateNotifications(user: AuthenticatedUser) {
-    const items = await this.buildNotificationFeed(user);
-    this.feedCache.set(user.id, {
-      expiresAt: Date.now() + this.cacheTtlMs,
-      items,
-    });
-    return items;
+    this.feedCache.delete(user.id);
+    return this.getNotifications(user, {});
   }
 
   async markAsRead(user: AuthenticatedUser, notificationId: string) {
-    const readIds = this.readState.get(user.id) ?? new Set<string>();
-    readIds.add(notificationId);
-    this.readState.set(user.id, readIds);
-
-    const items = await this.getOrBuildFeed(user);
-    const item = items.find((entry) => entry.id === notificationId);
-
-    return {
-      id: notificationId,
-      is_read: true,
-      notification: item ?? null,
-    };
+    const key = String(notificationId).slice(0, 80);
+    await this.dataSource.query(
+      `INSERT INTO user_notification_read (user_id, notification_key) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [user.id, key],
+    );
+    return { id: key, is_read: true };
   }
 
-  private async getOrBuildFeed(user: AuthenticatedUser) {
+  async markAllAsRead(user: AuthenticatedUser) {
+    const items = await this.feed(user);
+    if (items.length) {
+      await this.dataSource.query(
+        `INSERT INTO user_notification_read (user_id, notification_key)
+         SELECT $1, UNNEST($2::varchar[]) ON CONFLICT DO NOTHING`,
+        [user.id, items.map((item) => item.id)],
+      );
+    }
+    return { marked: items.length };
+  }
+
+  private async readKeys(userId: number, keys: string[]): Promise<Set<string>> {
+    if (!keys.length) return new Set();
+    const rows: Array<{ notification_key: string }> = await this.dataSource.query(
+      `SELECT notification_key FROM user_notification_read WHERE user_id = $1 AND notification_key = ANY($2::varchar[])`,
+      [userId, keys],
+    );
+    return new Set(rows.map((row) => row.notification_key));
+  }
+
+  private async feed(user: AuthenticatedUser): Promise<NotificationItem[]> {
     const cached = this.feedCache.get(user.id);
-    if (cached && cached.expiresAt > Date.now()) {
-      return this.attachReadState(user.id, cached.items);
-    }
+    if (cached && cached.expiresAt > Date.now()) return cached.items;
 
-    const items = await this.buildNotificationFeed(user);
-    this.feedCache.set(user.id, {
-      expiresAt: Date.now() + this.cacheTtlMs,
-      items,
-    });
-    return this.attachReadState(user.id, items);
-  }
-
-  private attachReadState(userId: number, items: NotificationItem[]) {
-    const readIds = this.readState.get(userId) ?? new Set<string>();
-    return items.map((item) => ({
-      ...item,
-      is_read: readIds.has(item.id),
-    }));
-  }
-
-  private async buildNotificationFeed(user: AuthenticatedUser) {
-    const [incomes, expenses, notes, healthWeekly, healthMonthly] =
-      await Promise.all([
-        this.incomeRepository.find({
-          where: { company_id: user.company_id },
-          relations: ['incomeCategory'],
-          order: { date: 'DESC' },
-          take: 20,
-        }),
-        this.expenseRepository.find({
-          where: { company_id: user.company_id },
-          relations: ['expenseCategory'],
-          order: { date: 'DESC' },
-          take: 30,
-        }),
-        this.noteRepository.find({
-          where: {
-            company: { id: user.company_id },
-            created_user_id: user.id,
-            is_selected_for_ai: true,
-          },
-          relations: ['color_tag'],
-          order: { updated_at: 'DESC' },
-          take: 20,
-        }),
-        this.reportsService.buildHealthCheck(
-          user,
-          { period: 'weekly' } as ReportQueryDto,
-        ),
-        this.reportsService.buildHealthCheck(
-          user,
-          { period: 'monthly' } as ReportQueryDto,
-        ),
-      ]);
-
-    const now = new Date();
-    const notifications: NotificationItem[] = [];
-    const hasFinancialActivity = incomes.length > 0 || expenses.length > 0;
-
-    const totals7d = this.sumPeriod(incomes, expenses, 7);
-    if (hasFinancialActivity && totals7d.expenses > totals7d.income) {
-      notifications.push(
-        this.createNotification({
-          id: 'risk-expense-vs-income-7d',
-          type: 'RISK',
-          title: 'High Spending Alert',
-          message:
-            'Your expenses exceeded income in the last 7 days. Review recent spending before margin pressure increases.',
-          priority: 'HIGH',
-          createdAt: now,
-        }),
-      );
-    }
-
-    const totals30d = this.sumPeriod(incomes, expenses, 30);
-    if (hasFinancialActivity && totals30d.expenses > totals30d.income) {
-      notifications.push(
-        this.createNotification({
-          id: 'risk-expense-vs-income-30d',
-          type: 'RISK',
-          title: 'Monthly Cashflow Risk',
-          message:
-            'Your expenses exceeded income in the last 30 days. Current spending trend is weakening profitability.',
-          priority: 'HIGH',
-          createdAt: now,
-        }),
-      );
-    }
-
-    const decliningIncome = this.detectDecliningIncome(incomes);
-    if (decliningIncome) {
-      notifications.push(
-        this.createNotification({
-          id: 'info-income-trend-down',
-          type: 'INFO',
-          title: 'Income Trend Softening',
-          message:
-            'Recent income entries are trending down. Monitor upcoming revenue closely to avoid a low-balance pattern.',
-          priority: 'MEDIUM',
-          relatedEntityType: 'income',
-          relatedEntityId: decliningIncome.id,
-          createdAt: decliningIncome.date,
-        }),
-      );
-    }
-
-    const staleNotes = notes.filter((note) => this.isImportantStaleNote(note));
-    for (const note of staleNotes.slice(0, 3)) {
-      notifications.push(
-        this.createNotification({
-          id: `reminder-stale-note-${note.id}`,
-          type: 'REMINDER',
-          title: 'Follow Up Selected Note',
-          message: `"${note.title}" looks important but has not been updated recently.`,
-          priority: 'LOW',
-          relatedEntityType: 'note',
-          relatedEntityId: note.id,
-          createdAt: note.updated_at ?? note.created_at,
-        }),
-      );
-    }
-
-    if (
-      hasFinancialActivity &&
-      (healthWeekly.healthScore < 50 || healthMonthly.healthScore < 50)
-    ) {
-      const weakerHealth =
-        healthWeekly.healthScore <= healthMonthly.healthScore
-          ? healthWeekly
-          : healthMonthly;
-      const primaryWarning =
-        weakerHealth.warnings.find((warning) => warning?.trim()) ??
-        'Business risk indicators need immediate review.';
-      notifications.push(
-        this.createNotification({
-          id: 'risk-business-health-check',
-          type: 'RISK',
-          title: 'Business Risk Alert',
-          message: `Business health score dropped to ${weakerHealth.healthScore}. ${weakerHealth.status} conditions need attention. ${primaryWarning}`,
-          priority: 'HIGH',
-          createdAt: now,
-        }),
-      );
-    }
-
-    const metricHealth =
-      healthWeekly.healthScore <= healthMonthly.healthScore
-        ? healthWeekly
-        : healthMonthly;
-    const currentRatioMetric = metricHealth.metrics.find(
-      (metric) => metric.label === 'Current Ratio',
-    );
-    const netProfitMarginMetric = metricHealth.metrics.find(
-      (metric) => metric.label === 'Net Profit Margin',
-    );
-    const topExpenseWarning = metricHealth.warnings.find((warning) =>
-      warning.toLowerCase().includes('key category to monitor for leakage'),
-    );
-
-    if (hasFinancialActivity && currentRatioMetric?.status === 'risk') {
-      notifications.push(
-        this.createNotification({
-          id: 'risk-current-ratio',
-          type: 'RISK',
-          title: 'Liquidity Coverage Alert',
-          message: `Current Ratio is at ${currentRatioMetric.value}. Short-term income coverage is below expense pressure and needs action.`,
-          priority: 'HIGH',
-          createdAt: now,
-        }),
-      );
-    }
-
-    if (hasFinancialActivity && netProfitMarginMetric?.status === 'risk') {
-      notifications.push(
-        this.createNotification({
-          id: 'risk-net-profit-margin',
-          type: 'RISK',
-          title: 'Net Margin Risk',
-          message: `Net Profit Margin is at ${netProfitMarginMetric.value}. Profitability is under pressure and costs should be reviewed immediately.`,
-          priority: 'HIGH',
-          createdAt: now,
-        }),
-      );
-    }
-
-    if (hasFinancialActivity && topExpenseWarning) {
-      notifications.push(
-        this.createNotification({
-          id: 'warning-expense-category-leakage',
-          type: 'RISK',
-          title: 'Expense Leakage Watch',
-          message: topExpenseWarning,
-          priority: 'MEDIUM',
-          createdAt: now,
-        }),
-      );
-    }
-
-    const reminderSignals = this.findReminderSignals(notes, incomes, expenses);
-    for (const reminder of reminderSignals.slice(0, 3)) {
-      notifications.push(
-        this.createNotification({
-          id: reminder.id,
-          type: 'REMINDER',
-          title: reminder.title,
-          message: reminder.message,
-          priority: reminder.priority,
-          relatedEntityType: reminder.relatedEntityType,
-          relatedEntityId: reminder.relatedEntityId,
-          createdAt: reminder.createdAt,
-        }),
-      );
-    }
-
-    notifications.push(...(await this.salesBotNotifications(user)));
-
-    return this.deduplicate(notifications)
-      .sort(
-        (left, right) =>
-          new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-      )
+    const [botAlerts, workload] = await Promise.all([
+      this.salesBotNotifications(user),
+      user.role === 'admin' ? this.queueNotification(user) : this.agentPendingNotification(user),
+    ]);
+    const items = [...workload, ...botAlerts]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .slice(0, 30);
+    if (this.feedCache.size > 2000) this.feedCache.clear();
+    this.feedCache.set(user.id, { expiresAt: Date.now() + FEED_CACHE_MS, items });
+    return items;
   }
 
-  /** Alerts from the sales bot (special notes, order changes, cancellation requests) – last 14 days. */
+  /** Sales bot alerts. Agents only see alerts for chats assigned to them. */
   private async salesBotNotifications(user: AuthenticatedUser): Promise<NotificationItem[]> {
     try {
-      const rows: Array<{ id: number; kind: string; priority: NotificationPriority; title: string; message: string;
-        conversation_id: number | null; order_id: number | null; created_at: Date }> = await this.dataSource.query(
-        `SELECT id, kind, priority, title, message, conversation_id, order_id, created_at
-           FROM bot_notification
-          WHERE company_id = $1 AND created_at > NOW() - INTERVAL '14 days'
-          ORDER BY id DESC LIMIT 20`,
-        [user.company_id],
-      );
+      const rows: Array<{
+        id: number; priority: NotificationPriority; title: string; message: string;
+        conversation_id: number | null; order_id: number | null; created_at: Date;
+      }> = user.role === 'admin'
+        ? await this.dataSource.query(
+            `SELECT id, priority, title, message, conversation_id, order_id, created_at
+               FROM bot_notification
+              WHERE company_id = $1 AND created_at > NOW() - INTERVAL '14 days'
+              ORDER BY id DESC LIMIT 20`,
+            [user.company_id],
+          )
+        : await this.dataSource.query(
+            `SELECT n.id, n.priority, n.title, n.message, n.conversation_id, n.order_id, n.created_at
+               FROM bot_notification n
+               JOIN bot_conversation c ON c.id = n.conversation_id
+              WHERE n.company_id = $1 AND c.assigned_agent_id = $2 AND n.created_at > NOW() - INTERVAL '14 days'
+              ORDER BY n.id DESC LIMIT 20`,
+            [user.company_id, user.id],
+          );
       return rows.map((row) =>
-        this.createNotification({
+        this.item({
           id: `sales-bot-${row.id}`,
           type: row.priority === 'HIGH' ? 'RISK' : 'INFO',
           title: row.title,
           message: row.message,
-          priority: row.priority,
+          priority: row.priority ?? 'MEDIUM',
           createdAt: new Date(row.created_at),
           relatedEntityType: row.order_id ? 'order' : row.conversation_id ? 'conversation' : null,
           relatedEntityId: row.order_id ?? row.conversation_id ?? null,
         }),
       );
+    } catch (error) {
+      this.logger.warn(`sales bot notifications skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+  }
+
+  private async queueNotification(user: AuthenticatedUser): Promise<NotificationItem[]> {
+    try {
+      const [row] = await this.dataSource.query(
+        `SELECT COUNT(*)::int AS waiting, MIN(c.updated_at) AS oldest
+           FROM bot_conversation c
+           JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+           JOIN companies co ON co.id = u.company_id
+          WHERE u.company_id = $1
+            AND LOWER(c.status) NOT IN ('active', 'closed')
+            AND (c.assigned_agent_id IS NULL OR NOT EXISTS (
+                  SELECT 1 FROM app_user a
+                   WHERE a.id = c.assigned_agent_id AND a.company_id = u.company_id
+                     AND COALESCE(a.is_agent_active, FALSE) = TRUE
+                     AND (co.admin_user_id IS NULL OR a.id <> co.admin_user_id)))`,
+        [user.company_id],
+      );
+      const waiting = Number(row?.waiting ?? 0);
+      if (!waiting) return [];
+      const day = new Date().toISOString().slice(0, 13);
+      return [
+        this.item({
+          id: `queue-${day}-${waiting}`,
+          type: 'REMINDER',
+          title: waiting === 1 ? '1 chat is waiting for an agent' : `${waiting} chats are waiting for an agent`,
+          message: 'Open the Chat queue to assign them, or set an agent online.',
+          priority: waiting >= 5 ? 'HIGH' : 'MEDIUM',
+          createdAt: row?.oldest ? new Date(row.oldest) : new Date(),
+          relatedEntityType: 'queue',
+        }),
+      ];
     } catch {
-      return []; // table not created yet (before the sales bot migration)
+      return [];
     }
   }
 
-  private sumPeriod(incomes: Income[], expenses: Expense[], days: number) {
-    const threshold = subDays(new Date(), days);
-    return {
-      income: incomes
-        .filter((income) => new Date(income.date) >= threshold)
-        .reduce((sum, income) => sum + Number(income.amount ?? 0), 0),
-      expenses: expenses
-        .filter((expense) => new Date(expense.date) >= threshold)
-        .reduce((sum, expense) => sum + Number(expense.amount ?? 0), 0),
-    };
+  private async agentPendingNotification(user: AuthenticatedUser): Promise<NotificationItem[]> {
+    try {
+      const [row] = await this.dataSource.query(
+        `SELECT COUNT(*)::int AS pending, MIN(c.updated_at) AS oldest
+           FROM bot_conversation c WHERE c.assigned_agent_id = $1 AND c.status = 'pending'`,
+        [user.id],
+      );
+      const pending = Number(row?.pending ?? 0);
+      if (!pending) return [];
+      const day = new Date().toISOString().slice(0, 13);
+      return [
+        this.item({
+          id: `pending-${user.id}-${day}-${pending}`,
+          type: 'REMINDER',
+          title: pending === 1 ? '1 new chat is waiting for you' : `${pending} new chats are waiting for you`,
+          message: 'Open My chats and accept them so customers get a quick reply.',
+          priority: 'HIGH',
+          createdAt: row?.oldest ? new Date(row.oldest) : new Date(),
+          relatedEntityType: 'conversation',
+        }),
+      ];
+    } catch {
+      return [];
+    }
   }
 
-  private detectDecliningIncome(incomes: Income[]) {
-    const latest = [...incomes]
-      .sort((left, right) => new Date(right.date).getTime() - new Date(left.date).getTime())
-      .slice(0, 3);
-
-    if (latest.length < 3) {
-      return null;
-    }
-
-    if (
-      Number(latest[0].amount) < Number(latest[1].amount) &&
-      Number(latest[1].amount) < Number(latest[2].amount)
-    ) {
-      return latest[0];
-    }
-
-    return null;
-  }
-
-  private isImportantStaleNote(note: Note) {
-    const tagText = `${note.color_tag?.name ?? ''} ${note.color_tag?.meaning ?? ''}`.toLowerCase();
-    const titleText = `${note.title ?? ''} ${note.content ?? ''}`.toLowerCase();
-    const isImportant =
-      tagText.includes('important') ||
-      tagText.includes('urgent') ||
-      tagText.includes('high') ||
-      titleText.includes('important') ||
-      titleText.includes('urgent');
-
-    if (!isImportant) {
-      return false;
-    }
-
-    const updatedAt = note.updated_at ?? note.created_at;
-    return updatedAt ? updatedAt < subDays(new Date(), 14) : false;
-  }
-
-  private findReminderSignals(notes: Note[], incomes: Income[], expenses: Expense[]) {
-    const items: Array<{
-      id: string;
-      title: string;
-      message: string;
-      priority: NotificationPriority;
-      relatedEntityType: RelatedEntityType;
-      relatedEntityId: number | null;
-      createdAt: Date;
-    }> = [];
-
-    for (const note of notes) {
-      const text = `${note.title} ${note.content}`.toLowerCase();
-      if (/(today|tomorrow|due|remind|follow up|overdue)/.test(text)) {
-        items.push({
-          id: `reminder-note-signal-${note.id}`,
-          title: 'Reminder From Selected Note',
-          message: `Selected note "${note.title}" contains a reminder or due-date signal.`,
-          priority: text.includes('overdue') ? 'HIGH' : 'MEDIUM',
-          relatedEntityType: 'note',
-          relatedEntityId: note.id,
-          createdAt: note.updated_at ?? note.created_at ?? new Date(),
-        });
-      }
-    }
-
-    for (const expense of expenses.slice(0, 10)) {
-      const text = `${expense.note ?? ''}`.toLowerCase();
-      if (/(due|overdue|today|tomorrow|remind)/.test(text)) {
-        items.push({
-          id: `reminder-expense-signal-${expense.id}`,
-          title: 'Expense Reminder Alert',
-          message: 'A recent expense note contains a due-date or reminder signal.',
-          priority: text.includes('overdue') ? 'HIGH' : 'MEDIUM',
-          relatedEntityType: 'expense',
-          relatedEntityId: expense.id,
-          createdAt: expense.updated_at ?? expense.created_at ?? new Date(),
-        });
-      }
-    }
-
-    for (const income of incomes.slice(0, 10)) {
-      const text = `${income.note ?? ''}`.toLowerCase();
-      if (/(client|payment|due|tomorrow|today|follow up)/.test(text)) {
-        items.push({
-          id: `reminder-income-signal-${income.id}`,
-          title: 'Income Follow-Up Reminder',
-          message: 'A recent income note may need follow-up to protect expected cash inflow.',
-          priority: 'MEDIUM',
-          relatedEntityType: 'income',
-          relatedEntityId: income.id,
-          createdAt: income.updated_at ?? income.created_at ?? new Date(),
-        });
-      }
-    }
-
-    return items;
-  }
-
-  private deduplicate(items: NotificationItem[]) {
-    const map = new Map<string, NotificationItem>();
-    for (const item of items) {
-      if (!map.has(item.id)) {
-        map.set(item.id, item);
-      }
-    }
-    return [...map.values()];
-  }
-
-  private createNotification(params: {
-    id: string;
-    type: NotificationType;
-    title: string;
-    message: string;
-    priority: NotificationPriority;
-    createdAt: Date;
-    relatedEntityType?: RelatedEntityType;
-    relatedEntityId?: number | null;
+  private item(params: {
+    id: string; type: NotificationType; title: string; message: string; priority: NotificationPriority;
+    createdAt: Date; relatedEntityType?: RelatedEntityType; relatedEntityId?: number | null;
   }): NotificationItem {
-    const createdAt = params.createdAt.toISOString();
+    const createdAt = (Number.isNaN(params.createdAt.getTime()) ? new Date() : params.createdAt).toISOString();
     return {
       id: params.id,
       type: params.type,

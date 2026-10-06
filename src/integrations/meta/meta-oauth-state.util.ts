@@ -10,11 +10,9 @@ export type MetaOAuthStatePayload = {
 const STATE_TTL_MS = 15 * 60 * 1000;
 
 function secret(): string {
-  return (
-    process.env.META_OAUTH_STATE_SECRET?.trim() ||
-    process.env.JWT_SECRET?.trim() ||
-    'meta-oauth-state-secret'
-  );
+  const value = process.env.META_OAUTH_STATE_SECRET?.trim() || process.env.JWT_SECRET?.trim();
+  if (!value) throw new Error('JWT_SECRET is required');
+  return value;
 }
 
 function signPayload(encoded: string): string {

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Injectable, NotFoundException, Param, ParseIntPipe, Post, Query, Res, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Injectable, NotFoundException, Param, ParseIntPipe, Patch, Post, Query, Res, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Type } from 'class-transformer';
@@ -7,6 +7,7 @@ import type { Response } from 'express';
 import { DataSource } from 'typeorm';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AuthService } from '../auth/auth.service';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { BillingService } from './billing/billing.service';
@@ -32,6 +33,10 @@ export class ManualPaymentDto {
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
+export class CompanyStatusDto {
+  @IsIn(['ACTIVE', 'SUSPENDED']) status: 'ACTIVE' | 'SUSPENDED';
+}
+
 export class AddSuperAdminDto {
   @IsEmail() email: string;
 }
@@ -44,7 +49,9 @@ const csv = (rows: Array<Record<string, unknown>>) => {
   if (!rows.length) return '';
   const headers = Object.keys(rows[0]);
   const cell = (value: unknown) => {
-    const text = value instanceof Date ? value.toISOString() : value == null ? '' : String(value);
+    let text = value instanceof Date ? value.toISOString() : value == null ? '' : String(value);
+    // stop spreadsheet formula injection (=, +, -, @ at the start of a cell)
+    if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   };
   return [headers.join(','), ...rows.map((row) => headers.map((key) => cell(row[key])).join(','))].join('\n');
@@ -57,6 +64,7 @@ export class SuperAdminExtraService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly billing: BillingService,
     private readonly quota: TokenQuotaService,
+    private readonly auth: AuthService,
   ) {}
 
   async revenue(monthsRaw?: number) {
@@ -86,10 +94,10 @@ export class SuperAdminExtraService {
   }
 
   async company360(id: number) {
-    const [company] = await this.dataSource.query(`SELECT id, company_name AS name, email, phone, business_category, created_at FROM companies WHERE id = $1`, [id]);
+    const [company] = await this.dataSource.query(`SELECT id, company_name AS name, email, phone, business_category, status, created_at FROM companies WHERE id = $1`, [id]);
     if (!company) throw new NotFoundException('Company not found.');
     const users = await this.dataSource.query(`
-      SELECT u.id, u.name, u.email, u.is_active, u.is_agent_active, (u.id = c.admin_user_id) AS is_admin, u.created_at
+      SELECT u.id, u.name, u.email, u.is_active, u.is_agent_active, u.access_disabled, u.last_login_at, (u.id = c.admin_user_id) AS is_admin, u.created_at
         FROM app_user u JOIN companies c ON c.id = u.company_id WHERE u.company_id = $1 ORDER BY is_admin DESC, u.id`, [id]);
     const [counts] = await this.dataSource.query(`
       SELECT
@@ -124,6 +132,20 @@ export class SuperAdminExtraService {
       `INSERT INTO platform_announcement (title, message, priority, company_ids, recipients, created_by) VALUES ($1, $2, $3, $4::jsonb, $5, $6) RETURNING *`,
       [dto.title, dto.message, dto.priority ?? 'MEDIUM', dto.company_ids?.length ? JSON.stringify(dto.company_ids) : null, ids.length, user.id]);
     return row;
+  }
+
+  /** Suspend / re-activate a workspace. Suspended: nobody of that company can sign in, the bot stops. */
+  async setCompanyStatus(id: number, status: 'ACTIVE' | 'SUSPENDED') {
+    const [company] = await this.dataSource.query(`SELECT id FROM companies WHERE id = $1`, [id]);
+    if (!company) throw new NotFoundException('Company not found.');
+    await this.dataSource.query(`UPDATE companies SET status = $2, updated_at = NOW() WHERE id = $1`, [id, status]);
+    if (status === 'SUSPENDED') {
+      // sign everybody of the workspace out right away
+      await this.dataSource.query(`UPDATE app_user SET token_version = token_version + 1, is_agent_active = FALSE WHERE company_id = $1 AND is_super_admin = FALSE`, [id]);
+      await this.dataSource.query(`UPDATE companies SET bot_enabled = FALSE WHERE id = $1`, [id]);
+    }
+    this.auth.invalidateCompany(id);
+    return { id, status };
   }
 
   announcements() {
@@ -171,6 +193,7 @@ export class SuperAdminExtraService {
     const [user] = await this.dataSource.query(`SELECT id FROM app_user WHERE LOWER(email) = LOWER($1)`, [email.trim()]);
     if (!user) throw new NotFoundException('No account with this email – the person must register first.');
     await this.dataSource.query(`UPDATE app_user SET is_super_admin = TRUE WHERE id = $1`, [user.id]);
+    this.auth.invalidateAccount(Number(user.id));
     return this.superAdmins();
   }
 
@@ -179,6 +202,7 @@ export class SuperAdminExtraService {
     const admins = await this.superAdmins();
     if (admins.length <= 1) throw new BadRequestException('At least one super admin must remain.');
     await this.dataSource.query(`UPDATE app_user SET is_super_admin = FALSE WHERE id = $1`, [id]);
+    this.auth.invalidateAccount(Number(id));
     return this.superAdmins();
   }
 
@@ -227,6 +251,9 @@ export class SuperAdminExtraController {
 
   @Get('companies/:id/360')
   company360(@Param('id', ParseIntPipe) id: number) { return this.service.company360(id); }
+
+  @Patch('companies/:id/status')
+  setStatus(@Param('id', ParseIntPipe) id: number, @Body() dto: CompanyStatusDto) { return this.service.setCompanyStatus(id, dto.status); }
 
   @Get('announcements')
   announcements() { return this.service.announcements(); }

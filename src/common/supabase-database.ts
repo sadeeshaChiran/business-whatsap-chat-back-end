@@ -7,7 +7,11 @@ export function getSupabaseDatabaseUrl(): string {
   );
 }
 
-/** Legacy named connection; app uses a single default Postgres pool now. */
-export const SUPABASE_DATA_SOURCE = getSupabaseDatabaseUrl() ? 'supabase' : undefined;
-
-export const PRODUCT_DATA_SOURCE = SUPABASE_DATA_SOURCE;
+/**
+ * SSL options for the Postgres connection.
+ * DB_SSL=false turns SSL off (local Postgres). DB_SSL_REJECT_UNAUTHORIZED=true verifies the certificate.
+ */
+export function getDatabaseSsl(): false | { rejectUnauthorized: boolean } {
+  if (getEnvValue('DB_SSL', 'true').toLowerCase() === 'false') return false;
+  return { rejectUnauthorized: getEnvValue('DB_SSL_REJECT_UNAUTHORIZED', 'false').toLowerCase() === 'true' };
+}

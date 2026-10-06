@@ -8,7 +8,8 @@ import type { ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, Up
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { TokenAdjustment } from './entities/token-adjustment.entity';
-import { PlanService } from './plan.service';
+import { offerFields } from './package-offer';
+import { DEFAULT_TOKENS_PER_REPLY, PlanService } from './plan.service';
 import { TokenQuotaService, addMonths } from './token-quota.service';
 
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
@@ -55,9 +56,9 @@ export class SuperAdminService {
 
   async companies(query: ListQueryDto) {
     const search = String(query.search ?? '').trim().toLowerCase();
-    const rows: Array<{ id: number; name: string; plan: string; created_at: Date; admin_email: string | null; agents: number; last_active: Date | null }> =
+    const rows: Array<{ id: number; name: string; plan: string; status: string; created_at: Date; admin_email: string | null; agents: number; last_active: Date | null }> =
       await this.dataSource.query(`
-        SELECT c.id, c.company_name AS name, c.plan, c.created_at,
+        SELECT c.id, c.company_name AS name, c.plan, c.status, c.created_at,
                (SELECT email FROM app_user u WHERE u.id = c.admin_user_id) AS admin_email,
                (SELECT COUNT(*) FROM app_user u WHERE u.company_id = c.id)::int AS agents,
                (SELECT MAX(created_at) FROM bot_ai_usage a WHERE a.company_id = c.id) AS last_active
@@ -66,19 +67,31 @@ export class SuperAdminService {
             OR EXISTS (SELECT 1 FROM app_user u WHERE u.company_id = c.id AND LOWER(u.email) LIKE '%' || $1 || '%')
          ORDER BY c.id DESC LIMIT 500`, [search]);
     const out: Array<Record<string, any> & { package_name: string | null; blocked: boolean; percent: number }> = [];
-    for (const row of rows) {
-      const usage = await this.quota.usage(Number(row.id));
-      const [cost] = await this.dataSource.query(
-        `SELECT COALESCE(SUM(cost_usd), 0) AS cost FROM bot_ai_usage WHERE company_id = $1 AND created_at >= $2`,
-        [row.id, usage.token_period_start]);
-      out.push({
-        id: Number(row.id), name: row.name, admin_email: row.admin_email, agents: num(row.agents),
-        created_at: row.created_at, last_active: row.last_active,
-        package_id: usage.package?.id ?? null, package_name: usage.package?.name ?? null, plan: row.plan,
-        billing_cycle: usage.billing_cycle, status: usage.status, period_end: usage.period_end,
-        tokens_used: usage.used, tokens_quota: usage.quota, tokens_extra: usage.extra, percent: usage.percent,
-        token_period_end: usage.token_period_end, blocked: usage.blocked, blocked_reason: usage.blocked_reason,
-        cost_this_period_usd: num(cost?.cost),
+    // usage per company, 8 at a time (was one by one – slow with many companies)
+    for (let index = 0; index < rows.length; index += 8) {
+      const chunk = rows.slice(index, index + 8);
+      const usages = await Promise.all(chunk.map((row) => this.quota.usage(Number(row.id))));
+      const costs: Array<{ company_id: number; cost: string }> = chunk.length
+        ? await this.dataSource.query(
+            `SELECT a.company_id, COALESCE(SUM(a.cost_usd), 0) AS cost
+               FROM bot_ai_usage a
+               JOIN UNNEST($1::bigint[], $2::timestamptz[]) AS p(company_id, since) ON p.company_id = a.company_id AND a.created_at >= p.since
+              GROUP BY a.company_id`,
+            [chunk.map((row) => Number(row.id)), usages.map((usage) => usage.token_period_start)],
+          )
+        : [];
+      const costById = new Map(costs.map((row) => [Number(row.company_id), num(row.cost)]));
+      chunk.forEach((row, i) => {
+        const usage = usages[i];
+        out.push({
+          id: Number(row.id), name: row.name, admin_email: row.admin_email, agents: num(row.agents),
+          created_at: row.created_at, last_active: row.last_active, company_status: row.status ?? 'ACTIVE',
+          package_id: usage.package?.id ?? null, package_name: usage.package?.name ?? null, plan: row.plan,
+          billing_cycle: usage.billing_cycle, status: usage.status, period_end: usage.period_end,
+          tokens_used: usage.used, tokens_quota: usage.quota, tokens_extra: usage.extra, percent: usage.percent,
+          token_period_end: usage.token_period_end, blocked: usage.blocked, blocked_reason: usage.blocked_reason,
+          cost_this_period_usd: costById.get(Number(row.id)) ?? 0,
+        });
       });
     }
     return out;
@@ -97,6 +110,7 @@ export class SuperAdminService {
         FROM generate_series(CURRENT_DATE - 29, CURRENT_DATE, INTERVAL '1 day') d ORDER BY d`, [id]);
     return {
       id: Number(company.id), name: company.name, plan: company.plan, business_category: company.business_category,
+      status: company.status ?? 'ACTIVE',
       usage,
       adjustments: adjustments.map((row) => ({ ...row, tokens: num(row.tokens), active: !row.expires_at || new Date(row.expires_at) > new Date() })),
       daily: daily.map((row) => ({ day: row.day, tokens: num(row.tokens), cost_usd: num(row.cost), replies: num(row.replies) })),
@@ -163,13 +177,22 @@ export class SuperAdminService {
 
   async listPackages() {
     const packages = await this.packageRepository.find({ order: { sort_order: 'ASC', id: 'ASC' } });
+    this.perReply = await this.planService.tokensPerReply();
     const counts: Array<{ package_id: number; n: number }> = await this.dataSource.query(
       `SELECT package_id, COUNT(*)::int AS n FROM company_subscription GROUP BY package_id`);
     return packages.map((pkg) => ({ ...this.packageView(pkg), companies: counts.find((c) => c.package_id === pkg.id)?.n ?? 0 }));
   }
 
+  /** tokens per reply for the "≈ N AI replies" text (refreshed when the package list loads) */
+  private perReply = DEFAULT_TOKENS_PER_REPLY;
+
   packageView(pkg: PlatformPackage) {
     return {
+      offer_price_monthly: pkg.offer_price_monthly === null || pkg.offer_price_monthly === undefined ? null : num(pkg.offer_price_monthly),
+      offer_price_yearly: pkg.offer_price_yearly === null || pkg.offer_price_yearly === undefined ? null : num(pkg.offer_price_yearly),
+      offer_until: pkg.offer_until ? String(pkg.offer_until).slice(0, 10) : null,
+      offer_label: pkg.offer_label ?? '',
+      ...offerFields(pkg, this.perReply, num(pkg.tokens_per_month)),
       id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description,
       price_monthly: num(pkg.price_monthly), price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month),
       max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
@@ -179,6 +202,7 @@ export class SuperAdminService {
   }
 
   async createPackage(dto: PackageDto) {
+    checkOffer({ price_monthly: dto.price_monthly, price_yearly: dto.price_yearly, offer_price_monthly: dto.offer_price_monthly ?? null, offer_price_yearly: dto.offer_price_yearly ?? null, offer_until: dto.offer_until ?? null });
     const code = dto.code.trim().toLowerCase();
     if (await this.packageRepository.findOne({ where: { code } })) throw new ConflictException(`Package code "${code}" already exists.`);
     const saved = await this.packageRepository.save(this.packageRepository.create({
@@ -195,6 +219,8 @@ export class SuperAdminService {
     if (!pkg) throw new NotFoundException('Package not found.');
     const { limits, ...rest } = dto;
     Object.assign(pkg, Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)));
+    if (typeof pkg.offer_label === 'string') pkg.offer_label = pkg.offer_label.trim();
+    checkOffer(pkg);
     // merge: keys the super admin did not send keep their value
     if (limits !== undefined) pkg.limits = { ...(pkg.limits ?? {}), ...cleanLimits(limits) };
     const saved = await this.packageRepository.save(pkg);
@@ -210,14 +236,15 @@ export class SuperAdminService {
   /* ───────────── Credits ───────────── */
 
   async creditSettings() {
-    return { tokens_per_credit: await this.planService.tokensPerCredit() };
+    return { tokens_per_credit: await this.planService.tokensPerCredit(), tokens_per_reply: await this.planService.tokensPerReply() };
   }
 
-  async setCreditSettings(tokensPerCredit: number) {
+  async setCreditSettings(tokensPerCredit: number, tokensPerReply?: number) {
     if (!Number.isInteger(tokensPerCredit) || tokensPerCredit < 1000) throw new BadRequestException('tokens_per_credit must be at least 1,000.');
+    const perReply = tokensPerReply ?? (await this.planService.tokensPerReply());
     await this.dataSource.query(
       `INSERT INTO platform_setting (key, value) VALUES ('credits', $1::jsonb)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit })]);
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit, tokens_per_reply: perReply })]);
     this.planService.forget();
     return this.creditSettings();
   }
@@ -250,4 +277,13 @@ export class SuperAdminService {
       total_cost_usd: perCompany.reduce((sum, row) => sum + num(row.cost), 0),
     };
   }
+}
+
+/** An offer must be cheaper than the normal price and needs an end date. */
+function checkOffer(pkg: { price_monthly: number; price_yearly: number; offer_price_monthly: number | null; offer_price_yearly: number | null; offer_until: string | null }) {
+  const monthly = pkg.offer_price_monthly === null || pkg.offer_price_monthly === undefined ? null : Number(pkg.offer_price_monthly);
+  const yearly = pkg.offer_price_yearly === null || pkg.offer_price_yearly === undefined ? null : Number(pkg.offer_price_yearly);
+  if (monthly !== null && monthly >= Number(pkg.price_monthly)) throw new BadRequestException('The monthly offer price must be lower than the normal monthly price.');
+  if (yearly !== null && yearly >= Number(pkg.price_yearly)) throw new BadRequestException('The yearly offer price must be lower than the normal yearly price.');
+  if ((monthly !== null || yearly !== null) && !pkg.offer_until) throw new BadRequestException('Set the last day of the offer.');
 }

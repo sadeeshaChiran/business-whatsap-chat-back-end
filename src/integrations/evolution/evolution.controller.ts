@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
 
   BadRequestException,
 
@@ -76,11 +77,7 @@ export class EvolutionController {
 
     if (!company || Number(company.admin_user_id) !== Number(user.id)) {
 
-      throw new BadRequestException(
-
-        'Only the company admin can manage WhatsApp instances.',
-
-      );
+      throw new ForbiddenException('Only the company admin can manage WhatsApp instances.');
 
     }
 

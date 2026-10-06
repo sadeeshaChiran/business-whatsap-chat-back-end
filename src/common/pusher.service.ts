@@ -1,41 +1,61 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import Pusher from 'pusher';
 
+/**
+ * Real-time events for the inbox. Company channels are private ("private-company-<id>"):
+ * the browser must be signed in and belong to that company (see RealtimeController).
+ */
 @Injectable()
 export class PusherService {
-  private pusher: Pusher | null = null;
+  private static client: Pusher | null | undefined;
+  private readonly logger = new Logger(PusherService.name);
 
-  constructor() {
-    const appId = process.env.PUSHER_APP_ID;
-    const key = process.env.PUSHER_KEY;
-    const secret = process.env.PUSHER_SECRET;
-    const cluster = process.env.PUSHER_CLUSTER || 'mt1';
-    const host = process.env.PUSHER_HOST;
-    const port = process.env.PUSHER_PORT;
+  private get pusher(): Pusher | null {
+    if (PusherService.client !== undefined) return PusherService.client;
+    const appId = process.env.PUSHER_APP_ID?.trim();
+    const key = process.env.PUSHER_KEY?.trim();
+    const secret = process.env.PUSHER_SECRET?.trim();
+    const host = process.env.PUSHER_HOST?.trim();
+    const port = process.env.PUSHER_PORT?.trim();
     const scheme = process.env.PUSHER_SCHEME || 'https';
-
     if (appId && key && secret) {
-      this.pusher = new Pusher({
+      PusherService.client = new Pusher({
         appId,
         key,
         secret,
-        cluster,
+        cluster: process.env.PUSHER_CLUSTER?.trim() || 'mt1',
         useTLS: scheme === 'https',
         ...(host ? { host, port: port ? Number(port) : undefined } : {}),
       });
-      console.log('Pusher initialized successfully.');
+      this.logger.log('Pusher real-time updates enabled.');
     } else {
-      console.log('Pusher configuration missing. Real-time updates will run in mock mode.');
+      PusherService.client = null;
+      this.logger.log('Pusher is not configured – the inbox refreshes by polling.');
     }
+    return PusherService.client;
   }
 
-  trigger(channel: string, event: string, data: any) {
-    if (this.pusher) {
-      this.pusher.trigger(channel, event, data).catch(err => {
-        console.error('Pusher trigger failed:', err);
-      });
-    } else {
-      console.log(`[Pusher Mock] Channel: ${channel}, Event: ${event}, Data:`, data);
-    }
+  get enabled(): boolean {
+    return Boolean(this.pusher);
+  }
+
+  /** "company-12" → "private-company-12" (other channel names are kept). */
+  static channelName(channel: string): string {
+    return /^company-\d+$/.test(channel) ? `private-${channel}` : channel;
+  }
+
+  trigger(channel: string, event: string, data: unknown) {
+    const client = this.pusher;
+    if (!client) return;
+    client.trigger(PusherService.channelName(channel), event, data).catch((err: unknown) => {
+      this.logger.warn(`Pusher trigger failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  /** Signs a private channel subscription for the browser. */
+  authorize(socketId: string, channel: string) {
+    const client = this.pusher;
+    if (!client) return null;
+    return client.authorizeChannel(socketId, channel);
   }
 }

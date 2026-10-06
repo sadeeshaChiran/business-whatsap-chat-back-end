@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, Repository } from 'typeorm';
+import { type BotCampaign, applyPendingRefs, attributeBroadcastReply, attributeText, campaignForBot } from '../marketing/attribution';
 import { BotOrder } from '../bot-admin/entities/bot-order.entity';
 import { BotTrainingData } from '../bot-admin/entities/bot-training-data.entity';
 import { Company } from '../company/entities/company.entity';
@@ -44,6 +45,8 @@ export type SalesBotContext = {
   open_orders: Array<Record<string, unknown>>;
   /** whatsapp | messenger | instagram */
   channel: string;
+  /** the ad / short link / campaign this customer came from (last 7 days) – the bot answers about it */
+  campaign?: BotCampaign | null;
 };
 
 const MAX_PRODUCTS = 400;
@@ -124,7 +127,30 @@ export class SalesBotContextService {
     @InjectRepository(BotDeliveryZone) private readonly zoneRepository: Repository<BotDeliveryZone>,
     @InjectRepository(BotTrainingData) private readonly trainingRepository: Repository<BotTrainingData>,
     @InjectRepository(BotOrder) private readonly orderRepository: Repository<BotOrder>,
+    @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
+
+  private readonly logger = new Logger(SalesBotContextService.name);
+
+  /**
+   * Links the chat to its campaign right before the AI answers (the webhook scan may not have run yet)
+   * and returns what the bot should know about it.
+   */
+  private async campaignFor(conversationId: number | undefined, message: string | undefined): Promise<BotCampaign | null> {
+    if (!conversationId || !this.dataSource) return null;
+    try {
+      const [row] = await this.dataSource.query(
+        `SELECT cu.company_id, c.campaign_at FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE c.id = $1`, [conversationId]);
+      if (!row) return null;
+      let linked = await applyPendingRefs(this.dataSource, conversationId);
+      if (!linked && message) linked = await attributeText(this.dataSource, conversationId, Number(row.company_id), message);
+      if (!linked) await attributeBroadcastReply(this.dataSource, conversationId);
+      return await campaignForBot(this.dataSource, conversationId);
+    } catch (error) {
+      this.logger.warn(`campaign for conversation ${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
 
   async getSettings(companyId: number): Promise<SalesBotSettings> {
     const existing = await this.settingsRepository.findOne({ where: { company_id: companyId } });
@@ -144,8 +170,8 @@ export class SalesBotContextService {
     });
   }
 
-  async build(companyId: number, channelUserId: number | null, channel = 'whatsapp'): Promise<SalesBotContext> {
-    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders] = await Promise.all([
+  async build(companyId: number, channelUserId: number | null, channel = 'whatsapp', chat: { conversationId?: number; message?: string } = {}): Promise<SalesBotContext> {
+    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign] = await Promise.all([
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
       this.loadProducts(companyId),
@@ -165,6 +191,7 @@ export class SalesBotContextService {
             .take(3)
             .getMany()
         : Promise.resolve([] as BotOrder[]),
+      this.campaignFor(chat.conversationId, chat.message),
     ]);
 
     const policies: SalesBotContext['policies'] = [];
@@ -237,6 +264,7 @@ export class SalesBotContextService {
         })),
       })),
       channel,
+      campaign,
     };
   }
 
