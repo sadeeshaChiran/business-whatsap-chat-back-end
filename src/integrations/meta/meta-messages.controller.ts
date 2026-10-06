@@ -1,3 +1,4 @@
+import { linkQuotedReply, quotedFromMessengerMessage } from '../../common/message-reply';
 import { SkipThrottle } from '@nestjs/throttler';
 import { SocialHook } from '../../common/social-hook';
 import { MarketingHook } from '../../common/marketing-hook';
@@ -198,6 +199,12 @@ export class MetaMessagesController {
       direction: isEcho ? 'outbound' : 'inbound',
     });
     if (isEcho) return saved; // the bot answers customers, not the Page's own messages
+
+    // the customer replied to (quoted) an earlier message
+    const quoted = quotedFromMessengerMessage(message as { reply_to?: { mid?: string } } | undefined);
+    if (quoted && providerId) {
+      await linkQuotedReply(this.messageRepository.manager, conversation.id, providerId, quoted).catch(() => undefined);
+    }
 
     // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
     // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).

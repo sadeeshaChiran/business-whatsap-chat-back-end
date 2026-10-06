@@ -26,6 +26,8 @@ export type InboundResult = InboundRow | { skip: string };
 type MetaMedia = { id?: string; caption?: string; filename?: string; mime_type?: string; voice?: boolean };
 type MetaMessage = {
   id?: string;
+  /** set when the customer replies to (quotes) an earlier message */
+  context?: { id?: string; from?: string };
   type?: string;
   text?: { body?: string };
   image?: MetaMedia;

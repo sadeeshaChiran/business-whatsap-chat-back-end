@@ -4,6 +4,7 @@ import type {
   NormalizedWhatsAppInbound,
   WhatsappOutboundMedia,
   WhatsappServiceInterface,
+  WhatsappTextOptions,
 } from '../interfaces/whatsapp-service.interface';
 
 @Injectable()
@@ -185,6 +186,7 @@ export class MetaAdapter implements WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
+    options: WhatsappTextOptions = {},
   ): Promise<{ messageId: string | null }> {
     const token = channel.meta_access_token?.trim() ?? '';
     const phoneNumberId = channel.meta_phone_number_id?.trim() ?? '';
@@ -206,6 +208,8 @@ export class MetaAdapter implements WhatsappServiceInterface {
           to: phone,
           type: 'text',
           text: { body: text.trim() },
+          // shown in WhatsApp as a reply to that message
+          ...(options.replyTo?.providerId ? { context: { message_id: options.replyTo.providerId } } : {}),
         }),
       },
     );

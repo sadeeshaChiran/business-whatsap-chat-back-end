@@ -267,7 +267,7 @@ export class BotAdminController {
     @Param('id', ParseIntPipe) id: number,
     @Body() payload: SendConversationMessageDto,
   ) {
-    return this.botAdminService.sendConversationMessage(user, id, payload.text);
+    return this.botAdminService.sendConversationMessage(user, id, payload.text, payload.reply_to_message_id);
   }
 
   /** Agent accepts their assigned pending conversation */

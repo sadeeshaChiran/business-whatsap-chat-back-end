@@ -1,3 +1,4 @@
+import { withQuote } from '../common/message-reply';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -265,7 +266,11 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!pending.length) return;
 
     const message = pending
-      .map((row) => String(row.content ?? '').split('\n').filter((line) => !PLACEHOLDER.test(line.trim())).join('\n').trim())
+      .map((row) => {
+        const text = String(row.content ?? '').split('\n').filter((line) => !PLACEHOLDER.test(line.trim())).join('\n').trim();
+        // "Mata me pack eka danna" quoting an earlier message → the AI sees which message "me pack eka" is
+        return text ? withQuote(row, text) : '';
+      })
       .filter(Boolean)
       .join('\n');
     const mediaRow = [...pending].reverse().find((row) => row.media_url && (row.message_type === 'image' || row.message_type === 'voice'));
@@ -368,7 +373,7 @@ export class SalesBotEngineService implements OnModuleInit {
     return rows.reverse().map((row) => {
       const content = row.message_type === 'image' ? `[photo] ${PLACEHOLDER.test(row.content.trim()) ? '' : row.content}`.trim()
         : row.message_type === 'voice' ? '[voice note]' : row.content;
-      if (row.direction === 'inbound') return { role: 'customer' as const, text: content };
+      if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content) : content };
       const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
       return { role: isBot ? ('bot' as const) : ('agent' as const), text: content };
     }).filter((turn) => turn.text);

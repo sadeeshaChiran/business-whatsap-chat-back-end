@@ -8,10 +8,11 @@ import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import { SalesBotHook } from '../../common/sales-bot-hook';
-import type { NormalizedWhatsAppInbound } from './interfaces/whatsapp-service.interface';
+import type { NormalizedWhatsAppInbound, WhatsappTextOptions } from './interfaces/whatsapp-service.interface';
 import { MetaAdapter } from './adapters/meta.adapter';
 import { WhatsappProviderFactory } from './whatsapp-provider.factory';
 import { contentFromMetaMessage, findMetaRawMessage, type InboundRow } from './meta-inbound-content.util';
+import { linkQuotedReply, quotedFromEvolutionBody, quotedFromMetaMessage } from '../../common/message-reply';
 
 @Injectable()
 export class WhatsappService {
@@ -221,6 +222,17 @@ export class WhatsappService {
           }
         : undefined,
     );
+
+    // the customer replied to (quoted) an earlier message: keep the quote for the inbox and the AI
+    if (routing.conversationId && !routing.duplicate && normalized.message_id) {
+      const quoted = normalized.provider === 'meta'
+        ? quotedFromMetaMessage(findMetaRawMessage(body, normalized.message_id))
+        : quotedFromEvolutionBody(body, normalized.message_id);
+      if (quoted) {
+        await linkQuotedReply(this.messageRepository.manager, Number(routing.conversationId), normalized.message_id.trim(), quoted)
+          .catch((error: unknown) => this.logger.warn(`quoted reply not saved: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
 
     if (routing.conversationId && !routing.duplicate && row?.content) {
       await this.executeAutomationFlows(channel, normalized, routing.conversationId, row.content);
@@ -432,13 +444,13 @@ export class WhatsappService {
     return record;
   }
 
-  async sendText(companyId: number, toPhone: string, text: string) {
+  async sendText(companyId: number, toPhone: string, text: string, options: WhatsappTextOptions = {}) {
     const channel = await this.whatsappChannelService.getForCompany(companyId);
     if (!channel) {
       throw new NotFoundException('WhatsApp channel not configured for this company.');
     }
     const adapter = this.providerFactory.getAdapterForChannel(channel);
-    const result = await adapter.sendText(channel, toPhone, text);
+    const result = await adapter.sendText(channel, toPhone, text, options);
     return { provider: adapter.provider, sent: true, messageId: result.messageId };
   }
 
