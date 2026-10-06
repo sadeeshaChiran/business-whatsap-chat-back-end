@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
 export class PackageDto {
   @IsString() @MinLength(2) @MaxLength(40) @Matches(/^[a-z0-9_-]+$/, { message: 'code: lowercase letters, numbers, - and _ only' })
@@ -41,6 +41,14 @@ export class PackageDto {
 
   @IsOptional() @Type(() => Number) @IsInt()
   sort_order?: number;
+
+  /** Offer price per month - null clears it. Must be lower than the normal price. */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsNumber() @Min(0) offer_price_monthly?: number | null;
+  /** Offer price per year - null clears it (leave empty: a yearly plan bought on offer runs past the offer date). */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsNumber() @Min(0) offer_price_yearly?: number | null;
+  /** Last day of the offer (Sri Lanka date, YYYY-MM-DD) - null ends the offer */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'offer_until must be a date like 2026-12-31' }) offer_until?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) offer_label?: string;
 }
 
 export class UpdatePackageDto {
@@ -56,6 +64,14 @@ export class UpdatePackageDto {
   @IsOptional() @IsBoolean() is_active?: boolean;
   @IsOptional() @IsBoolean() is_public?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() sort_order?: number;
+
+  /** Offer price per month - null clears it. Must be lower than the normal price. */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsNumber() @Min(0) offer_price_monthly?: number | null;
+  /** Offer price per year - null clears it (leave empty: a yearly plan bought on offer runs past the offer date). */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsNumber() @Min(0) offer_price_yearly?: number | null;
+  /** Last day of the offer (Sri Lanka date, YYYY-MM-DD) - null ends the offer */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'offer_until must be a date like 2026-12-31' }) offer_until?: string | null;
+  @IsOptional() @IsString() @MaxLength(80) offer_label?: string;
 }
 
 export class UpdateSubscriptionDto {
@@ -102,4 +118,8 @@ export class CreditSettingsDto {
   /** 1 credit = this many AI tokens */
   @Type(() => Number) @IsInt() @Min(1000)
   tokens_per_credit: number;
+
+  /** average tokens per bot reply - only used for the "≈ N AI replies" text on packages */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(500) @Max(200_000)
+  tokens_per_reply?: number;
 }

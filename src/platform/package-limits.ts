@@ -13,6 +13,7 @@ export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'crm', label: 'CRM', kind: 'feature', group: 'Sales', description: 'Contacts, 360 view, tags, follow-up tasks, CSV import / export.' },
   { key: 'marketing_ads', label: 'Marketing – ad results', kind: 'feature', group: 'Marketing', description: 'Chats, orders and sales per Click-to-WhatsApp / Messenger / Instagram ad.' },
   { key: 'marketing_pro', label: 'Marketing – Meta ads', kind: 'feature', group: 'Marketing', description: 'Connect the ad account: campaigns, ROAS, pause / budget, audiences, Conversions API.' },
+  { key: 'campaigns', label: 'Campaigns, short links & QR', kind: 'feature', group: 'Marketing', description: 'Campaigns with their own AI instructions, short links and QR codes that open a chat and track customers.' },
   { key: 'broadcasts', label: 'WhatsApp broadcasts', kind: 'feature', group: 'Marketing', description: 'Send approved templates to customer groups.' },
   { key: 'broadcasts_per_month', label: 'Broadcast messages per month', kind: 'number', group: 'Marketing', description: 'Empty = unlimited.' },
   { key: 'reports_days', label: 'Report history (days)', kind: 'number', group: 'Reports', description: 'How far back Bot reports go. Empty = unlimited.' },

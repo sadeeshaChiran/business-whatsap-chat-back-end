@@ -6,12 +6,14 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../bot-admin/entities/bot-message.entity';
 import { MarketingHook } from '../common/marketing-hook';
+import { applyPendingRefs, attributeAd, attributeBroadcastReply, attributeRef, attributeText, linkTags, savePendingRef } from './attribution';
 import {
   GraphError, adsLoginUrl, exchangeAdsCode, fromMinorUnits, graphRequest, normalisePhone, readAdsState, sha256, toMinorUnits,
 } from './graph';
 
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
-const STOP = /^\s*(stop|unsubscribe|opt[\s-]?out|stop promotions)\s*[.!]*\s*$/i;
+/** whole-message opt-out words (English, Singlish, Sinhala, Tamil) */
+const STOP = /^\s*(stop|unsubscribe|opt[\s-]?out|stop promotions|stop messages|nawaththanna|nawattanna|නවත්වන්න|නතර කරන්න|niruththu|நிறுத்து|நிறுத்தவும்)\s*[.!]*\s*$/iu;
 const ATTRIBUTION_DAYS = 28;
 
 type Settings = {
@@ -41,9 +43,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
 
-  private async adminCompany(user: AuthenticatedUser): Promise<number> {
-    const [row] = await this.dataSource.query(`SELECT id, admin_user_id FROM companies WHERE id = $1`, [user.company_id]);
-    if (!row || Number(row.admin_user_id) !== Number(user.id)) throw new ForbiddenException('Only the company admin can use the marketing tools.');
+  /** The routes are @AdminOnly (any admin of the company, not only the owner). */
+  async adminCompany(user: AuthenticatedUser): Promise<number> {
+    if (String(user.role ?? '').toLowerCase() === 'agent') throw new ForbiddenException('Only company admins can use the marketing tools.');
+    const [row] = await this.dataSource.query(`SELECT id FROM companies WHERE id = $1`, [user.company_id]);
+    if (!row) throw new ForbiddenException('Only company admins can use the marketing tools.');
     return Number(row.id);
   }
 
@@ -79,49 +83,90 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
   /* ═══════════════ 1) Ad tracking ═══════════════ */
 
-  /** Reads the ad referral that Meta sends with the first message after an ad click and stores it on the conversation. */
+  /**
+   * After Meta's webhook messages are saved: links the chat to the ad / short link / campaign that brought the customer.
+   * WhatsApp: ad referral (Click-to-WhatsApp) or "#slug" in the text. Messenger / Instagram: ad referral or m.me / ig.me "ref".
+   */
   async captureReferrals(body: unknown, platform: 'whatsapp' | 'messenger' | 'instagram') {
-    const payload = body as { entry?: Array<{ changes?: Array<{ value?: { messages?: Array<Record<string, any>> } }>; messaging?: Array<Record<string, any>> }> };
-    const found: Array<{ mid?: string; senderId?: string; adId: string; type: string; headline: string; url: string; clid: string | null }> = [];
+    const root = (body as { body?: unknown })?.body && !(body as { entry?: unknown }).entry ? (body as { body: unknown }).body : body;
+    const payload = root as { entry?: Array<{ changes?: Array<{ value?: { messages?: Array<Record<string, any>> } }>; messaging?: Array<Record<string, any>> }> };
+    type Found = { mid?: string; senderId?: string; kind: 'ad' | 'ref' | 'text'; value: string; type?: string; headline?: string; body?: string; url?: string; clid?: string | null };
+    const found: Found[] = [];
     for (const entry of payload?.entry ?? []) {
       for (const change of entry.changes ?? []) {
         for (const message of change.value?.messages ?? []) {
           const r = message.referral;
-          if (r?.source_id) found.push({ mid: message.id, adId: String(r.source_id), type: String(r.source_type ?? 'ad'), headline: String(r.headline ?? r.body ?? ''), url: String(r.source_url ?? ''), clid: r.ctwa_clid ? String(r.ctwa_clid) : null });
+          if (r?.source_id) {
+            found.push({ mid: message.id, kind: 'ad', value: String(r.source_id), type: String(r.source_type ?? 'ad'), headline: String(r.headline ?? ''),
+              body: String(r.body ?? ''), url: String(r.source_url ?? ''), clid: r.ctwa_clid ? String(r.ctwa_clid) : null });
+          }
+          const text = String(message.text?.body ?? '');
+          if (text && linkTags(text).length) found.push({ mid: message.id, kind: 'text', value: text });
         }
       }
       for (const event of entry.messaging ?? []) {
         const r = event.referral ?? event.message?.referral ?? event.postback?.referral;
+        const senderId = event.sender?.id ? String(event.sender.id) : undefined;
         if (r && (r.ad_id || r.source === 'ADS')) {
-          found.push({
-            mid: event.message?.mid, senderId: event.sender?.id, adId: String(r.ad_id ?? r.ref ?? 'unknown'), type: 'ad',
-            headline: String(r.ads_context_data?.ad_title ?? ''), url: String(r.ads_context_data?.photo_url ?? ''), clid: null,
-          });
+          found.push({ mid: event.message?.mid, senderId, kind: 'ad', value: String(r.ad_id ?? r.ref ?? 'unknown'), type: 'ad',
+            headline: String(r.ads_context_data?.ad_title ?? ''), body: '', url: String(r.ads_context_data?.photo_url ?? ''), clid: null });
+        } else if (r?.ref) {
+          found.push({ mid: event.message?.mid, senderId, kind: 'ref', value: String(r.ref) });
         }
+        const text = String(event.message?.text ?? '');
+        if (text && linkTags(text).length) found.push({ mid: event.message?.mid, senderId, kind: 'text', value: text });
       }
     }
     for (const ref of found) {
-      let conversationId: number | null = null;
+      let conversation: { id: number; company_id: number } | null = null;
       if (ref.mid) {
-        const [row] = await this.dataSource.query(`SELECT conversation_id FROM bot_message WHERE provider_message_id = $1 OR provider_message_id LIKE $1 || ':%' ORDER BY id LIMIT 1`, [ref.mid]);
-        conversationId = row ? Number(row.conversation_id) : null;
-      }
-      if (!conversationId && ref.senderId) {
         const [row] = await this.dataSource.query(`
-          SELECT c.id FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
-           WHERE cu.platform = $1 AND cu.external_user_id = $2 ORDER BY c.id DESC LIMIT 1`, [platform, ref.senderId]);
-        conversationId = row ? Number(row.id) : null;
+          SELECT m.conversation_id AS id, cu.company_id FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+            JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE m.provider_message_id = $1 OR m.provider_message_id LIKE $1 || ':%' ORDER BY m.id LIMIT 1`, [ref.mid]);
+        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id) } : null;
       }
-      if (!conversationId) continue;
+      if (!conversation && ref.senderId) {
+        const [row] = await this.dataSource.query(`
+          SELECT c.id, cu.company_id FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE cu.platform = $1 AND cu.external_user_id = $2 ORDER BY c.id DESC LIMIT 1`, [platform, ref.senderId]);
+        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id) } : null;
+      }
+      if (!conversation) {
+        // a referral before the first message (new customer): keep it until the chat exists
+        if (ref.senderId && ref.kind !== 'text') await savePendingRef(this.dataSource, platform, ref.senderId, { kind: ref.kind, value: ref.value, headline: ref.headline, body: ref.body, url: ref.url });
+        continue;
+      }
+      if (ref.kind === 'text') { await attributeText(this.dataSource, conversation.id, conversation.company_id, ref.value); continue; }
+      if (ref.kind === 'ref') { await attributeRef(this.dataSource, conversation.id, conversation.company_id, ref.value); continue; }
       // latest ad click wins for this chat
       await this.dataSource.query(`
         UPDATE bot_conversation SET ad_source_id = $2, ad_source_type = $3, ad_headline = $4, ad_source_url = $5,
-               ad_ctwa_clid = COALESCE($6, ad_ctwa_clid), ad_platform = $7, ad_referred_at = NOW()
-         WHERE id = $1`, [conversationId, ref.adId, ref.type, ref.headline.slice(0, 1000), ref.url.slice(0, 1000), ref.clid, platform]);
+               ad_ctwa_clid = COALESCE($6, ad_ctwa_clid), ad_platform = $7, ad_referred_at = NOW(), ad_body = $8
+         WHERE id = $1`, [conversation.id, ref.value, ref.type ?? 'ad', String(ref.headline || ref.body || '').slice(0, 1000), String(ref.url ?? '').slice(0, 1000), ref.clid ?? null, platform, String(ref.body ?? '').slice(0, 2000)]);
+      await this.resolveAdCampaign(conversation.company_id, ref.value).catch(() => undefined);
+      await attributeAd(this.dataSource, conversation.id, conversation.company_id, ref.value);
+    }
+  }
+
+  /** Fills the ad → Meta campaign cache when the ad account is connected (so campaigns can match by Meta campaign). */
+  private async resolveAdCampaign(companyId: number, adId: string) {
+    const [cached] = await this.dataSource.query(`SELECT campaign_id, lookup_failed_at FROM marketing_ad_cache WHERE ad_id = $1`, [adId]);
+    if (cached?.campaign_id) return;
+    if (cached?.lookup_failed_at && Date.now() - new Date(cached.lookup_failed_at).getTime() < 24 * 3600_000) return;
+    const settings = await this.settings(companyId);
+    if (!settings.meta_user_token || !/^\d+$/.test(adId)) return;
+    try {
+      const ad = await graphRequest<{ name?: string; adset_id?: string; campaign?: { id: string; name: string } }>('GET', `/${adId}`, settings.meta_user_token, { fields: 'name,adset_id,campaign{id,name}' });
       await this.dataSource.query(`
-        INSERT INTO crm_contact (bot_channel_user_id, company_id, source)
-        SELECT cu.id, cu.company_id, 'ad' FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE c.id = $1
-        ON CONFLICT (bot_channel_user_id) DO UPDATE SET source = COALESCE(crm_contact.source, 'ad')`, [conversationId]).catch(() => undefined);
+        INSERT INTO marketing_ad_cache (ad_id, ad_name, adset_id, campaign_id, campaign_name, company_id, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (ad_id) DO UPDATE SET ad_name = EXCLUDED.ad_name, adset_id = EXCLUDED.adset_id, campaign_id = EXCLUDED.campaign_id,
+          campaign_name = EXCLUDED.campaign_name, company_id = EXCLUDED.company_id, lookup_failed_at = NULL, updated_at = NOW()`,
+        [adId, ad.name ?? null, ad.adset_id ?? null, ad.campaign?.id ?? null, ad.campaign?.name ?? null, companyId]);
+    } catch {
+      await this.dataSource.query(`
+        INSERT INTO marketing_ad_cache (ad_id, company_id, lookup_failed_at) VALUES ($1, $2, NOW())
+        ON CONFLICT (ad_id) DO UPDATE SET lookup_failed_at = NOW()`, [adId, companyId]);
     }
   }
 
@@ -164,21 +209,33 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   /** Looks up ad / campaign names for ad ids (needs the ads connection; silently skipped without it). */
   private async fillAdNames(companyId: number, adIds: string[]): Promise<boolean> {
     const settings = await this.settings(companyId);
-    const ids = adIds.filter((id) => /^\d+$/.test(id)).slice(0, 50);
+    // ads Meta could not name in the last day are not asked again on every page load
+    const failed: Array<{ ad_id: string }> = await this.dataSource.query(
+      `SELECT ad_id FROM marketing_ad_cache WHERE ad_id = ANY($1::text[]) AND lookup_failed_at > NOW() - INTERVAL '1 day'`, [adIds]);
+    const skip = new Set(failed.map((row) => String(row.ad_id)));
+    const ids = adIds.filter((id) => /^\d+$/.test(id) && !skip.has(id)).slice(0, 50);
     if (!settings.meta_user_token || !ids.length) return false;
     let filled = false;
+    const markFailed = async (list: string[]) => {
+      for (const id of list) {
+        await this.dataSource.query(`INSERT INTO marketing_ad_cache (ad_id, company_id, lookup_failed_at) VALUES ($1, $2, NOW())
+          ON CONFLICT (ad_id) DO UPDATE SET lookup_failed_at = NOW()`, [id, companyId]);
+      }
+    };
     try {
       const result = await graphRequest<Record<string, { id: string; name?: string; adset_id?: string; campaign?: { id: string; name: string } }>>(
         'GET', '/', settings.meta_user_token, { ids: ids.join(','), fields: 'name,adset_id,campaign{id,name}' });
       for (const ad of Object.values(result)) {
         await this.dataSource.query(`
-          INSERT INTO marketing_ad_cache (ad_id, ad_name, adset_id, campaign_id, campaign_name) VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO marketing_ad_cache (ad_id, ad_name, adset_id, campaign_id, campaign_name, company_id) VALUES ($1, $2, $3, $4, $5, $6)
           ON CONFLICT (ad_id) DO UPDATE SET ad_name = EXCLUDED.ad_name, adset_id = EXCLUDED.adset_id, campaign_id = EXCLUDED.campaign_id,
-            campaign_name = EXCLUDED.campaign_name, updated_at = NOW()`,
-          [ad.id, ad.name ?? null, ad.adset_id ?? null, ad.campaign?.id ?? null, ad.campaign?.name ?? null]);
+            campaign_name = EXCLUDED.campaign_name, company_id = EXCLUDED.company_id, lookup_failed_at = NULL, updated_at = NOW()`,
+          [ad.id, ad.name ?? null, ad.adset_id ?? null, ad.campaign?.id ?? null, ad.campaign?.name ?? null, companyId]);
         if (ad.campaign?.id) filled = true;
       }
+      await markFailed(ids.filter((id) => !result[id]?.campaign?.id));
     } catch (error) {
+      await markFailed(ids);
       this.logger.warn(`ad names: ${error instanceof Error ? error.message : String(error)}`);
     }
     return filled;
@@ -480,8 +537,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     return { count: rows.length, sample: rows.slice(0, 5), opted_out: num(optouts?.n) };
   }
 
-  async createBroadcast(user: AuthenticatedUser, dto: { name: string; template_name: string; template_language: string; body_params?: string[]; audience?: Audience; scheduled_at?: string | null; send_now?: boolean }) {
+  async createBroadcast(user: AuthenticatedUser, dto: { name: string; template_name: string; template_language: string; body_params?: string[]; audience?: Audience; scheduled_at?: string | null; send_now?: boolean; campaign_id?: number | null }) {
     const companyId = await this.adminCompany(user);
+    if (dto.campaign_id) {
+      const [campaign] = await this.dataSource.query(`SELECT 1 FROM marketing_campaign WHERE id = $1 AND company_id = $2`, [dto.campaign_id, companyId]);
+      if (!campaign) throw new BadRequestException('Campaign not found.');
+    }
     await this.cloudChannel(companyId);
     const templates = await this.templates(user);
     const template = templates.find((t) => t.name === dto.template_name && t.language === dto.template_language);
@@ -496,7 +557,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (perMonth != null) {
       const [used] = await this.dataSource.query(`
         SELECT COUNT(*)::int AS n FROM marketing_broadcast_recipient r JOIN marketing_broadcast b ON b.id = r.broadcast_id
-         WHERE b.company_id = $1 AND r.status IN ('queued', 'sent') AND b.created_at >= date_trunc('month', NOW())`, [companyId]);
+         WHERE b.company_id = $1
+           AND (r.status IN ('queued', 'sending') OR (r.status = 'sent' AND r.sent_at >= date_trunc('month', NOW())))`, [companyId]);
       const left = Math.max(0, perMonth - num(used?.n));
       if (contacts.length > left) {
         throw new ForbiddenException({ statusCode: 403, error: 'Forbidden', code: 'LIMIT_REACHED', feature: 'broadcasts_per_month',
@@ -506,10 +568,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const scheduled = dto.send_now ? new Date() : dto.scheduled_at ? new Date(dto.scheduled_at) : null;
     if (scheduled && Number.isNaN(scheduled.getTime())) throw new BadRequestException('scheduled_at must be a date.');
     const [broadcast] = await this.dataSource.query(`
-      INSERT INTO marketing_broadcast (company_id, name, template_name, template_language, body_params, audience, status, scheduled_at, total, created_by)
-      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10) RETURNING *`,
+      INSERT INTO marketing_broadcast (company_id, name, template_name, template_language, body_params, audience, status, scheduled_at, total, created_by, campaign_id)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10, $11) RETURNING *`,
       [companyId, dto.name.trim(), template.name, template.language, JSON.stringify(params), JSON.stringify({ ...(dto.audience ?? {}), template_body: template.body }),
-        scheduled ? 'scheduled' : 'draft', scheduled, contacts.length, user.id]);
+        scheduled ? 'scheduled' : 'draft', scheduled, contacts.length, user.id, dto.campaign_id ?? null]);
     for (let i = 0; i < contacts.length; i += 500) {
       const chunk = contacts.slice(i, i + 500);
       await this.dataSource.query(`
@@ -536,38 +598,57 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     return this.broadcast(user, id);
   }
 
-  private statsSql = `
-    SELECT COUNT(*)::int AS total,
-           COUNT(*) FILTER (WHERE r.status = 'queued')::int AS queued,
-           COUNT(*) FILTER (WHERE r.status = 'sent')::int AS sent,
-           COUNT(*) FILTER (WHERE r.status = 'sent' AND m.delivery_status IN ('delivered', 'read'))::int AS delivered,
-           COUNT(*) FILTER (WHERE r.status = 'sent' AND m.delivery_status = 'read')::int AS read,
-           COUNT(*) FILTER (WHERE r.status = 'failed' OR m.delivery_status = 'failed')::int AS failed,
-           COUNT(*) FILTER (WHERE r.status = 'skipped')::int AS skipped,
-           (SELECT COUNT(DISTINCT c.bot_channel_user_id) FROM bot_message x JOIN bot_conversation c ON c.id = x.conversation_id
-             WHERE c.bot_channel_user_id IN (SELECT bot_channel_user_id FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status = 'sent')
-               AND x.direction::text = 'inbound' AND x.created_at > (SELECT started_at FROM marketing_broadcast WHERE id = $1))::int AS replied
-      FROM marketing_broadcast_recipient r LEFT JOIN bot_message m ON m.id = r.message_id WHERE r.broadcast_id = $1`;
+  /** Delivery numbers for several broadcasts in one query (a "failed after sending" counts only as failed). */
+  private async statsFor(ids: number[]): Promise<Map<number, Record<string, number>>> {
+    const out = new Map<number, Record<string, number>>();
+    if (!ids.length) return out;
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(`
+      SELECT r.broadcast_id,
+             COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE r.status IN ('queued', 'sending'))::int AS queued,
+             COUNT(*) FILTER (WHERE r.status = 'sent' AND COALESCE(m.delivery_status, '') <> 'failed')::int AS sent,
+             COUNT(*) FILTER (WHERE r.status = 'sent' AND m.delivery_status IN ('delivered', 'read'))::int AS delivered,
+             COUNT(*) FILTER (WHERE r.status = 'sent' AND m.delivery_status = 'read')::int AS read,
+             COUNT(*) FILTER (WHERE r.status = 'failed' OR (r.status = 'sent' AND m.delivery_status = 'failed'))::int AS failed,
+             COUNT(*) FILTER (WHERE r.status = 'skipped')::int AS skipped,
+             COUNT(*) FILTER (WHERE r.status = 'sent' AND EXISTS (
+               SELECT 1 FROM bot_conversation c JOIN bot_message x ON x.conversation_id = c.id
+                WHERE c.bot_channel_user_id = r.bot_channel_user_id AND x.direction::text = 'inbound' AND x.created_at > r.sent_at))::int AS replied
+        FROM marketing_broadcast_recipient r LEFT JOIN bot_message m ON m.id = r.message_id
+       WHERE r.broadcast_id = ANY($1::int[]) GROUP BY r.broadcast_id`, [ids]);
+    for (const row of rows) {
+      const { broadcast_id: id, ...stats } = row;
+      out.set(Number(id), Object.fromEntries(Object.entries(stats).map(([key, value]) => [key, num(value)])));
+    }
+    return out;
+  }
+
+  private static readonly EMPTY_STATS = { total: 0, queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0 };
 
   async broadcasts(user: AuthenticatedUser) {
     const companyId = await this.adminCompany(user);
-    const rows = await this.dataSource.query(`SELECT * FROM marketing_broadcast WHERE company_id = $1 ORDER BY id DESC LIMIT 100`, [companyId]);
-    const out: Array<Record<string, unknown>> = [];
-    for (const row of rows) out.push({ ...row, stats: (await this.dataSource.query(this.statsSql, [row.id]))[0] });
-    return out;
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(`
+      SELECT b.*, mc.name AS campaign_name FROM marketing_broadcast b LEFT JOIN marketing_campaign mc ON mc.id = b.campaign_id
+       WHERE b.company_id = $1 ORDER BY b.id DESC LIMIT 100`, [companyId]);
+    const stats = await this.statsFor(rows.map((row) => Number(row.id)));
+    return rows.map((row) => ({ ...row, stats: stats.get(Number(row.id)) ?? MarketingService.EMPTY_STATS }));
   }
 
   async broadcast(user: AuthenticatedUser, id: number) {
     const companyId = await this.adminCompany(user);
     const [row] = await this.dataSource.query(`SELECT * FROM marketing_broadcast WHERE id = $1 AND company_id = $2`, [id, companyId]);
     if (!row) throw new NotFoundException('Broadcast not found.');
-    const [stats] = await this.dataSource.query(this.statsSql, [id]);
-    const failures = await this.dataSource.query(`SELECT phone, name, error FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status = 'failed' LIMIT 20`, [id]);
+    const stats = (await this.statsFor([id])).get(id) ?? MarketingService.EMPTY_STATS;
+    const failures = await this.dataSource.query(`
+      SELECT r.phone, r.name, COALESCE(r.error, 'failed') AS error FROM marketing_broadcast_recipient r LEFT JOIN bot_message m ON m.id = r.message_id
+       WHERE r.broadcast_id = $1 AND (r.status = 'failed' OR (r.status = 'sent' AND m.delivery_status = 'failed')) ORDER BY r.id LIMIT 50`, [id]);
     return { ...row, stats, failures };
   }
 
   /** Sends queued recipients of due broadcasts, 25 per broadcast every 15 s. */
   private async sendBroadcasts() {
+    // a batch stuck in 'sending' (server restarted mid-send): we cannot know if it went out
+    await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'failed', error = 'interrupted (server restart) – may not have been sent' WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'`);
     const due = await this.dataSource.query(`SELECT * FROM marketing_broadcast WHERE status IN ('scheduled', 'sending') AND scheduled_at <= NOW() ORDER BY id LIMIT 5`);
     for (const broadcast of due) {
       if (broadcast.status === 'scheduled') await this.dataSource.query(`UPDATE marketing_broadcast SET status = 'sending', started_at = NOW() WHERE id = $1`, [broadcast.id]);
@@ -578,8 +659,19 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         await this.dataSource.query(`UPDATE marketing_broadcast SET status = 'failed', error = $2, finished_at = NOW() WHERE id = $1`, [broadcast.id, error instanceof Error ? error.message : 'WhatsApp not connected']);
         continue;
       }
-      const recipients = await this.dataSource.query(`SELECT * FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status = 'queued' ORDER BY id LIMIT 25`, [broadcast.id]);
+      // claim a batch (safe with more than one API server: each row is taken only once)
+      const claimed = await this.dataSource.query(`
+        UPDATE marketing_broadcast_recipient SET status = 'sending', updated_at = NOW()
+         WHERE id IN (SELECT id FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status = 'queued' ORDER BY id LIMIT 25 FOR UPDATE SKIP LOCKED)
+        RETURNING *`, [broadcast.id]);
+      const recipients = (Array.isArray(claimed[0]) ? claimed[0] : claimed) as Array<Record<string, any>>;
       for (const recipient of recipients) {
+        const [state] = await this.dataSource.query(`SELECT status FROM marketing_broadcast WHERE id = $1`, [broadcast.id]);
+        if (state?.status !== 'sending') {
+          // cancelled while this batch was going out
+          await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'skipped', error = 'cancelled' WHERE id = $1 AND status = 'sending'`, [recipient.id]);
+          continue;
+        }
         const [optedOut] = await this.dataSource.query(`SELECT 1 FROM marketing_optout WHERE company_id = $1 AND bot_channel_user_id = $2`, [broadcast.company_id, recipient.bot_channel_user_id]);
         if (optedOut) { await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'skipped', error = 'opted out' WHERE id = $1`, [recipient.id]); continue; }
         const firstName = String(recipient.name || '').split(/\s+/)[0] || 'there';
@@ -601,7 +693,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'failed', error = $2 WHERE id = $1`, [recipient.id, (error instanceof Error ? error.message : String(error)).slice(0, 500)]);
         }
       }
-      const [left] = await this.dataSource.query(`SELECT COUNT(*)::int AS n FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status = 'queued'`, [broadcast.id]);
+      const [left] = await this.dataSource.query(`SELECT COUNT(*)::int AS n FROM marketing_broadcast_recipient WHERE broadcast_id = $1 AND status IN ('queued', 'sending')`, [broadcast.id]);
       if (!num(left?.n)) await this.dataSource.query(`UPDATE marketing_broadcast SET status = 'done', finished_at = NOW() WHERE id = $1 AND status = 'sending'`, [broadcast.id]);
     }
   }
@@ -621,16 +713,34 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     return saved.id;
   }
 
-  /** Customers who reply STOP never get broadcasts again. */
-  private async captureOptOuts() {
+  /**
+   * New customer messages (every channel, also the QR WhatsApp): STOP → opt-out, and campaign links
+   * ("#slug" / the short-link text, waiting Messenger refs, replies to a campaign broadcast).
+   */
+  private async scanInbound() {
     const last = await this.cursor('optouts', `SELECT COALESCE(MAX(id), 0) AS id FROM bot_message`);
-    const rows = await this.dataSource.query(`
-      SELECT m.id, m.content, cu.id AS channel_user_id, cu.company_id FROM bot_message m
+    const rows: Array<{ id: number; content: string | null; conversation_id: number; channel_user_id: number; company_id: number; first: boolean }> = await this.dataSource.query(`
+      SELECT m.id, m.content, m.conversation_id, cu.id AS channel_user_id, cu.company_id,
+             NOT EXISTS (SELECT 1 FROM bot_message p WHERE p.conversation_id = m.conversation_id AND p.direction::text = 'inbound' AND p.id < m.id) AS first
+        FROM bot_message m
         JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
        WHERE m.id > $1 AND m.direction::text = 'inbound' ORDER BY m.id LIMIT 500`, [last]);
+    const seen = new Set<number>();
     for (const row of rows) {
-      if (STOP.test(String(row.content ?? ''))) {
+      const text = String(row.content ?? '');
+      if (STOP.test(text)) {
         await this.dataSource.query(`INSERT INTO marketing_optout (company_id, bot_channel_user_id, reason) VALUES ($1, $2, 'stop') ON CONFLICT DO NOTHING`, [row.company_id, row.channel_user_id]);
+      }
+      try {
+        let linked = false;
+        if (row.first || linkTags(text).length) linked = await attributeText(this.dataSource, Number(row.conversation_id), Number(row.company_id), text);
+        if (!seen.has(Number(row.conversation_id))) {
+          seen.add(Number(row.conversation_id));
+          if (!linked) linked = await applyPendingRefs(this.dataSource, Number(row.conversation_id));
+          if (!linked) await attributeBroadcastReply(this.dataSource, Number(row.conversation_id));
+        }
+      } catch (error) {
+        this.logger.warn(`campaign link for message ${row.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     if (rows.length) await this.moveCursor('optouts', Number(rows[rows.length - 1].id));
@@ -694,7 +804,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (this.running) return;
     this.running = true;
     try {
-      await this.captureOptOuts();
+      await this.scanInbound();
       await this.sendBroadcasts();
       await this.sendConversions();
     } catch (error) {
