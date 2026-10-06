@@ -35,6 +35,9 @@ export type WhatsappOutboundMedia = {
 
 export type WhatsappSendResult = { messageId: string | null };
 
+/** Optional: show the message as a reply to an earlier one (WhatsApp quote). */
+export type WhatsappTextOptions = { replyTo?: { providerId: string; text?: string | null } | null };
+
 export interface WhatsappServiceInterface {
   readonly provider: WhatsappProviderType;
 
@@ -46,6 +49,7 @@ export interface WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
+    options?: WhatsappTextOptions,
   ): Promise<WhatsappSendResult>;
 
   sendMedia(

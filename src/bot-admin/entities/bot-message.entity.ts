@@ -59,6 +59,18 @@ export class BotMessage {
   @Column({ type: 'varchar', length: 50, nullable: true })
   source: string | null;
 
+  /** the earlier message this one replies to (WhatsApp / Messenger quote) */
+  @Column({ type: 'int', nullable: true })
+  reply_to_message_id: number | null;
+
+  /** provider id of the quoted message (kept even when that message is not in our database) */
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  reply_to_provider_id: string | null;
+
+  /** short copy of the quoted text (shown above the message and sent to the AI) */
+  @Column({ type: 'text', nullable: true })
+  reply_to_text: string | null;
+
   @ManyToOne(() => BotConversation, (conversation) => conversation.messages, {
     nullable: false,
     onDelete: 'RESTRICT',

@@ -4,6 +4,7 @@ import type {
   NormalizedWhatsAppInbound,
   WhatsappOutboundMedia,
   WhatsappServiceInterface,
+  WhatsappTextOptions,
 } from '../interfaces/whatsapp-service.interface';
 
 @Injectable()
@@ -213,6 +214,7 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
     channel: WhatsappChannel,
     toPhone: string,
     text: string,
+    options: WhatsappTextOptions = {},
   ): Promise<{ messageId: string | null }> {
     const base = this.baseUrl(channel);
     const apiKey = channel.evaluation_whatsapp_key?.trim();
@@ -230,7 +232,10 @@ export class EvolutionAdapter implements WhatsappServiceInterface {
           apikey: apiKey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ number: phone, text: text.trim(), delay: 1200 }),
+        body: JSON.stringify({
+          number: phone, text: text.trim(), delay: 1200,
+          ...(options.replyTo?.providerId ? { quoted: { key: { id: options.replyTo.providerId }, message: { conversation: options.replyTo.text ?? '' } } } : {}),
+        }),
       },
     );
     if (!res.ok) {

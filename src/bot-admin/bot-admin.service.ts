@@ -1,3 +1,4 @@
+import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import {
@@ -247,11 +248,12 @@ export class BotAdminService {
     companyId: number,
     phone: string,
     text: string,
+    options: WhatsappTextOptions = {},
   ): Promise<string | null> {
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     await this.assertWhatsappSendReady(channel);
     try {
-      const result = await this.whatsappService.sendText(companyId, phone, text);
+      const result = await this.whatsappService.sendText(companyId, phone, text, options);
       return result.messageId;
     } catch (error) {
       this.throwWhatsappSendError(error);
@@ -760,6 +762,10 @@ export class BotAdminService {
       media_url: message.media_url,
       transcript: message.transcript,
       created_at: message.created_at,
+      // ticks (sent / delivered / read) and the quoted message
+      delivery_status: message.delivery_status ?? null,
+      reply_to_message_id: message.reply_to_message_id ?? null,
+      reply_to_text: message.reply_to_text ?? null,
     });
   }
 
@@ -2315,6 +2321,9 @@ export class BotAdminService {
         'm.content',
         'm.transcript',
         'm.source',
+        'm.delivery_status',
+        'm.reply_to_message_id',
+        'm.reply_to_text',
         'm.created_at',
       ])
       .addSelect(
@@ -2789,6 +2798,7 @@ export class BotAdminService {
     user: AuthenticatedUser,
     conversationId: number,
     text: string,
+    replyToMessageId?: number,
   ) {
     await this.assertConversationAccess(user, conversationId);
     const trimmed = text.trim();
@@ -2806,8 +2816,9 @@ export class BotAdminService {
     }
 
     const company = await this.getCompanyForUser(user);
+    // any company admin (not only the owner) may answer every chat; agents only their own
     const isAdmin =
-      company != null && Number(company.admin_user_id) === Number(user.id);
+      (company != null && Number(company.admin_user_id) === Number(user.id)) || String(user.role ?? '').toLowerCase() === 'admin';
     if (
       !isAdmin &&
       Number(conversation.assigned_agent_id) !== Number(user.id)
@@ -2820,6 +2831,13 @@ export class BotAdminService {
       throw new BadRequestException('Conversation has no linked channel user.');
     }
 
+    // reply to (quote) an earlier message of THIS chat
+    const quoted = replyToMessageId
+      ? await this.messageRepository.findOne({ where: { id: replyToMessageId, conversation_id: conversationId } })
+      : null;
+    if (replyToMessageId && !quoted) throw new BadRequestException('The message you are replying to was not found in this chat.');
+    const quotedProviderId = quoted?.provider_message_id ? quoted.provider_message_id.split(':')[0] : null;
+
     const socialPlatform = channelUser.platform?.toLowerCase();
     let providerMessageId: string | null = null;
     if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
@@ -2827,7 +2845,8 @@ export class BotAdminService {
     } else {
       const phone = this.normalizePhoneKey(channelUser.external_user_id);
       if (!phone) throw new BadRequestException('Invalid customer phone on this conversation.');
-      providerMessageId = await this.sendCompanyWhatsappText(user.company_id, phone, trimmed);
+      providerMessageId = await this.sendCompanyWhatsappText(user.company_id, phone, trimmed,
+        quotedProviderId ? { replyTo: { providerId: quotedProviderId, text: quoted?.content ?? null } } : {});
     }
 
     channelUser.manual_mode = true;
@@ -2843,6 +2862,9 @@ export class BotAdminService {
       source: isAdmin ? 'admin' : 'agent',
       provider_message_id: providerMessageId,
       delivery_status: providerMessageId ? 'sent' : null,
+      reply_to_message_id: quoted?.id ?? null,
+      reply_to_provider_id: quotedProviderId,
+      reply_to_text: quoted ? String(quoted.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 500) || null : null,
     });
     const saved = await this.messageRepository.save(message);
 
