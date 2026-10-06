@@ -79,6 +79,8 @@ describe('1. Authentication', () => {
       /^\/v1\/api$/, /^\/v1\/api\/auth\/(login|google|register|register\/start|register\/resend|register\/verify|password\/forgot|password\/reset)$/,
       /^\/v1\/api\/integrations\/meta\/callback$/, /^\/v1\/api\/integrations\/meta\/messages\/webhook$/,
       /^\/v1\/api\/integrations\/whatsapp\/(n8n\/send|webhook|webhook\/evolution|webhook\/meta)$/, /^\/v1\/api\/public\//,
+      // short links (/l/:slug – served outside the /v1/api prefix; the route lister adds the prefix)
+      /^\/v1\/api\/l\/:slug$/,
     ];
     const unexpected = routes.filter((r) => !r.auth && !allowed.some((re) => re.test(r.path))).map((r) => `${r.method} ${r.path}`);
     assert.deepEqual(unexpected, []);

@@ -8,7 +8,8 @@ import type { ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, Up
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { TokenAdjustment } from './entities/token-adjustment.entity';
-import { PlanService } from './plan.service';
+import { offerFields } from './package-offer';
+import { DEFAULT_TOKENS_PER_REPLY, PlanService } from './plan.service';
 import { TokenQuotaService, addMonths } from './token-quota.service';
 
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
@@ -176,13 +177,22 @@ export class SuperAdminService {
 
   async listPackages() {
     const packages = await this.packageRepository.find({ order: { sort_order: 'ASC', id: 'ASC' } });
+    this.perReply = await this.planService.tokensPerReply();
     const counts: Array<{ package_id: number; n: number }> = await this.dataSource.query(
       `SELECT package_id, COUNT(*)::int AS n FROM company_subscription GROUP BY package_id`);
     return packages.map((pkg) => ({ ...this.packageView(pkg), companies: counts.find((c) => c.package_id === pkg.id)?.n ?? 0 }));
   }
 
+  /** tokens per reply for the "≈ N AI replies" text (refreshed when the package list loads) */
+  private perReply = DEFAULT_TOKENS_PER_REPLY;
+
   packageView(pkg: PlatformPackage) {
     return {
+      offer_price_monthly: pkg.offer_price_monthly === null || pkg.offer_price_monthly === undefined ? null : num(pkg.offer_price_monthly),
+      offer_price_yearly: pkg.offer_price_yearly === null || pkg.offer_price_yearly === undefined ? null : num(pkg.offer_price_yearly),
+      offer_until: pkg.offer_until ? String(pkg.offer_until).slice(0, 10) : null,
+      offer_label: pkg.offer_label ?? '',
+      ...offerFields(pkg, this.perReply, num(pkg.tokens_per_month)),
       id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description,
       price_monthly: num(pkg.price_monthly), price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month),
       max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
@@ -192,6 +202,7 @@ export class SuperAdminService {
   }
 
   async createPackage(dto: PackageDto) {
+    checkOffer({ price_monthly: dto.price_monthly, price_yearly: dto.price_yearly, offer_price_monthly: dto.offer_price_monthly ?? null, offer_price_yearly: dto.offer_price_yearly ?? null, offer_until: dto.offer_until ?? null });
     const code = dto.code.trim().toLowerCase();
     if (await this.packageRepository.findOne({ where: { code } })) throw new ConflictException(`Package code "${code}" already exists.`);
     const saved = await this.packageRepository.save(this.packageRepository.create({
@@ -208,6 +219,8 @@ export class SuperAdminService {
     if (!pkg) throw new NotFoundException('Package not found.');
     const { limits, ...rest } = dto;
     Object.assign(pkg, Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)));
+    if (typeof pkg.offer_label === 'string') pkg.offer_label = pkg.offer_label.trim();
+    checkOffer(pkg);
     // merge: keys the super admin did not send keep their value
     if (limits !== undefined) pkg.limits = { ...(pkg.limits ?? {}), ...cleanLimits(limits) };
     const saved = await this.packageRepository.save(pkg);
@@ -223,14 +236,15 @@ export class SuperAdminService {
   /* ───────────── Credits ───────────── */
 
   async creditSettings() {
-    return { tokens_per_credit: await this.planService.tokensPerCredit() };
+    return { tokens_per_credit: await this.planService.tokensPerCredit(), tokens_per_reply: await this.planService.tokensPerReply() };
   }
 
-  async setCreditSettings(tokensPerCredit: number) {
+  async setCreditSettings(tokensPerCredit: number, tokensPerReply?: number) {
     if (!Number.isInteger(tokensPerCredit) || tokensPerCredit < 1000) throw new BadRequestException('tokens_per_credit must be at least 1,000.');
+    const perReply = tokensPerReply ?? (await this.planService.tokensPerReply());
     await this.dataSource.query(
       `INSERT INTO platform_setting (key, value) VALUES ('credits', $1::jsonb)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit })]);
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit, tokens_per_reply: perReply })]);
     this.planService.forget();
     return this.creditSettings();
   }
@@ -263,4 +277,13 @@ export class SuperAdminService {
       total_cost_usd: perCompany.reduce((sum, row) => sum + num(row.cost), 0),
     };
   }
+}
+
+/** An offer must be cheaper than the normal price and needs an end date. */
+function checkOffer(pkg: { price_monthly: number; price_yearly: number; offer_price_monthly: number | null; offer_price_yearly: number | null; offer_until: string | null }) {
+  const monthly = pkg.offer_price_monthly === null || pkg.offer_price_monthly === undefined ? null : Number(pkg.offer_price_monthly);
+  const yearly = pkg.offer_price_yearly === null || pkg.offer_price_yearly === undefined ? null : Number(pkg.offer_price_yearly);
+  if (monthly !== null && monthly >= Number(pkg.price_monthly)) throw new BadRequestException('The monthly offer price must be lower than the normal monthly price.');
+  if (yearly !== null && yearly >= Number(pkg.price_yearly)) throw new BadRequestException('The yearly offer price must be lower than the normal yearly price.');
+  if ((monthly !== null || yearly !== null) && !pkg.offer_until) throw new BadRequestException('Set the last day of the offer.');
 }

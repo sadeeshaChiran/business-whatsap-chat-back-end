@@ -4,6 +4,9 @@ import { Repository } from 'typeorm';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
 
+/** About 7,500 tokens per reply (shop data ~5,500 cached + chat + answer), measured Oct 2026. */
+export const DEFAULT_TOKENS_PER_REPLY = 7_500;
+
 /**
  * Package rules in one place (replaces the old hard-coded "Free only / max 3 agents").
  * companies.plan holds the package code.
@@ -27,16 +30,26 @@ export class PlanService {
     this.companyPlans.clear();
   }
 
-  private creditCache: { at: number; value: number } | null = null;
+  private creditCache: { at: number; value: number; perReply: number } | null = null;
+
+  private async creditSetting(): Promise<{ value: number; perReply: number }> {
+    if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache;
+    const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number } }> = await this.packageRepository.manager
+      .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
+    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || 50_000);
+    const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
+    this.creditCache = { at: Date.now(), value, perReply };
+    return this.creditCache;
+  }
 
   /** 1 credit = this many AI tokens (super admin setting, default 50,000). Companies only see credits. */
   async tokensPerCredit(): Promise<number> {
-    if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache.value;
-    const rows: Array<{ value: { tokens_per_credit?: number } }> = await this.packageRepository.manager
-      .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
-    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || 50_000);
-    this.creditCache = { at: Date.now(), value };
-    return value;
+    return (await this.creditSetting()).value;
+  }
+
+  /** Average AI tokens one bot reply uses (super admin setting) - only for the "≈ N AI replies" text. */
+  async tokensPerReply(): Promise<number> {
+    return (await this.creditSetting()).perReply;
   }
 
   /** tokens → credits, 1 decimal */

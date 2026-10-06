@@ -43,6 +43,8 @@ const MIGRATION_FILES = [
   'supabase_availability.sql',
   'supabase_social.sql',
   'supabase_security.sql',
+  'supabase_package_offers.sql',
+  'supabase_marketing_campaigns.sql',
 ] as const;
 
 function migrationDir(): string | null {

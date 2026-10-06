@@ -1,4 +1,4 @@
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { Logger, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
@@ -47,7 +47,8 @@ async function bootstrap() {
   app.useBodyParser('json', { limit: `${bodyLimitMb}mb` });
   app.useBodyParser('urlencoded', { limit: `${bodyLimitMb}mb`, extended: true });
 
-  app.setGlobalPrefix('v1/api');
+  // short links (/l/abc123) stay outside the API prefix so they are short
+  app.setGlobalPrefix('v1/api', { exclude: [{ path: 'l/:slug', method: RequestMethod.GET }] });
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalPipes(
     new ValidationPipe({
@@ -58,8 +59,17 @@ async function bootstrap() {
   );
 
   const origins = allowedOrigins();
+  const refused = new Set<string>();
   app.enableCors({
-    origin: origins,
+    // A refused web address is logged once, so a blocked browser request ("CORS error") is easy to explain
+    origin: origins === true ? true : (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+      const allowed = !origin || origins.includes(origin.replace(/\/+$/, ''));
+      if (!allowed && origin && !refused.has(origin) && refused.size < 50) {
+        refused.add(origin);
+        logger.warn(`CORS: browser requests from ${origin} are refused – add it to CORS_ORIGINS if it is your web app.`);
+      }
+      callback(null, allowed);
+    },
     credentials: false,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],

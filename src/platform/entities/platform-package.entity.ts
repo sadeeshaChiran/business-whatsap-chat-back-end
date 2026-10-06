@@ -21,6 +21,22 @@ export class PlatformPackage {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   price_yearly: number;
 
+  /** Offer price per month (null = no offer). Charged until offer_until (Sri Lanka date, inclusive). */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  offer_price_monthly: number | null;
+
+  /** Offer price per year (null = yearly is always the normal price) */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  offer_price_yearly: number | null;
+
+  /** Last day of the offer, YYYY-MM-DD (null = no offer) */
+  @Column({ type: 'date', nullable: true })
+  offer_until: string | null;
+
+  /** Short text on the price card, e.g. "Launch offer" */
+  @Column({ type: 'varchar', length: 80, default: '' })
+  offer_label: string;
+
   /** AI tokens per month (tokens reset monthly, also on yearly plans) */
   @Column({ type: 'bigint', default: 0 })
   tokens_per_month: number;

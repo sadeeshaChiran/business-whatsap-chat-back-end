@@ -1,5 +1,6 @@
 import { BrandingService } from '../branding.service';
 import { resolveLimits } from '../package-limits';
+import { offerFields, priceFor } from '../package-offer';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -86,7 +87,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       this.bankDetails(),
       this.paymentRepository.find({ where: { company_id: companyId }, order: { id: 'DESC' }, take: 50 }),
     ]);
-    const tpc = await this.planService.tokensPerCredit();
+    const [tpc, perReply] = await Promise.all([this.planService.tokensPerCredit(), this.planService.tokensPerReply()]);
     const credits = (tokens: number) => Math.round((num(tokens) / tpc) * 10) / 10;
     return {
       usage,
@@ -95,7 +96,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: num(pkg.price_monthly),
         price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month), max_agents: pkg.max_agents, features: pkg.features ?? [],
         credits_per_month: credits(num(pkg.tokens_per_month)),
-        max_products: pkg.max_products, limits: resolveLimits(pkg),
+        max_products: pkg.max_products, limits: resolveLimits(pkg), ...offerFields(pkg, perReply, num(pkg.tokens_per_month)),
       })),
       token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
       bank_details: bank,
@@ -111,12 +112,15 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     let description = '';
     let pkg: PlatformPackage | null = null;
     let pack: TokenPack | null = null;
+    let offerUsed = false;
     const cycle = dto.billing_cycle ?? 'monthly';
     if (dto.kind === 'subscription') {
       pkg = dto.package_id ? await this.packageRepository.findOne({ where: { id: dto.package_id, is_active: true } }) : null;
       if (!pkg) throw new BadRequestException('Choose a package.');
-      amount = num(cycle === 'yearly' ? pkg.price_yearly : pkg.price_monthly);
-      description = `${pkg.name} package – ${cycle === 'yearly' ? '1 year' : '1 month'}`;
+      const price = priceFor(pkg, cycle);
+      amount = price.amount;
+      offerUsed = price.offer !== null;
+      description = `${pkg.name} package – ${cycle === 'yearly' ? '1 year' : '1 month'}${offerUsed ? ` (offer price, until ${price.offer!.until})` : ''}`;
     } else {
       pack = dto.token_pack_id ? await this.packRepository.findOne({ where: { id: dto.token_pack_id, is_active: true } }) : null;
       if (!pack) throw new BadRequestException('Choose a token pack.');
@@ -124,7 +128,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       description = `${pack.name} – ${Math.round((num(pack.tokens) / (await this.planService.tokensPerCredit())) * 10) / 10} AI credits`;
     }
     if (dto.method === 'payhere' && !payhereEnabled()) throw new BadRequestException('Card payments are not available yet. Please use bank transfer.');
-    const autoRenew = dto.kind === 'subscription' && dto.method === 'payhere' && Boolean(dto.auto_renew);
+    // An offer price is paid once: PayHere would keep charging the same amount after the offer ends.
+    const autoRenew = dto.kind === 'subscription' && dto.method === 'payhere' && Boolean(dto.auto_renew) && !offerUsed;
 
     const payment = this.paymentRepository.create({
       company_id: companyId, kind: dto.kind, package_id: pkg?.id ?? null, billing_cycle: dto.kind === 'subscription' ? cycle : null,
