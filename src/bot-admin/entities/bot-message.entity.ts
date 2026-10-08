@@ -71,6 +71,20 @@ export class BotMessage {
   @Column({ type: 'text', nullable: true })
   reply_to_text: string | null;
 
+  /** owner feedback on a bot reply: up | down (inbox thumbs) */
+  @Column({ type: 'varchar', length: 8, nullable: true })
+  feedback: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  feedback_at: Date | null;
+
+  @Column({ type: 'int', nullable: true })
+  feedback_by: number | null;
+
+  /** the training row (style example / wrong reply) made from this feedback */
+  @Column({ type: 'int', nullable: true })
+  feedback_training_id: number | null;
+
   @ManyToOne(() => BotConversation, (conversation) => conversation.messages, {
     nullable: false,
     onDelete: 'RESTRICT',

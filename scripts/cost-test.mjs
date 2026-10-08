@@ -9,14 +9,14 @@
  *   cd backend
  *   COST_TEST_EMAIL=admin@yourshop.lk COST_TEST_PASSWORD='…' node scripts/cost-test.mjs
  *
- * Optional: API_URLscripts/cost-test.mjs (default http://localhost:3001/v1/api), USD_LKR (default 330.33),
+ * Optional: API_URL (default http://localhost:3001/v1/api), USD_LKR (default 330.33),
  *           COST_TEST_CHATS=1,2 (only some chats). Use a TEST company with real products.
  * The database address is read from .env (PRODUCT_DATABASE_URL) to read bot_ai_usage.
  */
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
 
-const API = (process.env.PUBLIC_API_BASE_URL || 'http://localhost:3001/v1/api').replace(/\/+$/, '');
+const API = (process.env.API_URL || 'http://localhost:3001/v1/api').replace(/\/+$/, '');
 const USD_LKR = Number(process.env.USD_LKR || 330.33);
 const env = (() => {
   try {
@@ -54,6 +54,25 @@ const CHATS = [
     ['meka ganna ona, 2k. Kamal, 45 Temple Road, Kandy. COD'],
     ['ok'],
   ] },
+  // quality checks for the 8 Oct update (each chat is checked automatically at the end)
+  { name: 'Check: "ok" after the summary confirms', check: 'order', messages: [
+    ['Baby Wipes 2k ona. Sunil Silva, 22 Lake Road, Colombo 05. COD'],
+    ['ok'],
+    ['ok'],
+  ] },
+  { name: 'Check: "thanks" is not a yes', check: 'thanks', messages: [
+    ['Baby Lotion ekak ona. Kasun, 8 Hill Street, Kandy. COD'],
+    ['ok'],
+    ['thanks'],
+  ] },
+  { name: 'Check: budget gets real suggestions', check: 'budget', budget: 2000, messages: [
+    ['baby kenekta gift ekak ona, budget eka 2000 witara'],
+  ] },
+  { name: 'Check: same question 3 times -> team member', check: 'handoff', messages: [
+    ['Jaffna ta cash on delivery thiyenawada'],
+    ['Jaffna ta cash on delivery thiyenawada?'],
+    ['Jaffna ta cash on delivery thiyenawada???'],
+  ] },
 ];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -70,8 +89,25 @@ async function call(method, path, { token, body, form } = {}) {
 
 /** bot messages of this chat (read from the database) */
 async function botMessages(db, conversationId) {
-  const { rows } = await db.query(`SELECT content FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' ORDER BY id`, [conversationId]);
+  const { rows } = await db.query(`SELECT content, intent FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' ORDER BY id`, [conversationId]);
   return rows;
+}
+
+/** Automatic quality checks for the chats that have "check". */
+async function quality(db, chat, conversationId, replies) {
+  const orders = await db.query(`SELECT o.id, o.created_at FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id
+    WHERE c.id = $1 ORDER BY o.id`, [conversationId]).then((r) => r.rows).catch(() => []);
+  const text = replies.map((r) => String(r.content)).join(' \n ');
+  switch (chat.check) {
+    case 'order': return orders.length === 1 ? 'PASS – order saved after "ok"' : `CHECK – ${orders.length} orders saved`;
+    case 'thanks': return orders.length === 0 ? 'PASS – no order on "thanks", the bot asked again' : 'FAIL – order saved on "thanks"';
+    case 'budget': {
+      const prices = [...text.matchAll(/Rs\.?\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, '')));
+      return prices.some((p) => p > 0 && p <= chat.budget) ? `PASS – suggested items: ${prices.join(', ')}` : 'CHECK – no price under the budget in the reply';
+    }
+    case 'handoff': return replies.some((r) => String(r.intent ?? '').includes('handoff')) ? 'PASS – team member called' : 'CHECK – no hand-over';
+    default: return null;
+  }
 }
 
 async function main() {
@@ -89,6 +125,7 @@ async function main() {
   const only = String(process.env.COST_TEST_CHATS || '').split(',').map(Number).filter(Boolean);
   const run = Date.now().toString().slice(-6);
   const conversations = [];
+  const checks = [];
   for (const [index, chat] of CHATS.entries()) {
     if (only.length && !only.includes(index + 1)) continue;
     const phone = `9470${run}${index}`.slice(0, 11);
@@ -118,6 +155,7 @@ async function main() {
       before = after;
     }
     if (conversationId) conversations.push(conversationId);
+    if (chat.check && conversationId) checks.push(`${chat.name}: ${await quality(db, chat, conversationId, await botMessages(db, conversationId))}`);
   }
 
   const { rows } = await db.query(
@@ -134,6 +172,12 @@ async function main() {
   console.log(`per reply 2026: ${rs(total / Math.max(1, rows.length))}   (AI replies only: ${rs(total / Math.max(1, ai.length))})`);
   console.log(`per reply 2027 (Gemini price x2): ${rs((2 * total) / Math.max(1, rows.length))}`);
   console.log(`per customer chat 2026: ${rs(total / Math.max(1, conversations.length))}   2027: ${rs((2 * total) / Math.max(1, conversations.length))}`);
+  const avg = (key) => Math.round(ai.reduce((s, r) => s + Number(r[key]), 0) / Math.max(1, ai.length));
+  console.log(`tokens per AI reply: input ${avg('input_tokens')} (cached ${avg('cached_tokens')}), output ${avg('output_tokens')}`);
+  if (checks.length) {
+    console.log('\n=== QUALITY CHECKS');
+    for (const line of checks) console.log(`  ${line}`);
+  }
   console.log('\nSend this whole output to Claude for the review.');
 }
 

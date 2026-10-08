@@ -30,6 +30,7 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
 import { SalesBotContextService, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, zoneFee } from './delivery-fee';
+import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
 
 type PricedItem = {
   product_id: number; variant_id: number | null; product_name: string; variant_name: string;
@@ -44,7 +45,8 @@ type PendingOrder = {
   delivery_fee: number | null; total: number;
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
 };
-type BotSession = { language?: string; pending_order?: PendingOrder | null };
+/** memory = short notes the bot keeps about this customer (older parts of the chat). handoff_at = last hand-over (unix s). */
+type BotSession = { language?: string; pending_order?: PendingOrder | null; memory?: string; handoff_at?: number };
 /** Splits a bot reply into at most 3 WhatsApp messages at empty lines (extra parts join the last one). */
 export function splitReply(text: string, maxParts = 3): string[] {
   const parts = String(text ?? '').split(/\n[ \t]*\n+/).map((part) => part.trim()).filter(Boolean);
@@ -170,6 +172,8 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     SalesBotHook.register((event) => this.onInbound(event));
     this.logger.log(`Python sales bot active at ${SalesBotClient.baseUrl()}`);
+    const tick = Number(process.env.SALES_BOT_FOLLOWUP_TICK_MS ?? 60_000) || 60_000;
+    setInterval(() => void this.runDueFollowUps(), tick).unref();
   }
 
   static testMode(): boolean {
@@ -179,6 +183,8 @@ export class SalesBotEngineService implements OnModuleInit {
   /** Called for every saved customer message. Returns true = the sales bot owns the reply. */
   async onInbound(event: SalesBotInboundEvent): Promise<boolean> {
     if (event.provider === 'simulator') this.simulated.add(event.conversationId);
+    // a new customer message cancels the planned follow-up (the reply to it plans a new one)
+    await this.cancelPlannedFollowUp(event.conversationId).catch(() => undefined);
     this.schedule(event.companyId, event.conversationId);
     return true;
   }
@@ -289,7 +295,10 @@ export class SalesBotEngineService implements OnModuleInit {
       const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId: conversation.id, message });
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
-        session: { language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp' },
+        session: {
+          language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp',
+          memory: session.memory ?? '', handoff_at: session.handoff_at ?? 0,
+        },
         media, context,
       });
     } catch (error) {
@@ -297,6 +306,8 @@ export class SalesBotEngineService implements OnModuleInit {
       const language = session.language ?? 'english';
       await this.sendText(companyId, conversation, channelUser, channel, sorryMessage(language), 'handoff', simulated);
       await this.handoff(companyId, conversation, channelUser, 'bot_error', 'The bot could not answer – please reply to the customer.');
+      await this.conversationRepository.query(
+        `UPDATE bot_conversation SET followup_status = 'stopped', followup_due_at = NULL WHERE id = $1 AND followup_status = 'waiting'`, [conversationId]);
       return;
     }
 
@@ -308,6 +319,8 @@ export class SalesBotEngineService implements OnModuleInit {
     // Save first, so a blocked order never gets a "confirmed!" message
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
     session.language = result.language;
+    if (result.memory) session.memory = String(result.memory).slice(0, 600);
+    if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
     await this.channelUserRepository.update(channelUser.id, {
       session_state: JSON.stringify({ ...sessionState, sales_bot: session }),
     });
@@ -324,6 +337,8 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
     await this.advanceLead(conversation.id, 'contacted');
+    await this.planFollowUpAfterReply(companyId, conversation, result, outcome, session)
+      .catch((error: unknown) => this.logger.warn(`follow-up plan failed: ${error instanceof Error ? error.message : String(error)}`));
 
     // Invoice PDF after a new or changed order (existing invoice feature, on the customer's channel)
     if (outcome.invoiceOrderIds.length) {
@@ -447,6 +462,7 @@ export class SalesBotEngineService implements OnModuleInit {
       content: text, source: BOT_SOURCE, intent, llm_provider: 'gemini',
     }));
     await this.touch(companyId, conversation.id);
+    return !failed;
   }
 
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
@@ -612,6 +628,219 @@ export class SalesBotEngineService implements OnModuleInit {
       intents.add('handoff');
     }
     return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds };
+  }
+
+  /* ───────────────── Follow-ups (interested customers who went quiet) ───────────────── */
+
+  /**
+   * The customer's last message: id + time as a real instant. bot_message.created_at has no time zone, so it is
+   * converted in SQL with the same session time zone that wrote it (safe whatever TZ the server or database uses).
+   */
+  private async lastInbound(conversationId: number): Promise<{ id: number; at: Date } | null> {
+    const [row] = (await this.conversationRepository.query(
+      `SELECT id, created_at::timestamptz AS at FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' ORDER BY id DESC LIMIT 1`,
+      [conversationId])) as Array<{ id: number; at: Date }>;
+    if (!row) return null;
+    const at = new Date(row.at);
+    return { id: Number(row.id), at: at.getTime() > Date.now() ? new Date() : at };
+  }
+
+  private static hoursOf(settings: { followup_first_hours?: number | string | null; followup_second_hours?: number | string | null }) {
+    return { firstHours: Number(settings.followup_first_hours ?? 3), secondHours: Math.min(22, Number(settings.followup_second_hours ?? 22)) };
+  }
+
+  /** After every bot reply: plan follow-up 1, or mark the chat converted / stopped. */
+  private async planFollowUpAfterReply(companyId: number, conversation: BotConversation, result: SalesBotResult,
+    outcome: Outcome, session: BotSession) {
+    if (!result.interest && (result.usage.calls ?? 1) === 0) return; // no AI call ("thanks", welcome): nothing new
+    const current = await this.conversationRepository.findOne({ where: { id: conversation.id }, relations: ['channelUser'] });
+    if (!current) return;
+    const intents = String(outcome.intent ?? '').split(',');
+    const off = current.followup_status === 'off'; // the team switched follow-ups off for this chat: never change that
+    const patch: Partial<Pick<BotConversation, 'followup_status' | 'followup_interest' | 'followup_note' | 'followup_due_at' | 'followup_count' | 'followup_quiet_since'>> = {
+      followup_interest: result.interest ?? current.followup_interest ?? null,
+    };
+    if (result.followup_note) patch.followup_note = result.followup_note;
+    // a person was asked for in the last 24 h, or an agent took the chat: no automatic follow-ups
+    const handoffOpen = Boolean(current.channelUser?.manual_mode) || Number(session.handoff_at ?? 0) > Date.now() / 1000 - 24 * 3600;
+    if (intents.includes('order') || intents.includes('booking')) {
+      Object.assign(patch, { followup_status: off ? 'off' : current.followup_status ? 'converted' : null, followup_due_at: null });
+    } else if (intents.includes('handoff') || handoffOpen) {
+      Object.assign(patch, { followup_status: off ? 'off' : current.followup_status ? 'stopped' : null, followup_due_at: null });
+    } else if (off) {
+      patch.followup_due_at = null;
+    } else if (result.interest === 'none') {
+      // said no / not buying now: no follow-up (and an old order draft does not count any more)
+      Object.assign(patch, { followup_status: current.followup_status === 'waiting' ? 'stopped' : current.followup_status, followup_due_at: null });
+    } else if (result.interest === 'interested' || result.interest === 'ready' || (result.order?.items?.length && result.interest !== 'browsing')) {
+      const settings = await this.contextService.getSettings(companyId);
+      const last = await this.lastInbound(conversation.id);
+      const quietSince = last?.at ?? new Date();
+      const hours = SalesBotEngineService.hoursOf(settings);
+      const due = settings.followup_enabled && !(await this.followUpCapReached(conversation.id))
+        ? planFollowUp({ quietSince, number: 1, ...hours, now: new Date() }) ?? planFollowUp({ quietSince, number: 2, ...hours, now: new Date() })
+        : null;
+      Object.assign(patch, { followup_status: due ? 'waiting' : null, followup_due_at: due, followup_count: 0, followup_quiet_since: quietSince });
+      await this.advanceLead(conversation.id, 'qualified', { interest: result.interest, wants: result.followup_note });
+    } else {
+      // browsing: no follow-up
+      Object.assign(patch, { followup_status: current.followup_status === 'waiting' ? null : current.followup_status, followup_due_at: null });
+    }
+    await this.conversationRepository.update(conversation.id, patch);
+  }
+
+  /** Never more than 2 follow-ups in 24 hours or 4 in 7 days for one chat (whatever happens in between). */
+  private async followUpCapReached(conversationId: number): Promise<boolean> {
+    const [row] = (await this.conversationRepository.query(
+      `SELECT COUNT(*) FILTER (WHERE created_at::timestamptz > NOW() - INTERVAL '24 hours')::int AS day,
+              COUNT(*)::int AS week
+         FROM bot_message WHERE conversation_id = $1 AND intent LIKE 'followup_%' AND created_at::timestamptz > NOW() - INTERVAL '7 days'`,
+      [conversationId])) as Array<{ day: number; week: number }>;
+    return Number(row?.day ?? 0) >= 2 || Number(row?.week ?? 0) >= 4;
+  }
+
+  /** A new customer message cancels the planned follow-up (the reply to it plans a new one). */
+  private async cancelPlannedFollowUp(conversationId: number) {
+    await this.conversationRepository.query(
+      `UPDATE bot_conversation SET followup_due_at = NULL, followup_status = NULL WHERE id = $1 AND followup_status = 'waiting'`, [conversationId]);
+  }
+
+  private followUpBusy = false;
+
+  /** Sends the follow-ups that are due (runs every minute). */
+  async runDueFollowUps() {
+    if (this.followUpBusy) return;
+    this.followUpBusy = true;
+    try {
+      const raw: unknown = await this.conversationRepository.query(
+        `UPDATE bot_conversation SET followup_due_at = NULL
+          WHERE id IN (SELECT id FROM bot_conversation WHERE followup_status = 'waiting' AND followup_due_at <= NOW()
+                        ORDER BY followup_due_at LIMIT 20 FOR UPDATE SKIP LOCKED)
+          RETURNING id`);
+      // postgres UPDATE … RETURNING comes back as [rows, count]
+      const rows = (Array.isArray(raw) && Array.isArray(raw[0]) ? raw[0] : raw) as Array<{ id: number }>;
+      for (const row of rows) {
+        const id = Number(row.id);
+        if (this.running.has(id) || this.timers.has(id)) {
+          // the customer is writing right now: their reply plans again
+          await this.conversationRepository.query(`UPDATE bot_conversation SET followup_status = NULL WHERE id = $1 AND followup_status = 'waiting'`, [id]);
+          continue;
+        }
+        this.running.add(id);
+        try {
+          await this.sendFollowUp(id);
+        } catch (error) {
+          this.logger.warn(`follow-up for conversation ${id} failed: ${error instanceof Error ? error.message : String(error)}`);
+          await this.retryFollowUp(id);
+        } finally {
+          this.running.delete(id);
+        }
+      }
+    } finally {
+      this.followUpBusy = false;
+    }
+  }
+
+  /** A temporary problem (AI / network): try again in 10 minutes while the 24-hour window allows it. */
+  private async retryFollowUp(conversationId: number) {
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId } });
+    if (!conversation || conversation.followup_status !== 'waiting') return;
+    const quiet = conversation.followup_quiet_since ? new Date(conversation.followup_quiet_since).getTime() : 0;
+    const retryAt = new Date(Date.now() + 10 * 60_000);
+    const ok = quiet && retryAt.getTime() < quiet + FOLLOWUP_WINDOW_HOURS * 3_600_000 - 15 * 60_000;
+    await this.conversationRepository.query(
+      `UPDATE bot_conversation SET followup_due_at = $2, followup_status = $3 WHERE id = $1 AND followup_status = 'waiting'`,
+      [conversationId, ok ? retryAt : null, ok ? 'waiting' : null]);
+  }
+
+  private async sendFollowUp(conversationId: number) {
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId }, relations: ['channelUser'] });
+    const channelUser = conversation?.channelUser;
+    if (!conversation || !channelUser || conversation.followup_status !== 'waiting') return;
+    const end = (status: string | null) =>
+      this.conversationRepository.query(`UPDATE bot_conversation SET followup_status = $2, followup_due_at = NULL WHERE id = $1 AND followup_status = 'waiting'`, [conversationId, status]);
+    const companyId = Number(channelUser.company_id);
+    const settings = await this.contextService.getSettings(companyId);
+    if (!settings.followup_enabled) return end('stopped');
+
+    const lastIn = await this.lastInbound(conversationId);
+    const last = await this.messageRepository.findOne({ where: { conversation_id: conversationId }, order: { id: 'DESC' } });
+    if (!lastIn || !last || last.direction === 'inbound') return end(null); // the customer answered: their reply plans again
+    const quietSince = lastIn.at;
+    const planned = conversation.followup_quiet_since ? new Date(conversation.followup_quiet_since).getTime() : 0;
+    if (Math.abs(planned - quietSince.getTime()) > 5_000) return end(null); // planned for an older message
+    if (Date.now() - quietSince.getTime() > FOLLOWUP_WINDOW_HOURS * 3_600_000) return end(Number(conversation.followup_count) > 0 ? 'sent' : 'expired');
+    // a person wrote after the customer (agent reply, template, broadcast) or the chat is with the team → stop
+    const others = await this.messageRepository.createQueryBuilder('m')
+      .where('m.conversation_id = :conversationId AND m.id > :after', { conversationId, after: lastIn.id })
+      .andWhere("m.direction::text = 'outbound'")
+      .andWhere("COALESCE(m.source, '') <> :bot", { bot: BOT_SOURCE })
+      .getCount();
+    const handedOver = Number((this.readSessionState(channelUser.session_state).sales_bot as BotSession | undefined)?.handoff_at ?? 0) > Date.now() / 1000 - 24 * 3600;
+    if (others || handedOver || channelUser.manual_mode) return end('stopped');
+    const simulated = String((await this.messageRepository.findOne({ where: { id: lastIn.id } }))?.provider_message_id ?? '').startsWith('sim-');
+    if (simulated && !SalesBotEngineService.testMode()) return end('stopped');
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    if (!(await this.botMayReply(company, conversation, channelUser, simulated))) return end('stopped');
+    const ordered = await this.orderRepository.createQueryBuilder('o')
+      .where('o.company_id = :companyId AND o.bot_channel_user_id = :userId AND o.created_at::timestamptz >= :since',
+        { companyId, userId: channelUser.id, since: quietSince })
+      .getCount();
+    if (ordered) return end('converted');
+    const optedOut = (await this.conversationRepository.query(
+      'SELECT 1 FROM marketing_optout WHERE company_id = $1 AND bot_channel_user_id = $2 LIMIT 1', [companyId, channelUser.id]).catch(() => [])) as unknown[];
+    if (optedOut.length) return end('stopped');
+    if (await this.followUpCapReached(conversationId)) return end('sent');
+
+    const hours = SalesBotEngineService.hoursOf(settings);
+    const max = hours.secondHours > 0 ? 2 : 1;
+    const number = Number(conversation.followup_count ?? 0) + 1;
+    if (number > max) return end('sent');
+    const anyTime = SalesBotEngineService.testMode() && process.env.SALES_BOT_FOLLOWUP_ANY_TIME === 'true'; // tests only
+    if (!anyTime && !isDaytime(new Date())) {
+      const due = planFollowUp({ quietSince, number: number as 1 | 2, ...hours, now: new Date(), lastSentAt: conversation.followup_last_at });
+      if (due) await this.conversationRepository.query(`UPDATE bot_conversation SET followup_due_at = $2 WHERE id = $1 AND followup_status = 'waiting'`, [conversationId, due]);
+      else await end(number > 1 ? 'sent' : 'expired');
+      return;
+    }
+
+    const social = socialPlatformOf(channelUser.platform);
+    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
+    const sessionState = this.readSessionState(channelUser.session_state);
+    const session: BotSession = (sessionState.sales_bot as BotSession) ?? {};
+    const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId });
+    const result = await this.client.reply({
+      company_id: companyId, customer_id: channelUser.id, message: '', history: await this.history(conversationId, last.id + 1),
+      session: {
+        language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp', memory: session.memory ?? '',
+        followup: { number, max, note: conversation.followup_note ?? '', hours_quiet: Math.round((Date.now() - quietSince.getTime()) / 3_600_000) },
+      },
+      media: null, context,
+    });
+    await this.usageRepository.save(this.usageRepository.create({
+      company_id: companyId, conversation_id: conversationId, model: result.usage.model,
+      input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens, output_tokens: result.usage.output_tokens,
+      calls: result.usage.calls ?? 1, cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: false,
+    }));
+    if (!result.reply) return end(null);
+    // last check right before sending: the customer wrote, or the team stopped it, while the AI was thinking
+    const newest = await this.messageRepository.findOne({ where: { conversation_id: conversationId }, order: { id: 'DESC' } });
+    const fresh = await this.conversationRepository.findOne({ where: { id: conversationId } });
+    if ((newest && newest.id !== last.id) || fresh?.followup_status !== 'waiting' || this.timers.has(conversationId)) return;
+    const delivered = await this.sendText(companyId, conversation, channelUser, channel, result.reply, `followup_${number}`, simulated);
+    if (!delivered) {
+      await this.retryFollowUp(conversationId);
+      return;
+    }
+    const sentAt = new Date();
+    const next = number < max ? planFollowUp({ quietSince, number: 2, ...hours, now: sentAt, lastSentAt: sentAt }) : null;
+    await this.conversationRepository.query(
+      `UPDATE bot_conversation SET followup_count = $2, followup_total = followup_total + 1, followup_last_at = $3,
+              followup_due_at = $4, followup_status = $5
+        WHERE id = $1 AND followup_status = 'waiting' AND followup_count = $6`,
+      [conversationId, number, sentAt, next, next ? 'waiting' : 'sent', number - 1]);
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversationId, followup: number });
+    this.logger.log(`conv ${conversationId}: follow-up ${number} sent, $${result.usage.cost_usd.toFixed(5)}`);
   }
 
   /* ───────────────── Special notes, order changes, cancellations, lead stages ───────────────── */

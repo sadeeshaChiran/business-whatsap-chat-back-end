@@ -1,3 +1,5 @@
+import { followUpView } from '../bot-admin/bot-admin.service';
+import { planFollowUp } from './follow-up';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -202,6 +204,9 @@ export class SalesBotAdminService {
       payment_methods: settings.payment_methods, auto_enable_new_customers: settings.auto_enable_new_customers,
       sells: settings.sells || 'auto', auto_send_invoice: settings.auto_send_invoice ?? true,
       bot_off_on_handoff: settings.bot_off_on_handoff ?? false,
+      followup_enabled: settings.followup_enabled ?? true,
+      followup_first_hours: Number(settings.followup_first_hours ?? 3),
+      followup_second_hours: Number(settings.followup_second_hours ?? 22),
       /** what the dashboard should show: products page, services page, or both */
       sells_effective: effectiveSells(company, settings),
     };
@@ -229,13 +234,78 @@ export class SalesBotAdminService {
       await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
     }
     const settings = await this.contextService.getSettings(Number(company.id));
-    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff'] as const;
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff', 'followup_enabled', 'followup_first_hours', 'followup_second_hours'] as const;
     for (const field of fields) {
       const value = dto[field];
       if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;
     }
     const saved = await this.settingsRepository.save(settings);
     return this.settingsView(company, saved);
+  }
+
+  /* ───────────────────────── Follow-ups ───────────────────────── */
+
+  private async companyConversation(companyId: number, conversationId: number) {
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId }, relations: ['channelUser'] });
+    if (!conversation || Number(conversation.channelUser?.company_id) !== companyId) throw new NotFoundException('Conversation not found.');
+    return conversation;
+  }
+
+  /** stop = no more follow-ups for this chat · resume = plan the next one again */
+  async setFollowUp(user: AuthenticatedUser, conversationId: number, action: 'stop' | 'resume') {
+    const company = await this.adminCompany(user);
+    const conversation = await this.companyConversation(Number(company.id), conversationId);
+    if (action === 'stop') {
+      await this.conversationRepository.update(conversation.id, { followup_status: 'off', followup_due_at: null });
+    } else {
+      const settings = await this.contextService.getSettings(Number(company.id));
+      // count from the customer's latest message (as a real instant, see SalesBotEngineService.lastInbound)
+      const [last] = (await this.conversationRepository.query(
+        `SELECT created_at::timestamptz AS at FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' ORDER BY id DESC LIMIT 1`,
+        [conversation.id])) as Array<{ at: Date }>;
+      const quietSince = last ? new Date(last.at) : null;
+      const sameRound = quietSince && conversation.followup_quiet_since
+        && Math.abs(new Date(conversation.followup_quiet_since).getTime() - quietSince.getTime()) < 5_000;
+      const count = sameRound ? Number(conversation.followup_count ?? 0) : 0;
+      const due = settings.followup_enabled && quietSince && count < 2
+        ? planFollowUp({
+            quietSince, number: (count + 1) as 1 | 2, now: new Date(),
+            firstHours: Number(settings.followup_first_hours ?? 3), secondHours: Number(settings.followup_second_hours ?? 22),
+            lastSentAt: sameRound ? conversation.followup_last_at : null,
+          })
+        : null;
+      await this.conversationRepository.update(conversation.id, {
+        followup_status: due ? 'waiting' : null, followup_due_at: due, followup_count: count, followup_quiet_since: quietSince,
+      });
+    }
+    const fresh = await this.conversationRepository.findOneOrFail({ where: { id: conversation.id } });
+    return { id: fresh.id, ...followUpView(fresh) };
+  }
+
+  /** Last 30 days: chats that got a follow-up, and how many of those customers ordered within 7 days after it. */
+  async followUpStats(user: AuthenticatedUser) {
+    const company = await this.adminCompany(user);
+    const companyId = Number(company.id);
+    const [row] = (await this.conversationRepository.query(
+      `WITH fu AS (
+         SELECT m.conversation_id, c.bot_channel_user_id, MIN(m.created_at::timestamptz) AS first_at, COUNT(*)::int AS n
+           FROM bot_message m
+           JOIN bot_conversation c ON c.id = m.conversation_id
+           JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+          WHERE u.company_id = $1 AND m.intent LIKE 'followup_%' AND m.created_at::timestamptz > NOW() - INTERVAL '30 days'
+          GROUP BY m.conversation_id, c.bot_channel_user_id)
+       SELECT COUNT(*)::int AS followed_up, COALESCE(SUM(n), 0)::int AS messages,
+              COUNT(*) FILTER (WHERE EXISTS (
+                SELECT 1 FROM bot_order o WHERE o.company_id = $1 AND o.bot_channel_user_id = fu.bot_channel_user_id
+                  AND o.created_at::timestamptz >= fu.first_at AND o.created_at::timestamptz <= fu.first_at + INTERVAL '7 days'))::int AS converted
+         FROM fu`, [companyId])) as Array<{ followed_up: number; messages: number; converted: number }>;
+    const [waiting] = (await this.conversationRepository.query(
+      `SELECT COUNT(*)::int AS n FROM bot_conversation c JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+        WHERE u.company_id = $1 AND c.followup_status = 'waiting' AND c.followup_due_at IS NOT NULL`, [companyId])) as Array<{ n: number }>;
+    const followedUp = Number(row?.followed_up ?? 0);
+    const converted = Number(row?.converted ?? 0);
+    return { waiting: Number(waiting?.n ?? 0), followed_up: followedUp, messages: Number(row?.messages ?? 0), converted,
+      conversion_rate: followedUp ? Math.round((converted / followedUp) * 1000) / 10 : 0 };
   }
 
   /* ───────────────────────── Test chat ───────────────────────── */

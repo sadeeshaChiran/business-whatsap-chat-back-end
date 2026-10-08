@@ -6,14 +6,16 @@
 INSERT INTO platform_package (code, name, description, price_monthly, price_yearly, tokens_per_month, max_agents, features, sort_order,
                               offer_price_monthly, offer_price_yearly, offer_until, offer_label, is_active, is_public)
 VALUES
-  ('free',     'Free',     'Try the AI sales bot on WhatsApp.',                 0,     0,      2250000,   1,    '["About 4-6 customers a day"]', 1,
+  ('free',     'Free',     'Try the AI sales bot on WhatsApp.',                 0,     0,      2250000,   1,    '["About 300 AI replies a month"]', 1,
    NULL,  NULL, NULL,         '',             TRUE, TRUE),
-  ('growth',   'Growth',   'For small shops and Facebook pages.',               10000, 100000, 18750000,  5,    '["About 25-40 customers a day"]', 2,
-   7490,  NULL, '2026-12-31', 'Launch offer', TRUE, TRUE),
-  ('business', 'Business', 'For online shops with daily orders.',               18000, 180000, 41250000,  10,   '["About 60-90 customers a day", "Everything in Growth"]', 3,
-   12490, NULL, '2026-12-31', 'Launch offer', TRUE, TRUE),
-  ('pro',      'Pro',      'For brands running ads every day.',                 40000, 400000, 116250000, NULL, '["About 170-250 customers a day", "Everything in Business"]', 4,
-   24490, NULL, '2026-12-31', 'Launch offer', TRUE, TRUE)
+  ('starter',  'Starter',  'For small shops and Facebook pages.',               8000,  80000,  18750000,  3,    '["About 25-35 customers a day"]', 2,
+   5490,  NULL, '2026-12-31', 'Launch offer', TRUE, TRUE),
+  ('growth',   'Growth',   'For online shops with daily orders.',               14000, 140000, 37500000,  5,    '["About 55-65 customers a day"]', 3,
+   8990,  NULL, '2026-12-31', 'Launch offer', TRUE, TRUE),
+  ('business', 'Business', 'For busy shops and brands running ads.',            25000, 250000, 75000000,  10,   '["About 110-130 customers a day"]', 4,
+   14990, NULL, '2026-12-31', 'Launch offer', TRUE, TRUE),
+  ('pro',      'Pro',      'For big brands with ads every day.',                35000, 350000, 112500000, NULL, '["About 170-200 customers a day", "Everything in Business"]', 5,
+   19990, NULL, '2026-12-31', 'Launch offer', TRUE, TRUE)
 ON CONFLICT (code) DO UPDATE SET
   name = EXCLUDED.name, description = EXCLUDED.description,
   price_monthly = EXCLUDED.price_monthly, price_yearly = EXCLUDED.price_yearly, tokens_per_month = EXCLUDED.tokens_per_month,

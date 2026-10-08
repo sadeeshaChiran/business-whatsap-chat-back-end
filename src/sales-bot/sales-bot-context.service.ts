@@ -40,6 +40,8 @@ export type SalesBotContext = {
   policies: Array<{ question: string; answer: string }>;
   styles: Array<{ question: string; answer: string }>;
   faqs: Array<{ question: string; answer: string }>;
+  /** replies the owner marked as wrong (👎) */
+  avoid?: Array<{ question: string; answer: string }>;
   last_order: Record<string, unknown> | null;
   /** The customer's orders that are not delivered or cancelled (newest first) – for changes and cancellations */
   open_orders: Array<Record<string, unknown>>;
@@ -49,7 +51,11 @@ export type SalesBotContext = {
   campaign?: BotCampaign | null;
 };
 
-const MAX_PRODUCTS = 400;
+/** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
+ * bot finds products by meaning (vector search), so every product is visible. */
+const MAX_PRODUCTS = 1500;
+/** above this many products, descriptions are shortened (keeps the request small) */
+const LONG_TEXT_LIMIT = 400;
 
 /** products | services | both ("auto" follows the company's business category). */
 export function effectiveSellsOf(company: Pick<Company, 'business_category'> | null, settings: Pick<SalesBotSettings, 'sells'>): 'products' | 'services' | 'both' {
@@ -158,6 +164,7 @@ export class SalesBotContextService {
       company_id: companyId, bot_name: '', tone: 'friendly, short, helpful', default_language: 'auto',
       greeting: '', about: '', opening_hours: '', payment_methods: '', auto_enable_new_customers: true,
       sells: 'auto', auto_send_invoice: true, bot_off_on_handoff: false,
+      followup_enabled: true, followup_first_hours: 3, followup_second_hours: 22,
     });
   }
 
@@ -197,12 +204,14 @@ export class SalesBotContextService {
     const policies: SalesBotContext['policies'] = [];
     const styles: SalesBotContext['styles'] = [];
     const faqs: SalesBotContext['faqs'] = [];
+    const avoid: SalesBotContext['faqs'] = [];
     for (const row of knowledge) {
       const entry = { question: String(row.question ?? '').trim(), answer: String(row.answer ?? '').trim().slice(0, 1500) };
       if (!entry.answer) continue;
       const category = String(row.category ?? '').trim().toLowerCase();
       if (category === 'policy' || category === 'policies') policies.push(entry);
       else if (category === 'style') styles.push(entry);
+      else if (category === 'avoid') avoid.push(entry);
       else faqs.push(entry);
     }
 
@@ -219,7 +228,11 @@ export class SalesBotContextService {
         default_language: settings.default_language || 'auto',
         bot_name: settings.bot_name,
       },
-      products: products.map((product) => this.toContextProduct(product, new Set(products.map((p) => p.id)))),
+      products: products.map((product) => {
+        const row = this.toContextProduct(product, new Set(products.map((p) => p.id)));
+        if (products.length <= LONG_TEXT_LIMIT) return row;
+        return { ...row, description: row.description.slice(0, 250), selling_points: row.selling_points.slice(0, 200) };
+      }),
       services: services.map((service) => ({
         service_id: service.id, name: service.name, description: service.description,
         price: toNumber(service.price), price_note: service.price_note, duration_min: service.duration_min,
@@ -233,6 +246,8 @@ export class SalesBotContextService {
       policies: policies.slice(0, 40),
       styles: styles.slice(0, 300),
       faqs: faqs.slice(0, 300),
+      // replies the owner marked 👎 (the bot avoids answering like this)
+      avoid: avoid.slice(0, 100),
       last_order: lastOrder
         ? {
             order_id: lastOrder.id,

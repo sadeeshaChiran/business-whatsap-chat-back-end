@@ -43,6 +43,14 @@ export type SalesBotResult = {
   cancel_request: { order_id?: number; reason?: string } | null;
   /** Customer asked for the invoice / bill of an order */
   send_invoice: { order_id?: number } | null;
+  /** the bot's short notes about this customer (kept in the session, sent back with the next messages) */
+  memory?: string | null;
+  /** how close the customer is to buying (none | browsing | interested | ready) */
+  interest?: 'none' | 'browsing' | 'interested' | 'ready' | null;
+  /** what they want and what is missing – used for follow-ups */
+  followup_note?: string | null;
+  /** a safety check changed the answer (e.g. "confirm_asked_again", "stuck:repeat") */
+  guard?: string | null;
   language: string;
   tools_used: string[];
   parse_error?: boolean;
@@ -107,6 +115,10 @@ export class SalesBotClient {
       order_change: result.order_change && typeof result.order_change === 'object' ? result.order_change : null,
       cancel_request: result.cancel_request && typeof result.cancel_request === 'object' ? result.cancel_request : null,
       send_invoice: result.send_invoice && typeof result.send_invoice === 'object' ? result.send_invoice : null,
+      memory: typeof result.memory === 'string' && result.memory.trim() ? result.memory.trim().slice(0, 600) : null,
+      guard: typeof result.guard === 'string' ? result.guard : null,
+      interest: ['none', 'browsing', 'interested', 'ready'].includes(String(result.interest)) ? result.interest : null,
+      followup_note: typeof result.followup_note === 'string' && result.followup_note.trim() ? result.followup_note.trim().slice(0, 300) : null,
       usage: {
         model: String(result.usage?.model ?? ''),
         input_tokens: Number(result.usage?.input_tokens ?? 0),

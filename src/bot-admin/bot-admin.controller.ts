@@ -31,6 +31,7 @@ import { ToggleBotUserDto } from './dto/toggle-bot-user.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
+import { MessageFeedbackDto } from './dto/message-feedback.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { UpdateLeadStageDto } from './dto/update-lead-stage.dto';
@@ -268,6 +269,18 @@ export class BotAdminController {
     @Body() payload: SendConversationMessageDto,
   ) {
     return this.botAdminService.sendConversationMessage(user, id, payload.text, payload.reply_to_message_id);
+  }
+
+  /** Owner 👍 / 👎 on a bot reply: 👍 = style example, 👎 = better reply or "don't answer like this" */
+  @AdminOnly()
+  @Post('conversations/:id/messages/:messageId/feedback')
+  messageFeedback(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+    @Body() payload: MessageFeedbackDto,
+  ) {
+    return this.botAdminService.setMessageFeedback(user, id, messageId, payload.rating, payload.better_reply);
   }
 
   /** Agent accepts their assigned pending conversation */

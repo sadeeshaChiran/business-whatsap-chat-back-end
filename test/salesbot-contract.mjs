@@ -38,7 +38,7 @@ assert.equal(test.data.order.delivery_fee, 370, 'weight-based delivery fee = 350
 const fd = new FormData(); fd.append('phone', '94771112233'); fd.append('name', 'Nimal'); fd.append('text', 'red shoe size 40 2k ona');
 const sim = await api('POST', '/bot/sales-bot/simulate', { token: t, form: fd });
 console.log('SIMULATE', sim.status, JSON.stringify(sim.json).slice(0, 300));
-await new Promise((r) => setTimeout(r, 4000));
+await new Promise((r) => setTimeout(r, 7000)); // the engine waits SALES_BOT_DEBOUNCE_MS (4 s) for more messages
 const msgs = await sql(`SELECT m.direction, m.content, m.source FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user u ON u.id = c.bot_channel_user_id WHERE u.company_id = $1 ORDER BY m.id`, [A.companyId]);
 console.log('MESSAGES', JSON.stringify(msgs));
 assert.ok(msgs.some((m) => m.source === 'sales_bot'), 'engine saved the bot reply');

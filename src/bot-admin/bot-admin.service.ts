@@ -99,6 +99,18 @@ type CompanyContactRow = {
 /** Evolution chat list cache (per instance, 15 s) – shared by all requests of this process. */
 const evolutionChatsCache = new Map<string, { chats: Awaited<ReturnType<EvolutionService['findChats']>>; expiresAt: number }>();
 
+/** Follow-up state of a chat (interested customer who went quiet) for the inbox. */
+export function followUpView(conversation: BotConversation) {
+  return {
+    followup_status: conversation.followup_status ?? null,
+    followup_interest: conversation.followup_interest ?? null,
+    followup_note: conversation.followup_note ?? null,
+    followup_due_at: conversation.followup_due_at ?? null,
+    followup_count: Number(conversation.followup_count ?? 0),
+    followup_last_at: conversation.followup_last_at ?? null,
+  };
+}
+
 @Injectable()
 export class BotAdminService {
 
@@ -766,6 +778,9 @@ export class BotAdminService {
       delivery_status: message.delivery_status ?? null,
       reply_to_message_id: message.reply_to_message_id ?? null,
       reply_to_text: message.reply_to_text ?? null,
+      feedback: message.feedback ?? null,
+      // sales_bot / bot = an AI reply (the inbox shows "AI reply" and the 👍 / 👎 buttons)
+      source: message.source ?? null,
     });
   }
 
@@ -1789,6 +1804,7 @@ export class BotAdminService {
           status: conversation.status,
           lead_stage: conversation.lead_stage || 'new',
           lead_details: conversation.lead_details ?? null,
+          ...followUpView(conversation),
           assigned_agent_id: conversation.assigned_agent_id,
           last_message_at: conversation.last_message_at,
         },
@@ -1859,6 +1875,7 @@ export class BotAdminService {
             status: conversation.status,
             lead_stage: conversation.lead_stage || 'new',
             lead_details: conversation.lead_details ?? null,
+            ...followUpView(conversation),
             assigned_agent_id: conversation.assigned_agent_id,
             last_message_at: conversation.last_message_at,
           }
@@ -2324,6 +2341,7 @@ export class BotAdminService {
         'm.delivery_status',
         'm.reply_to_message_id',
         'm.reply_to_text',
+        'm.feedback',
         'm.created_at',
       ])
       .addSelect(
@@ -3228,6 +3246,67 @@ export class BotAdminService {
       console.warn('Native WhatsApp send error:', error instanceof Error ? error.message : error);
       return { ok: false, messageId: null };
     }
+  }
+
+  /**
+   * Owner feedback on a sales bot reply.
+   * 👍 → the customer's question + this reply become a style example (the bot copies it for similar questions).
+   * 👎 with a better reply → the better reply becomes the style example. 👎 alone → kept as a wrong reply the bot avoids.
+   * Changing or removing the feedback removes the training row it made.
+   */
+  async setMessageFeedback(user: AuthenticatedUser, conversationId: number, messageId: number,
+    rating: 'up' | 'down' | 'none', betterReply?: string) {
+    await this.assertConversationAccess(user, conversationId);
+    const conversation = await this.findConversationForCompany(conversationId, user.company_id);
+    if (!conversation) throw new NotFoundException('Conversation not found.');
+    const message = await this.messageRepository.findOne({ where: { id: messageId, conversation_id: conversationId } });
+    const botSources = ['sales_bot', 'bot'];
+    if (!message || message.direction !== 'outbound' || !botSources.includes(String(message.source ?? ''))) {
+      throw new BadRequestException('Only replies sent by the bot can be rated.');
+    }
+    if (message.feedback_training_id) {
+      await this.trainingRepository.delete({ id: message.feedback_training_id, company_id: user.company_id });
+    }
+    let trainingId: number | null = null;
+    if (rating !== 'none') {
+      // the bot's whole reply (it may be split into parts) and the customer messages it answered
+      const before = await this.messageRepository.createQueryBuilder('m')
+        .where('m.conversation_id = :conversationId AND m.id <= :id', { conversationId, id: message.id })
+        .orderBy('m.id', 'DESC').limit(20).getMany();
+      const after = await this.messageRepository.createQueryBuilder('m')
+        .where('m.conversation_id = :conversationId AND m.id > :id', { conversationId, id: message.id })
+        .orderBy('m.id', 'ASC').limit(5).getMany();
+      const rows = [...before.reverse(), ...after];
+      const at = rows.findIndex((row) => row.id === message.id);
+      const isBot = (row: BotMessage) => row.direction === 'outbound' && botSources.includes(String(row.source ?? ''));
+      let start = at;
+      while (start > 0 && isBot(rows[start - 1])) start--;
+      let end = at;
+      while (end + 1 < rows.length && isBot(rows[end + 1])) end++;
+      const reply = rows.slice(start, end + 1).map((row) => String(row.content ?? '').trim()).filter(Boolean).join('\n\n');
+      const asked: string[] = [];
+      for (let i = start - 1; i >= 0 && rows[i].direction === 'inbound'; i--) asked.unshift(String(rows[i].content ?? '').trim());
+      const question = asked.filter(Boolean).join('\n').slice(0, 1000);
+      const better = String(betterReply ?? '').trim();
+      if (question && (rating === 'up' || reply || better)) {
+        const saved = await this.trainingRepository.save(this.trainingRepository.create({
+          company_id: user.company_id,
+          category: rating === 'up' || better ? 'style' : 'avoid',
+          question,
+          answer: (rating === 'up' ? reply : better || reply).slice(0, 1500),
+          language: 'auto',
+          is_active: true,
+        }));
+        trainingId = saved.id;
+      }
+    }
+    await this.messageRepository.update(message.id, {
+      feedback: rating === 'none' ? null : rating,
+      feedback_at: rating === 'none' ? null : new Date(),
+      feedback_by: rating === 'none' ? null : Number(user.id) || null,
+      feedback_training_id: trainingId,
+    });
+    return { id: message.id, feedback: rating === 'none' ? null : rating, training_id: trainingId };
   }
 
   async createTraining(user: AuthenticatedUser, payload: CreateBotTrainingDto) {

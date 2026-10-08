@@ -9,7 +9,7 @@ import { AdminOnly, Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import {
-  BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, RepliesQueryDto, ReportQueryDto, SalesBotTestDto,
+  BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, FollowUpActionDto, RepliesQueryDto, ReportQueryDto, SalesBotTestDto,
   SimulateCustomerMessageDto, SimulatorConversationQueryDto, UpdateBookingStatusDto, UpdateBotServiceDto,
   UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
 } from './dto/sales-bot.dto';
@@ -127,6 +127,22 @@ export class SalesBotController {
   @Get('sales-bot/replies')
   replies(@CurrentUser() user: AuthenticatedUser, @Query() query: RepliesQueryDto) {
     return this.service.replies(user, query);
+  }
+
+  /** Follow-ups: stats for the settings page */
+  @Get('sales-bot/followups/stats')
+  followUpStats(@CurrentUser() user: AuthenticatedUser) {
+    return this.service.followUpStats(user);
+  }
+
+  /** Stop / resume follow-ups for one chat */
+  @Post('sales-bot/followups/:conversationId')
+  setFollowUp(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('conversationId', ParseIntPipe) conversationId: number,
+    @Body() dto: FollowUpActionDto,
+  ) {
+    return this.service.setFollowUp(user, conversationId, dto.action);
   }
 
   @Get('sales-bot/reports')
