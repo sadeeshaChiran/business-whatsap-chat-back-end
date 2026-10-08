@@ -99,7 +99,7 @@ async function testShop(db, shop, log) {
       WHERE p.company_id = $1 AND NOT p.is_deleted ORDER BY p.name`, [company.company_id]);
   const run = Date.now().toString().slice(-5);
   let n = 0;
-  const phone = () => `9471${run}${String(n++).padStart(2, '0')}`.slice(0, 11);
+  const phone = () => `999471${run}${String(n++).padStart(2, '0')}`.slice(0, 14);
   const conversations = [];
   const checks = [];
 

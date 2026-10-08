@@ -1,6 +1,8 @@
 import { followUpView } from '../bot-admin/bot-admin.service';
+import { isTestPhone, TEST_PHONE_PREFIX } from '../common/test-phone';
 import { planFollowUp } from './follow-up';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { blockingStatuses, bookingMinutes, formatMinutes, isFree, nearestFreeTimes, normalizeBookingDate } from './booking-slots';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { AgentRoutingService } from '../agent-routing/agent-routing.service';
@@ -208,6 +210,26 @@ export class SalesBotAdminService {
     const company = await this.adminCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
+    const companyId = Number(company.id);
+    const settings = await this.contextService.getSettings(companyId);
+    const start = bookingMinutes(row.time);
+    const date = normalizeBookingDate(row.date);
+    // moving a booking to a status that holds its time: the time must still be free
+    if (dto.status !== row.status && blockingStatuses(settings.booking_block_status).includes(dto.status) && date && start != null) {
+      const saved = await this.bookingRepository.manager.transaction(async (manager) => {
+        await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [companyId, date]);
+        const day = await this.contextService.bookingDay(companyId, date, { excludeId: row.id });
+        const duration = day.durationOf(row.service_id);
+        if (!isFree(day.busy, start, start + duration, day.capacity)) {
+          const free = nearestFreeTimes(day.busy, start, duration, day.capacity, 3, day.window);
+          throw new ConflictException(`${date} ${formatMinutes(start)} already has ${day.capacity > 1 ? `${day.capacity} bookings` : 'a booking'} at that time.` +
+            ` Cancel or move the other booking first${free.length ? `, or offer the customer ${free.join(', ')}` : ''}.`);
+        }
+        row.status = dto.status;
+        return manager.save(row);
+      });
+      return this.bookingView(saved);
+    }
     row.status = dto.status;
     return this.bookingView(await this.bookingRepository.save(row));
   }
@@ -223,6 +245,8 @@ export class SalesBotAdminService {
       sells: settings.sells || 'auto', auto_send_invoice: settings.auto_send_invoice ?? true,
       bot_off_on_handoff: settings.bot_off_on_handoff ?? false,
       free_delivery_over: settings.free_delivery_over == null ? null : Number(settings.free_delivery_over),
+      booking_block_status: settings.booking_block_status === 'confirmed' ? 'confirmed' : 'requested',
+      booking_capacity: Math.max(1, Number(settings.booking_capacity ?? 1)),
       followup_enabled: settings.followup_enabled ?? true,
       followup_first_hours: Number(settings.followup_first_hours ?? 3),
       followup_second_hours: Number(settings.followup_second_hours ?? 22),
@@ -253,7 +277,7 @@ export class SalesBotAdminService {
       await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
     }
     const settings = await this.contextService.getSettings(Number(company.id));
-    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff', 'followup_enabled', 'followup_first_hours', 'followup_second_hours', 'free_delivery_over'] as const;
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff', 'followup_enabled', 'followup_first_hours', 'followup_second_hours', 'free_delivery_over', 'booking_block_status', 'booking_capacity'] as const;
     for (const field of fields) {
       const value = dto[field];
       if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;
@@ -366,6 +390,9 @@ export class SalesBotAdminService {
     if (!SalesBotEngineService.testMode()) throw new ForbiddenException('Test mode is off (set SALES_BOT_TEST_MODE=true).');
     if (!SalesBotClient.isConfigured()) throw new ForbiddenException('The sales bot is not configured (SALES_BOT_URL).');
     const phone = this.normalizePhone(dto.phone);
+    if (!isTestPhone(phone)) {
+      throw new BadRequestException(`Simulator numbers must start with ${TEST_PHONE_PREFIX} (for example ${TEST_PHONE_PREFIX}771234567), so a test chat can never reach a real person.`);
+    }
     const text = dto.text?.trim() ?? '';
     const kind = file?.mimetype?.startsWith('image/') ? 'image' : file?.mimetype?.startsWith('audio/') ? 'voice' : null;
     if (file && !kind) throw new BadRequestException('Only photos and voice notes are supported.');

@@ -47,6 +47,14 @@ export class SalesBotSettings {
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true, transformer: { to: (v: number | null) => v, from: (v: string | number | null) => (v == null ? null : Number(v)) } })
   free_delivery_over: number | null;
 
+  /** Which bookings hold their time: 'requested' (requested + confirmed, default) or 'confirmed' (only confirmed) */
+  @Column({ type: 'varchar', length: 20, default: 'requested' })
+  booking_block_status: string;
+
+  /** How many bookings may run at the same time (staff / chairs) */
+  @Column({ type: 'int', default: 1 })
+  booking_capacity: number;
+
   /** Follow up interested customers who stopped replying (up to 2 messages, inside the 24-hour chat window) */
   @Column({ type: 'boolean', default: true })
   followup_enabled: boolean;

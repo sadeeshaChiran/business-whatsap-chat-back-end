@@ -35,7 +35,7 @@ assert.ok(test.data.tools_used.includes('delivery_fee'), 'lookups ran');
 assert.equal(test.data.order.delivery_fee, 370, 'weight-based delivery fee = 350 + 0.2 kg x 100');
 
 // 2) full engine path (customer simulator → engine → bot → actions → reply saved)
-const fd = new FormData(); fd.append('phone', '94771112233'); fd.append('name', 'Nimal'); fd.append('text', 'red shoe size 40 2k ona');
+const fd = new FormData(); fd.append('phone', '99994771112233'); fd.append('name', 'Nimal'); fd.append('text', 'red shoe size 40 2k ona');
 const sim = await api('POST', '/bot/sales-bot/simulate', { token: t, form: fd });
 console.log('SIMULATE', sim.status, JSON.stringify(sim.json).slice(0, 300));
 await new Promise((r) => setTimeout(r, 7000)); // the engine waits SALES_BOT_DEBOUNCE_MS (4 s) for more messages

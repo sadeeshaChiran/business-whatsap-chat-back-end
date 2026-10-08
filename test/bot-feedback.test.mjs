@@ -95,7 +95,7 @@ describe('Owner feedback on AI replies', () => {
   test('the bot gets 👎 replies as "avoid" and keeps its chat memory (needs the contract bot)', { skip: !process.env.BOT_CAPTURE_DIR }, async () => {
     await rate(A, ids[2], { rating: 'down' });
     await api('PATCH', '/bot/sales-bot/settings', { token: A.token, body: { bot_enabled: true, auto_enable_new_customers: true } });
-    const phone = `9475${String(Date.now()).slice(-7)}`;
+    const phone = `9999475${String(Date.now()).slice(-7)}`;
     const send = async (text) => {
       const fd = new FormData(); fd.append('phone', phone); fd.append('name', 'Nimal'); fd.append('text', text);
       const sim = await api('POST', '/bot/sales-bot/simulate', { token: A.token, form: fd });

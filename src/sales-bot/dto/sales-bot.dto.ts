@@ -236,6 +236,19 @@ export class UpdateSalesBotSettingsDto {
   @Min(0)
   free_delivery_over?: number | null;
 
+  /** which bookings hold their time: requested (requested + confirmed) or confirmed (only confirmed) */
+  @IsOptional()
+  @IsIn(['requested', 'confirmed'])
+  booking_block_status?: 'requested' | 'confirmed';
+
+  /** bookings that may run at the same time */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  booking_capacity?: number;
+
   /** follow up interested customers who went quiet */
   @IsOptional()
   @IsBoolean()

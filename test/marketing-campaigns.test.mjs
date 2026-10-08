@@ -144,7 +144,7 @@ describe('Campaigns and short links', () => {
 
   test('the AI gets the campaign (needs the contract bot)', { skip: !process.env.BOT_CAPTURE_DIR }, async () => {
     await api('PATCH', '/bot/sales-bot/settings', { token: A.token, body: { bot_enabled: true, auto_enable_new_customers: true } });
-    const fd = new FormData(); fd.append('phone', `9474${String(Date.now()).slice(-7)}`); fd.append('name', 'Kamal'); fd.append('text', `price? #${link.slug}`);
+    const fd = new FormData(); fd.append('phone', `9999474${String(Date.now()).slice(-7)}`); fd.append('name', 'Kamal'); fd.append('text', `price? #${link.slug}`);
     const sim = await api('POST', '/bot/sales-bot/simulate', { token: A.token, form: fd });
     assert.equal(sim.status, 201, JSON.stringify(sim.json));
     await new Promise((r) => setTimeout(r, 7000)); // engine debounce (4 s) + reply

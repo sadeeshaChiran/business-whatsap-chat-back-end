@@ -1,4 +1,5 @@
 import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
+import { isTestPhone, testSendResult } from '../common/test-phone';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import {
@@ -262,6 +263,7 @@ export class BotAdminService {
     text: string,
     options: WhatsappTextOptions = {},
   ): Promise<string | null> {
+    if (isTestPhone(phone)) return testSendResult().messageId; // Customer simulator chat: never sent to WhatsApp
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     await this.assertWhatsappSendReady(channel);
     try {
@@ -2130,6 +2132,7 @@ export class BotAdminService {
     if (!jid) {
       throw new BadRequestException('remoteJid is required.');
     }
+    if (isTestPhone(jid.split('@')[0])) throw new BadRequestException('This is a simulator test customer - reply from the chat in the inbox.');
 
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     if (this.isMetaWhatsappChannel(channel)) {
@@ -3094,6 +3097,7 @@ export class BotAdminService {
   private async sendReadReceipt(conversation: BotConversation, companyId: number): Promise<void> {
     const channelUser = conversation.channelUser;
     if (!channelUser) return;
+    if (isTestPhone(channelUser.external_user_id)) return; // simulator chat
     const platform = this.normalizeChannelPlatform(channelUser.platform);
     try {
       if (platform === 'whatsapp') {
@@ -3219,6 +3223,7 @@ export class BotAdminService {
     phone: string,
     native: { type: 'location' | 'contacts'; meta: unknown; evolutionPath: string; evolutionBody: Record<string, unknown> },
   ): Promise<{ ok: boolean; messageId: string | null }> {
+    if (isTestPhone(phone)) return { ok: true, messageId: testSendResult().messageId }; // simulator chat
     try {
       const channel = await this.resolveCompanyWhatsappChannel(companyId);
       if (!channel) return { ok: false, messageId: null };
@@ -3659,6 +3664,7 @@ export class BotAdminService {
     if (!cleanedPhone) {
       return false;
     }
+    if (isTestPhone(cleanedPhone)) return true; // simulator chat: never sent to WhatsApp
 
     const channel = await this.resolveCompanyWhatsappChannel(companyId);
     if (!channel) {

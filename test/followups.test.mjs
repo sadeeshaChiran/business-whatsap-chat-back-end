@@ -12,7 +12,7 @@ import { api, closeDb, createAgent, createWorkspace, sql } from './helpers.mjs';
 const ready = Boolean(process.env.BOT_CAPTURE_DIR);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 let A; let agent; let conversationId; let channelUserId;
-const phone = `9476${String(Date.now()).slice(-7)}`;
+const phone = `9999476${String(Date.now()).slice(-7)}`;
 
 async function say(text) {
   const fd = new FormData(); fd.append('phone', phone); fd.append('name', 'Nimal'); fd.append('text', text);
