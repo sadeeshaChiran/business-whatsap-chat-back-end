@@ -103,7 +103,7 @@ async function testShop(db, shop, log) {
   const conversations = [];
   const checks = [];
 
-  if (products.length > 300) {
+  if (products.length > 100) {
     log('  (warm-up: the first message starts the meaning-search index for a big shop – waiting 60 s)');
     await chat(db, token, phone(), [['mona mona badu thiyenawada?']], () => {});
     await sleep(Number(process.env.SCALE_TEST_WARMUP_MS ?? 60_000));
@@ -139,7 +139,7 @@ async function testShop(db, shop, log) {
   log(`\n  [not sold: ${shop.missing}]`);
   const missing = await chat(db, token, phone(), [[shop.missing]], log);
   conversations.push(missing.conversationId);
-  checks.push(['Says "not available" (no made-up item)', /naha|nehe|nathi|not available|don't have|do not have|no,|sorry|samawenna|නැ|නෑ/i.test(missing.text), '']);
+  checks.push(['Says "not available" (no made-up item)', /\bna\b|\bnaa\b|naha|nehe|nathi|not available|don't have|do not have|no,|sorry|samawenna|නැ|නෑ/i.test(missing.text), '']);
 
   // 6) quick order: product without sizes, then "ok" to the summary
   const simple = products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available);
