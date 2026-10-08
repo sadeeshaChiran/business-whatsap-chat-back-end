@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  Max,
   IsNumber,
   IsObject,
   IsOptional,
@@ -227,6 +228,26 @@ export class UpdateSalesBotSettingsDto {
   @IsOptional()
   @IsBoolean()
   bot_off_on_handoff?: boolean;
+
+  /** follow up interested customers who went quiet */
+  @IsOptional()
+  @IsBoolean()
+  followup_enabled?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.5)
+  @Max(20)
+  followup_first_hours?: number;
+
+  /** 0 = only one follow-up */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(22)
+  followup_second_hours?: number;
 }
 
 /* ───────── Test chat ───────── */
@@ -301,4 +322,12 @@ export class ReportQueryDto {
   @IsInt()
   @Min(1)
   days?: number;
+}
+
+/* ───────── Follow-ups ───────── */
+
+export class FollowUpActionDto {
+  /** stop = no more follow-ups for this chat · resume = plan the next one again */
+  @IsIn(['stop', 'resume'])
+  action: 'stop' | 'resume';
 }

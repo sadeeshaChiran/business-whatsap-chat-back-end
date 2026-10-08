@@ -147,7 +147,7 @@ describe('Campaigns and short links', () => {
     const fd = new FormData(); fd.append('phone', `9474${String(Date.now()).slice(-7)}`); fd.append('name', 'Kamal'); fd.append('text', `price? #${link.slug}`);
     const sim = await api('POST', '/bot/sales-bot/simulate', { token: A.token, form: fd });
     assert.equal(sim.status, 201, JSON.stringify(sim.json));
-    await new Promise((r) => setTimeout(r, 4000));
+    await new Promise((r) => setTimeout(r, 7000)); // engine debounce (4 s) + reply
     const dir = process.env.BOT_CAPTURE_DIR;
     const files = readdirSync(dir).filter((f) => f.startsWith('request_')).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]));
     const request = JSON.parse(readFileSync(join(dir, files[0]), 'utf8'));

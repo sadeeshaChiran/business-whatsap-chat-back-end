@@ -62,6 +62,38 @@ export class BotConversation {
   @Column({ type: 'jsonb', nullable: true })
   lead_details: Record<string, unknown> | null;
 
+  /**
+   * Follow-up of an interested customer who went quiet:
+   * waiting (a follow-up is planned) | sent (all sent, no answer) | converted (ordered) | stopped (no / a person took over) | off
+   */
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  followup_status: string | null;
+
+  /** the bot's last view: none | browsing | interested | ready */
+  @Column({ type: 'varchar', length: 12, nullable: true })
+  followup_interest: string | null;
+
+  /** what the customer wants and what is missing (short, from the bot) */
+  @Column({ type: 'text', nullable: true })
+  followup_note: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  followup_due_at: Date | null;
+
+  @Column({ type: 'int', default: 0 })
+  followup_count: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  followup_last_at: Date | null;
+
+  /** all follow-ups ever sent in this chat (for the conversion report) */
+  @Column({ type: 'int', default: 0 })
+  followup_total: number;
+
+  /** the customer's last message before they went quiet (follow-up times count from here) */
+  @Column({ type: 'timestamptz', nullable: true })
+  followup_quiet_since: Date | null;
+
   @ManyToOne(() => BotChannelUser, (channelUser) => channelUser.conversations, {
     nullable: false,
     onDelete: 'RESTRICT',

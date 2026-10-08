@@ -17,7 +17,7 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:security": "node --test --test-concurrency=1 test/security.test.mjs test/package-offers.test.mjs test/quoted-replies.test.mjs",
+    "test:security": "node --test --test-concurrency=1 test/security.test.mjs test/package-offers.test.mjs test/quoted-replies.test.mjs test/bot-feedback.test.mjs test/followups.test.mjs",
     "test:marketing": "node --test --test-concurrency=1 test/marketing-campaigns.test.mjs",
     "test:api": "node --test --test-concurrency=1 test/*.test.mjs",
     "test:perf": "node test/performance.mjs",

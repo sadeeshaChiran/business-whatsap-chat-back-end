@@ -43,6 +43,18 @@ export class SalesBotSettings {
   @Column({ type: 'boolean', default: false })
   bot_off_on_handoff: boolean;
 
+  /** Follow up interested customers who stopped replying (up to 2 messages, inside the 24-hour chat window) */
+  @Column({ type: 'boolean', default: true })
+  followup_enabled: boolean;
+
+  /** hours after the customer's last message for follow-up 1 */
+  @Column({ type: 'numeric', precision: 5, scale: 2, default: 3, transformer: { to: (v: number) => v, from: (v: string | number) => Number(v) } })
+  followup_first_hours: number;
+
+  /** hours after the customer's last message for follow-up 2 (0 = only one follow-up) */
+  @Column({ type: 'numeric', precision: 5, scale: 2, default: 22, transformer: { to: (v: number) => v, from: (v: string | number) => Number(v) } })
+  followup_second_hours: number;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

@@ -81,7 +81,7 @@ describe('Quoted replies', () => {
     await sql(`UPDATE bot_channel_user SET bot_enabled = TRUE, manual_mode = FALSE WHERE company_id = $1`, [A.companyId]);
     await sql(`UPDATE bot_conversation SET status = 'open' WHERE id = $1`, [conversationId]);
     await inbound('Na me set eka danna', { context: { id: `wamid.bot.${RUN}` } });
-    await new Promise((r) => setTimeout(r, 4500));
+    await new Promise((r) => setTimeout(r, 7000));
     const dir = process.env.BOT_CAPTURE_DIR;
     const files = readdirSync(dir).filter((f) => f.startsWith('request_')).sort((a, b) => Number(b.match(/\d+/)[0]) - Number(a.match(/\d+/)[0]));
     const request = JSON.parse(readFileSync(join(dir, files[0]), 'utf8'));
