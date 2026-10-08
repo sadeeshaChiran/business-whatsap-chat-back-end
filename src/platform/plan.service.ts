@@ -5,7 +5,7 @@ import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
 
 /** About 7,500 tokens per reply (shop data ~5,500 cached + chat + answer), measured Oct 2026. */
-export const DEFAULT_TOKENS_PER_REPLY = 7_500;
+export const DEFAULT_TOKENS_PER_REPLY = 9_000; // measured 8 Oct 2026 (scale test): 8,100–12,000 tokens per AI reply incl. the cached prompt
 
 /**
  * Package rules in one place (replaces the old hard-coded "Free only / max 3 agents").
