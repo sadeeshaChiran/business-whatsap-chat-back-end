@@ -24,7 +24,7 @@ test('the order total uses free delivery (needs the contract bot)', { skip: !pro
   await api('POST', '/products', { token: A.token, body: { name: 'Red shoe', price: 2500, quantity: 5, category_id: cat.data.id, weight: 0.6 } });
   await api('POST', '/bot/delivery-zones', { token: A.token, body: { area: 'Colombo', fee: 350, days: '1-2 days' } });
   await api('PATCH', '/bot/sales-bot/settings', { token: A.token, body: { bot_enabled: true, auto_enable_new_customers: true, free_delivery_over: 4000 } });
-  const phone = `9478${String(Date.now()).slice(-7)}`;
+  const phone = `9999478${String(Date.now()).slice(-7)}`;
   const fd = new FormData(); fd.append('phone', phone); fd.append('name', 'Nimal'); fd.append('text', 'red shoe 2k ona, Colombo');
   assert.equal((await api('POST', '/bot/sales-bot/simulate', { token: A.token, form: fd })).status, 201);
   await new Promise((r) => setTimeout(r, 7000));

@@ -1,4 +1,5 @@
 import { PlanService } from '../platform/plan.service';
+import { isTestPhone } from '../common/test-phone';
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -674,6 +675,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         }
         const [optedOut] = await this.dataSource.query(`SELECT 1 FROM marketing_optout WHERE company_id = $1 AND bot_channel_user_id = $2`, [broadcast.company_id, recipient.bot_channel_user_id]);
         if (optedOut) { await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'skipped', error = 'opted out' WHERE id = $1`, [recipient.id]); continue; }
+        if (isTestPhone(recipient.phone)) { await this.dataSource.query(`UPDATE marketing_broadcast_recipient SET status = 'skipped', error = 'test customer (simulator)' WHERE id = $1`, [recipient.id]); continue; }
         const firstName = String(recipient.name || '').split(/\s+/)[0] || 'there';
         const params = (broadcast.body_params as string[]).map((p) => p.replace(/\{name\}/gi, recipient.name || firstName).replace(/\{first_name\}/gi, firstName).replace(/\{phone\}/gi, recipient.phone));
         try {

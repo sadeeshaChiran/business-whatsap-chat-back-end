@@ -127,7 +127,7 @@ async function main() {
   const checks = [];
   for (const [index, chat] of CHATS.entries()) {
     if (only.length && !only.includes(index + 1)) continue;
-    const phone = `9470${run}${index}`.slice(0, 11);
+    const phone = `999470${run}${index}`.slice(0, 14);
     console.log(`\n=== Chat ${index + 1}: ${chat.name} (${phone})`);
     let conversationId = null;
     let before = 0;

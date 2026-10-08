@@ -7,7 +7,9 @@ import { BotTrainingData } from '../bot-admin/entities/bot-training-data.entity'
 import { Company } from '../company/entities/company.entity';
 import { Product } from '../products/entities/product.entity';
 import type { ProductVariantOption } from '../products/entities/product-variant.entity';
+import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
+import { blockingStatuses, busyRanges, DEFAULT_BOOKING_MINUTES, formatMinutes, openingWindow, type BusyRange } from './booking-slots';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 
@@ -51,7 +53,20 @@ export type SalesBotContext = {
   channel: string;
   /** the ad / short link / campaign this customer came from (last 7 days) – the bot answers about it */
   campaign?: BotCampaign | null;
+  /** Sri Lanka date and time now, e.g. "2026-10-09 Friday 14:20" (for "tomorrow", "next Monday") */
+  today?: string;
+  /** booked times (next 90 days) - the bot's check_booking_time tool uses this */
+  bookings?: { mode: 'requested' | 'confirmed'; capacity: number; open: string; close: string; busy: Array<{ date: string; start: string; end: string }> };
 };
+
+/** Sri Lanka date/time now: { date: "2026-10-09", label: "2026-10-09 Friday 14:20" } */
+export function sriLankaNow(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Colombo', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now).map((part) => [part.type, part.value]));
+  const date = `${parts.year}-${parts.month}-${parts.day}`;
+  return { date, label: `${date} ${parts.weekday} ${parts.hour}:${parts.minute}` };
+}
 
 /** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
  * bot finds products by meaning (vector search), so every product is visible. */
@@ -135,6 +150,7 @@ export class SalesBotContextService {
     @InjectRepository(BotDeliveryZone) private readonly zoneRepository: Repository<BotDeliveryZone>,
     @InjectRepository(BotTrainingData) private readonly trainingRepository: Repository<BotTrainingData>,
     @InjectRepository(BotOrder) private readonly orderRepository: Repository<BotOrder>,
+    @Optional() @InjectRepository(BotBooking) private readonly bookingRepository?: Repository<BotBooking>,
     @Optional() @InjectDataSource() private readonly dataSource?: DataSource,
   ) {}
 
@@ -167,7 +183,54 @@ export class SalesBotContextService {
       greeting: '', about: '', opening_hours: '', payment_methods: '', auto_enable_new_customers: true,
       sells: 'auto', auto_send_invoice: true, bot_off_on_handoff: false,
       followup_enabled: true, followup_first_hours: 3, followup_second_hours: 22,
+      booking_block_status: 'requested', booking_capacity: 1,
     });
+  }
+
+  /** Service id -> minutes (services without a duration count as 60 minutes). */
+  private async durations(companyId: number): Promise<(serviceId: number | null) => number> {
+    const rows = await this.serviceRepository.find({ where: { company_id: companyId }, select: ['id', 'duration_min'] });
+    const map = new Map(rows.map((row) => [Number(row.id), Number(row.duration_min) > 0 ? Number(row.duration_min) : DEFAULT_BOOKING_MINUTES]));
+    return (serviceId) => (serviceId == null ? DEFAULT_BOOKING_MINUTES : map.get(Number(serviceId)) ?? DEFAULT_BOOKING_MINUTES);
+  }
+
+  /** Everything needed to check one day: busy ranges of the bookings that hold their time, capacity, opening hours. */
+  async bookingDay(companyId: number, date: string, options: { excludeId?: number; statuses?: string[] } = {}) {
+    const settings = await this.getSettings(companyId);
+    const durationOf = await this.durations(companyId);
+    const statuses = options.statuses ?? blockingStatuses(settings.booking_block_status);
+    const rows = this.bookingRepository
+      ? await this.bookingRepository.createQueryBuilder('b')
+          .where('b.company_id = :companyId AND b.date = :date AND b.status IN (:...statuses)', { companyId, date, statuses })
+          .andWhere(options.excludeId ? 'b.id <> :excludeId' : '1=1', { excludeId: options.excludeId })
+          .getMany()
+      : [];
+    return {
+      busy: busyRanges(rows, durationOf) as BusyRange[],
+      capacity: Math.max(1, Number(settings.booking_capacity ?? 1)),
+      window: openingWindow(settings.opening_hours),
+      durationOf,
+    };
+  }
+
+  /** Booked times for the next 90 days (only for shops that take bookings). */
+  private async upcomingBookings(companyId: number, settings: SalesBotSettings, today: string): Promise<SalesBotContext['bookings']> {
+    if (!this.bookingRepository) return undefined;
+    const durationOf = await this.durations(companyId);
+    const until = new Date(Date.parse(`${today}T00:00:00Z`) + 90 * 86_400_000).toISOString().slice(0, 10);
+    const rows = await this.bookingRepository.createQueryBuilder('b')
+      .where('b.company_id = :companyId AND b.status IN (:...statuses)', { companyId, statuses: blockingStatuses(settings.booking_block_status) })
+      .andWhere("b.date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' AND b.date >= :today AND b.date <= :until", { today, until })
+      .orderBy('b.date', 'ASC').addOrderBy('b.time', 'ASC')
+      .take(1500)
+      .getMany();
+    const window = openingWindow(settings.opening_hours);
+    return {
+      mode: settings.booking_block_status === 'confirmed' ? 'confirmed' : 'requested',
+      capacity: Math.max(1, Number(settings.booking_capacity ?? 1)),
+      open: formatMinutes(window.open), close: formatMinutes(window.close),
+      busy: rows.flatMap((row) => busyRanges([row], durationOf).map((range) => ({ date: row.date, start: formatMinutes(range.start), end: formatMinutes(range.end) }))),
+    };
   }
 
   async loadProducts(companyId: number): Promise<Product[]> {
@@ -184,7 +247,7 @@ export class SalesBotContextService {
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
       this.loadProducts(companyId),
-      this.serviceRepository.find({ where: { company_id: companyId, is_active: true }, order: { name: 'ASC' }, take: 100 }),
+      this.serviceRepository.find({ where: { company_id: companyId, is_active: true }, order: { name: 'ASC' }, take: 500 }),
       this.zoneRepository.find({ where: { company_id: companyId }, order: { area: 'ASC' } }),
       this.trainingRepository.find({ where: { company_id: companyId, is_active: true }, order: { id: 'DESC' }, take: 800 }),
       channelUserId
@@ -203,6 +266,7 @@ export class SalesBotContextService {
       this.campaignFor(chat.conversationId, chat.message),
     ]);
 
+    const now = sriLankaNow();
     const policies: SalesBotContext['policies'] = [];
     const styles: SalesBotContext['styles'] = [];
     const faqs: SalesBotContext['faqs'] = [];
@@ -284,6 +348,8 @@ export class SalesBotContextService {
       })),
       channel,
       campaign,
+      today: now.label,
+      bookings: effectiveSellsOf(company, settings) === 'products' ? undefined : await this.upcomingBookings(companyId, settings, now.date),
     };
   }
 

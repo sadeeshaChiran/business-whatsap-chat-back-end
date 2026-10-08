@@ -1,4 +1,5 @@
 import { MarketingHook } from '../../common/marketing-hook';
+import { isTestPhone, testSendResult } from '../../common/test-phone';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -445,6 +446,7 @@ export class WhatsappService {
   }
 
   async sendText(companyId: number, toPhone: string, text: string, options: WhatsappTextOptions = {}) {
+    if (isTestPhone(toPhone)) return testSendResult(); // Customer simulator number: never sent to WhatsApp
     const channel = await this.whatsappChannelService.getForCompany(companyId);
     if (!channel) {
       throw new NotFoundException('WhatsApp channel not configured for this company.');
@@ -465,6 +467,7 @@ export class WhatsappService {
       mediaType: 'image' | 'document' | 'audio' | 'video';
     },
   ) {
+    if (isTestPhone(toPhone)) return testSendResult(); // Customer simulator number: never sent to WhatsApp
     const channel = await this.whatsappChannelService.getForCompany(companyId);
     if (!channel) {
       throw new NotFoundException('WhatsApp channel not configured for this company.');

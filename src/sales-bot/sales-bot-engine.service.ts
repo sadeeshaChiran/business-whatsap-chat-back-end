@@ -24,6 +24,7 @@ import { PlanService } from '../platform/plan.service';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { BotAiUsage } from './entities/bot-ai-usage.entity';
 import { BotNotification, type BotNotificationKind } from './entities/bot-notification.entity';
+import { bookingMinutes, formatMinutes, isFree, nearestFreeTimes, normalizeBookingDate, slotTakenMessage } from './booking-slots';
 import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
@@ -536,16 +537,38 @@ export class SalesBotEngineService implements OnModuleInit {
       const service = booking.service_id
         ? await this.serviceRepository.findOne({ where: { id: Number(booking.service_id), company_id: companyId } })
         : null;
-      await this.bookingRepository.save(this.bookingRepository.create({
+      // a clear date + time is saved in one format ("2026-10-12", "14:30") so the time check can read it
+      const date = normalizeBookingDate(booking.date) ?? String(booking.date).slice(0, 40);
+      const start = bookingMinutes(booking.time);
+      const time = start == null ? String(booking.time ?? '').slice(0, 40) : formatMinutes(start);
+      const row = this.bookingRepository.create({
         company_id: companyId, bot_channel_user_id: channelUser.id, conversation_id: conversation.id,
         service_id: service?.id ?? null, service_name: service?.name ?? booking.service_name,
-        date: String(booking.date).slice(0, 40), time: String(booking.time ?? '').slice(0, 40),
+        date, time,
         customer_name: booking.customer_name || channelUser.display_name || '',
         customer_phone: socialPlatformOf(channelUser.platform) ? null : channelUser.external_user_id, // Messenger/Instagram ids are not phone numbers
         notes: booking.notes ?? '', status: 'requested',
-      }));
-      intents.add('booking');
-      await this.advanceLead(conversation.id, 'won', { booking: `${booking.service_name} ${booking.date} ${booking.time ?? ''}`.trim() });
+      });
+      // the time must still be free (two customers can ask for the same time at once: lock that day while checking)
+      const taken = await this.bookingRepository.manager.transaction(async (manager) => {
+        if (start != null && normalizeBookingDate(date)) {
+          await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [companyId, date]);
+          const day = await this.contextService.bookingDay(companyId, date);
+          const duration = day.durationOf(service?.id ?? null);
+          if (!isFree(day.busy, start, start + duration, day.capacity)) {
+            return nearestFreeTimes(day.busy, start, duration, day.capacity, 3, day.window);
+          }
+        }
+        await manager.save(row);
+        return null;
+      });
+      if (taken) {
+        replyOverride = slotTakenMessage(result.language, date, start as number, taken);
+        await this.advanceLead(conversation.id, 'proposal', { booking: `${booking.service_name} ${date} ${time} (time taken)`.trim() });
+      } else {
+        intents.add('booking');
+        await this.advanceLead(conversation.id, 'won', { booking: `${booking.service_name} ${date} ${time}`.trim() });
+      }
     } else if (booking?.service_name) {
       await this.advanceLead(conversation.id, 'proposal', { booking: `${booking.service_name} ${booking.date ?? ''} ${booking.time ?? ''}`.trim() });
     }
