@@ -94,7 +94,7 @@ export class PublicPackagesController {
         code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: Number(pkg.price_monthly),
         price_yearly: Number(pkg.price_yearly), tokens_per_month: Number(pkg.tokens_per_month),
         credits_per_month: PlanService.credits(Number(pkg.tokens_per_month), tpc),
-        max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
+        max_agents: pkg.max_agents, max_products: pkg.max_products, max_services: pkg.max_services ?? null, features: pkg.features ?? [],
         limits: resolveLimits(pkg), ...offerFields(pkg, perReply, Number(pkg.tokens_per_month)),
       }));
   }

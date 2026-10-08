@@ -26,6 +26,9 @@ export class PackageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0)
   max_products?: number | null;
 
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0)
+  max_services?: number | null;
+
   @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true })
   features?: string[];
 
@@ -59,6 +62,7 @@ export class UpdatePackageDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) tokens_per_month?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) max_agents?: number | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) max_products?: number | null;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) max_services?: number | null;
   @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) features?: string[];
   @IsOptional() @IsObject() limits?: Record<string, boolean | number | null>;
   @IsOptional() @IsBoolean() is_active?: boolean;

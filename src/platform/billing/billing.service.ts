@@ -96,7 +96,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: num(pkg.price_monthly),
         price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month), max_agents: pkg.max_agents, features: pkg.features ?? [],
         credits_per_month: credits(num(pkg.tokens_per_month)),
-        max_products: pkg.max_products, limits: resolveLimits(pkg), ...offerFields(pkg, perReply, num(pkg.tokens_per_month)),
+        max_products: pkg.max_products, max_services: pkg.max_services ?? null, limits: resolveLimits(pkg), ...offerFields(pkg, perReply, num(pkg.tokens_per_month)),
       })),
       token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
       bank_details: bank,
