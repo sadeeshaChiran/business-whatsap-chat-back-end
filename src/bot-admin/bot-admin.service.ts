@@ -2258,8 +2258,15 @@ export class BotAdminService {
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
     const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
     const platform = String(conversation.channelUser?.platform ?? 'whatsapp').toLowerCase();
+    const instance = this.resolveEvolutionInstanceName(channel);
+    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     // Messenger / Instagram always live in our DB, even when WhatsApp uses Evolution.
-    const readFromDb = this.isMetaWhatsappChannel(channel) || platform !== 'whatsapp';
+    // Customer simulator chats (and shops without a WhatsApp connection) only exist in our DB too.
+    const readFromDb =
+      this.isMetaWhatsappChannel(channel) ||
+      platform !== 'whatsapp' ||
+      !(phone && instance && apikey) ||
+      (await this.isSimulatorConversation(id));
 
     const dbMessages = readFromDb
       ? await this.loadConversationDbMessagesPage(id, {
@@ -2270,8 +2277,6 @@ export class BotAdminService {
         })
       : { messages: [] as BotMessage[], hasMore: false };
 
-    const instance = this.resolveEvolutionInstanceName(channel);
-    const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
     const fetchedEvolution =
       !readFromDb && phone && instance && apikey
         ? await this.fetchEvolutionMessagesForJid(
@@ -2314,6 +2319,16 @@ export class BotAdminService {
       ...(paged ? { pagination: { page, limit, has_more: hasMore } } : {}),
       ...(options.light ? {} : { labels, customer_orders: customerOrders, customer_notes: customerNotes }),
     };
+  }
+
+  /** A chat made with the Customer simulator (test mode): its messages are only in our DB, never on WhatsApp. */
+  private async isSimulatorConversation(conversationId: number): Promise<boolean> {
+    if (!['1', 'true', 'yes'].includes(String(process.env.SALES_BOT_TEST_MODE ?? '').trim().toLowerCase())) return false;
+    const rows: unknown[] = await this.messageRepository.query(
+      `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND provider_message_id LIKE 'sim-%' LIMIT 1`,
+      [conversationId],
+    );
+    return rows.length > 0;
   }
 
   /**
