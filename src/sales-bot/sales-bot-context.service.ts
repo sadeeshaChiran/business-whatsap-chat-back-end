@@ -53,7 +53,7 @@ export type SalesBotContext = {
 
 /** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
  * bot finds products by meaning (vector search), so every product is visible. */
-const MAX_PRODUCTS = 1500;
+const MAX_PRODUCTS = 5000;
 /** above this many products, descriptions are shortened (keeps the request small) */
 const LONG_TEXT_LIMIT = 400;
 
