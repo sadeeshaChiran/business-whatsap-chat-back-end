@@ -229,6 +229,13 @@ export class UpdateSalesBotSettingsDto {
   @IsBoolean()
   bot_off_on_handoff?: boolean;
 
+  /** free delivery when the order subtotal is at least this (Rs); null = never free */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  free_delivery_over?: number | null;
+
   /** follow up interested customers who went quiet */
   @IsOptional()
   @IsBoolean()
