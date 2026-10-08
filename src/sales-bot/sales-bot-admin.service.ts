@@ -380,7 +380,24 @@ export class SalesBotAdminService {
     if (routing.conversationId) {
       await SalesBotHook.notify({ companyId: Number(company.id), conversationId: routing.conversationId, phone, provider: 'simulator' });
     }
-    return { conversation_id: routing.conversationId };
+    const botNote = routing.conversationId ? await this.simulatorBotNote(company, routing.conversationId).catch(() => null) : null;
+    return { conversation_id: routing.conversationId, bot_note: botNote };
+  }
+
+  /** Why the bot will NOT answer this simulator chat (null = it will answer). Same rules as the engine's botMayReply. */
+  private async simulatorBotNote(company: Company, conversationId: number): Promise<string | null> {
+    if (!(await this.planService.planAllowsBot(company.plan))) return 'Your package does not include the AI sales bot.';
+    if (!company.bot_enabled) return 'The AI sales bot is switched off. Switch it on in AI Sales Bot settings.';
+    if (!(await this.tokenQuota.canBotReply(Number(company.id)))) return 'No AI replies left (monthly limit used, or the package expired).';
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId }, relations: ['channelUser'] });
+    if (!conversation?.channelUser) return null;
+    if (conversation.status === 'active' || conversation.status === 'closed') {
+      return 'A team member is handling this chat, so the bot stays quiet. Tap "New customer" or give the chat back to the bot in the inbox.';
+    }
+    if (!conversation.channelUser.bot_enabled && conversation.channelUser.manual_mode) {
+      return 'The bot was switched off for this customer in the inbox. Tap "New customer" or switch the bot on for this chat.';
+    }
+    return null;
   }
 
   async findSimulatorConversation(user: AuthenticatedUser, phoneRaw: string) {
