@@ -20,3 +20,4 @@ logs/
 .vscode/*
 !.vscode/extensions.json
 test-results/
+scale-test-results.csv
