@@ -32,6 +32,8 @@ export type SalesBotContext = {
   company: {
     id: number; name: string; business_type: 'shop' | 'service' | 'both'; about: string; opening_hours: string;
     payment_methods: string; tone: string; greeting: string; default_language: string; bot_name: string;
+    /** free delivery when the order subtotal is at least this (null = never) */
+    free_delivery_over?: number | null;
   };
   products: ContextProduct[];
   services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null; available: boolean }>;
@@ -53,7 +55,7 @@ export type SalesBotContext = {
 
 /** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
  * bot finds products by meaning (vector search), so every product is visible. */
-const MAX_PRODUCTS = 5000;
+const MAX_PRODUCTS = 2500;
 /** above this many products, descriptions are shortened (keeps the request small) */
 const LONG_TEXT_LIMIT = 400;
 
@@ -223,6 +225,8 @@ export class SalesBotContextService {
         about: settings.about,
         opening_hours: settings.opening_hours,
         payment_methods: settings.payment_methods,
+        /** free delivery when the order subtotal is at least this (null = never) */
+        free_delivery_over: settings.free_delivery_over == null || Number(settings.free_delivery_over) <= 0 ? null : Number(settings.free_delivery_over),
         tone: settings.tone,
         greeting: settings.greeting,
         default_language: settings.default_language || 'auto',

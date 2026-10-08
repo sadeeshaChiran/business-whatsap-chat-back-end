@@ -61,9 +61,8 @@ const CHATS = [
     ['ok'],
   ] },
   { name: 'Check: "thanks" is not a yes', check: 'thanks', messages: [
-    ['Baby Lotion ekak ona. Kasun, 8 Hill Street, Kandy. COD'],
-    ['ok'],
-    ['thanks'],
+    ['Baby Lotion ekak ona. Kasun, 8 Hill Street, Kandy. COD'],   // the bot shows the summary
+    ['thanks'],                                                  // "thanks" alone must not confirm it
   ] },
   { name: 'Check: budget gets real suggestions', check: 'budget', budget: 2000, messages: [
     ['baby kenekta gift ekak ona, budget eka 2000 witara'],

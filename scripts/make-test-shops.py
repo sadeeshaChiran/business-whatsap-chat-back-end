@@ -257,8 +257,8 @@ BEGIN
   UPDATE companies SET admin_user_id = uid WHERE id = cid;
   INSERT INTO company_subscription (company_id, package_id, billing_cycle, status, period_start, period_end, token_period_start, token_period_end, auto_renew)
     VALUES (cid, pkg, 'monthly', 'active', NOW(), NOW() + INTERVAL '30 days', NOW(), NOW() + INTERVAL '30 days', FALSE);
-  INSERT INTO bot_sales_settings (company_id, tone, default_language, about, opening_hours, payment_methods, auto_enable_new_customers, sells)
-    VALUES (cid, 'friendly, short, helpful', 'auto', {q(shop['about'])}, {q(shop['hours'])}, {q(shop['pay'])}, TRUE, 'products');
+  INSERT INTO bot_sales_settings (company_id, tone, default_language, about, opening_hours, payment_methods, auto_enable_new_customers, sells, free_delivery_over)
+    VALUES (cid, 'friendly, short, helpful', 'auto', {q(shop['about'])}, {q(shop['hours'])}, {q(shop['pay'])}, TRUE, 'products', 15000);
   INSERT INTO bot_delivery_zone (company_id, area, fee, days, included_kg, per_extra_kg) VALUES
     (cid, 'Colombo', 350, '1-2 days', 2, 60), (cid, 'Gampaha', 400, '2-3 days', 2, 70), (cid, 'Kandy', 450, '2-3 days', 2, 80), (cid, '*', 450, '2-4 days', 2, 80);""")
         for c in cats:

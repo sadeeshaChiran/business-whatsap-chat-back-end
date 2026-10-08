@@ -43,6 +43,10 @@ export class SalesBotSettings {
   @Column({ type: 'boolean', default: false })
   bot_off_on_handoff: boolean;
 
+  /** Free delivery when the order subtotal is at least this (Rs). NULL = never free. */
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true, transformer: { to: (v: number | null) => v, from: (v: string | number | null) => (v == null ? null : Number(v)) } })
+  free_delivery_over: number | null;
+
   /** Follow up interested customers who stopped replying (up to 2 messages, inside the 24-hour chat window) */
   @Column({ type: 'boolean', default: true })
   followup_enabled: boolean;

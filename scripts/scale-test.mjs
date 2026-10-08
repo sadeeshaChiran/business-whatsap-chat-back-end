@@ -103,11 +103,12 @@ async function testShop(db, shop, log) {
   const conversations = [];
   const checks = [];
 
-  if (products.length > 100) {
-    log('  (warm-up: the first message starts the meaning-search index for a big shop – waiting 60 s)');
-    await chat(db, token, phone(), [['mona mona badu thiyenawada?']], () => {});
-    await sleep(Number(process.env.SCALE_TEST_WARMUP_MS ?? 60_000));
-  }
+  // warm-up (not counted): the first AI message of a shop builds its prompt cache, and for shops over
+  // 100 products the meaning-search index – so every shop is measured the same way (like a real, busy shop)
+  log(`  (warm-up, not counted${products.length > 100 ? ': building the meaning-search index, waiting 60 s' : ''})`);
+  await chat(db, token, phone(), [['mona mona badu thiyenawada?']], () => {});
+  if (products.length > 100) await sleep(Number(process.env.SCALE_TEST_WARMUP_MS ?? 60_000));
+  else await sleep(5000);
 
   // 1) browse
   log('\n  [browse]');

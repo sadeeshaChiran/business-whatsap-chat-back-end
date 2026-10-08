@@ -25,3 +25,9 @@ export function findZone<T extends ZoneRule>(zones: T[], area: string | null | u
   }
   return zones.find((zone) => zone.area.trim() === '*') ?? null;
 }
+
+/** Fee of an order: free when the subtotal reaches the shop's "free delivery over" amount, else the zone fee. */
+export function orderDeliveryFee(zone: ZoneRule, weightKg: number, subtotal: number, freeOver: number | null | undefined): number {
+  if (freeOver != null && Number(freeOver) > 0 && subtotal >= Number(freeOver)) return 0;
+  return zoneFee(zone, weightKg);
+}

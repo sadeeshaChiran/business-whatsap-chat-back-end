@@ -204,6 +204,7 @@ export class SalesBotAdminService {
       payment_methods: settings.payment_methods, auto_enable_new_customers: settings.auto_enable_new_customers,
       sells: settings.sells || 'auto', auto_send_invoice: settings.auto_send_invoice ?? true,
       bot_off_on_handoff: settings.bot_off_on_handoff ?? false,
+      free_delivery_over: settings.free_delivery_over == null ? null : Number(settings.free_delivery_over),
       followup_enabled: settings.followup_enabled ?? true,
       followup_first_hours: Number(settings.followup_first_hours ?? 3),
       followup_second_hours: Number(settings.followup_second_hours ?? 22),
@@ -234,7 +235,7 @@ export class SalesBotAdminService {
       await this.companyRepository.update(company.id, { bot_enabled: dto.bot_enabled });
     }
     const settings = await this.contextService.getSettings(Number(company.id));
-    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff', 'followup_enabled', 'followup_first_hours', 'followup_second_hours'] as const;
+    const fields = ['bot_name', 'tone', 'default_language', 'greeting', 'about', 'opening_hours', 'payment_methods', 'auto_enable_new_customers', 'sells', 'auto_send_invoice', 'bot_off_on_handoff', 'followup_enabled', 'followup_first_hours', 'followup_second_hours', 'free_delivery_over'] as const;
     for (const field of fields) {
       const value = dto[field];
       if (value !== undefined) (settings as unknown as Record<string, unknown>)[field] = typeof value === 'string' ? value.trim() : value;

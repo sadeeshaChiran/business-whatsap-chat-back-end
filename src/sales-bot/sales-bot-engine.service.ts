@@ -29,7 +29,7 @@ import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
 import { SalesBotContextService, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
-import { findZone, hasWeightRule, zoneFee } from './delivery-fee';
+import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
 
 type PricedItem = {
@@ -975,7 +975,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
     const area = String(change.delivery_area ?? order.delivery_area ?? '').trim();
     const zone = area ? findZone(zones, area) : null;
-    const fee = zone ? zoneFee(zone, weight) : order.delivery_fee == null ? null : Number(order.delivery_fee);
+    const freeOver = (await this.contextService.getSettings(companyId)).free_delivery_over;
+    const fee = zone ? orderDeliveryFee(zone, weight, subtotal, freeOver) : order.delivery_fee == null ? null : Number(order.delivery_fee);
     const phone = String(change.customer_phone ?? '').replace(/[^\d+]/g, '');
     await this.orderRepository.update(order.id, {
       total_amount: subtotal + (fee ?? 0), delivery_fee: fee, total_weight_kg: weight || null,
@@ -1063,7 +1064,7 @@ export class SalesBotEngineService implements OnModuleInit {
       // older bot replies without delivery_area: accept only a flat zone with exactly that fee
       zone = zones.find((row) => !hasWeightRule(row) && Number(row.fee) === Number(order.delivery_fee)) ?? null;
     }
-    const fee = zone ? zoneFee(zone, totalWeight) : null;
+    const fee = zone ? orderDeliveryFee(zone, totalWeight, subtotal, (await this.contextService.getSettings(companyId)).free_delivery_over) : null;
     const total = subtotal + (fee ?? 0);
     const address = String(order.address ?? '').trim();
     const name = String(order.customer_name ?? '').trim();
