@@ -49,6 +49,10 @@ export class PlatformPackage {
   @Column({ type: 'int', nullable: true })
   max_products: number | null;
 
+  /** null = unlimited */
+  @Column({ type: 'int', nullable: true })
+  max_services: number | null;
+
   @Column({ type: 'jsonb', default: () => "'[]'" })
   features: string[];
 

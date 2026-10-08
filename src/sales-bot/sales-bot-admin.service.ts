@@ -78,8 +78,26 @@ export class SalesBotAdminService {
     return rows.map((row) => this.serviceView(row));
   }
 
+  /** Package limit: max services (null = unlimited) – same message style as the product limit. */
+  private async assertServiceRoom(companyId: number) {
+    const limits = await this.planService.limitsForCompany(companyId);
+    if (limits.max_services == null) return;
+    const current = await this.serviceRepository.count({ where: { company_id: companyId } });
+    if (current + 1 <= limits.max_services) return;
+    const currentPrice = Number(limits.package?.price_monthly ?? 0);
+    const upgrade = (await this.planService.packages())
+      .filter((p) => p.is_active && p.is_public && p.id !== limits.package?.id && Number(p.price_monthly) > currentPrice
+        && (p.max_services == null || p.max_services > limits.max_services!))
+      .sort((a, b) => Number(a.price_monthly) - Number(b.price_monthly))[0];
+    throw new ForbiddenException({
+      statusCode: 403, error: 'Forbidden', code: 'LIMIT_REACHED', feature: 'max_services', upgrade_to: upgrade?.name ?? null,
+      message: `Your ${limits.package?.name ?? ''} package allows ${limits.max_services} services (you have ${current}).${upgrade ? ` Upgrade to ${upgrade.name} for more.` : ''}`,
+    });
+  }
+
   async createService(user: AuthenticatedUser, dto: CreateBotServiceDto) {
     const company = await this.adminCompany(user);
+    await this.assertServiceRoom(Number(company.id));
     const saved = await this.serviceRepository.save(this.serviceRepository.create({
       company_id: Number(company.id), name: dto.name.trim(), description: dto.description?.trim() ?? '', price: dto.price,
       price_note: dto.price_note?.trim() ?? '', duration_min: dto.duration_min ?? null, is_active: dto.is_active ?? true, is_available: dto.is_available ?? true,

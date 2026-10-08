@@ -1,7 +1,7 @@
 /**
  * Everything a package can switch on / off or limit. The super admin edits these per package;
  * a key a package does not have yet counts as "allowed / unlimited" (so new features never break old packages).
- * max_agents and max_products are columns of platform_package.
+ * max_agents, max_products and max_services are columns of platform_package.
  */
 export type LimitKind = 'feature' | 'number';
 export type LimitDefinition = { key: string; label: string; kind: LimitKind; group: string; description: string };
@@ -26,9 +26,10 @@ export type ResolvedLimits = {
   numbers: Record<string, number | null>;
   max_agents: number | null;
   max_products: number | null;
+  max_services: number | null;
 };
 
-export function resolveLimits(pkg: { limits?: Record<string, unknown> | null; max_agents?: number | null; max_products?: number | null } | null): ResolvedLimits {
+export function resolveLimits(pkg: { limits?: Record<string, unknown> | null; max_agents?: number | null; max_products?: number | null; max_services?: number | null } | null): ResolvedLimits {
   const raw = (pkg?.limits ?? {}) as Record<string, unknown>;
   const features: Record<string, boolean> = {};
   const numbers: Record<string, number | null> = {};
@@ -41,6 +42,7 @@ export function resolveLimits(pkg: { limits?: Record<string, unknown> | null; ma
     features, numbers,
     max_agents: pkg ? pkg.max_agents ?? null : 0,
     max_products: pkg ? pkg.max_products ?? null : 0,
+    max_services: pkg ? pkg.max_services ?? null : 0,
   };
 }
 

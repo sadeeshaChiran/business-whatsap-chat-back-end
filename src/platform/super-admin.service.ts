@@ -195,7 +195,7 @@ export class SuperAdminService {
       ...offerFields(pkg, this.perReply, num(pkg.tokens_per_month)),
       id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description,
       price_monthly: num(pkg.price_monthly), price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month),
-      max_agents: pkg.max_agents, max_products: pkg.max_products, features: pkg.features ?? [],
+      max_agents: pkg.max_agents, max_products: pkg.max_products, max_services: pkg.max_services ?? null, features: pkg.features ?? [],
       limits: resolveLimits(pkg), raw_limits: pkg.limits ?? {},
       is_active: pkg.is_active, is_public: pkg.is_public, sort_order: pkg.sort_order,
     };
@@ -208,7 +208,7 @@ export class SuperAdminService {
     const saved = await this.packageRepository.save(this.packageRepository.create({
       ...dto, code, name: dto.name.trim(), description: dto.description?.trim() ?? '', features: dto.features ?? [],
       limits: cleanLimits(dto.limits),
-      max_agents: dto.max_agents ?? null, max_products: dto.max_products ?? null,
+      max_agents: dto.max_agents ?? null, max_products: dto.max_products ?? null, max_services: dto.max_services ?? null,
     }));
     this.planService.forget();
     return this.packageView(saved);

@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
 
-/** About 7,500 tokens per reply (shop data ~5,500 cached + chat + answer), measured Oct 2026. */
+/** Tokens per bot reply (shop data mostly cached + chat + answer). */
 export const DEFAULT_TOKENS_PER_REPLY = 9_000; // measured 8 Oct 2026 (scale test): 8,100–12,000 tokens per AI reply incl. the cached prompt
 
 /**
@@ -138,6 +138,6 @@ export class PlanService {
     for (const item of LIMIT_CATALOG) {
       if (item.kind === 'feature' && !limits.features[item.key]) upgrade_for[item.key] = await this.upgradeFor(item.key, Number(limits.package?.price_monthly ?? 0));
     }
-    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, upgrade_for };
+    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, max_services: limits.max_services, upgrade_for };
   }
 }
