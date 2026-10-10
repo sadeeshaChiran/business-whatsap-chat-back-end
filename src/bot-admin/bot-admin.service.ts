@@ -1,5 +1,6 @@
 import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
 import { isTestPhone, testSendResult } from '../common/test-phone';
+import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import {
@@ -3808,6 +3809,74 @@ export class BotAdminService {
         ? 'Invoice sent to customer.'
         : 'Invoice generated, but sending it failed. Check the channel connection.',
     };
+  }
+
+  /**
+   * Booking invoice / confirmation PDF (like the order invoice): service, date and time, price, customer.
+   * Sent as a file on the customer's channel. Used by the sales bot and the Bookings page.
+   */
+  async sendBookingInvoiceForCompany(companyId: number, bookingId: number) {
+    const bookings = this.orderRepository.manager.getRepository(BotBooking);
+    const booking = await bookings.findOne({ where: { id: bookingId, company_id: companyId } });
+    if (!booking) throw new NotFoundException('Booking not found.');
+    // the chat customer of this booking (bookings added by hand: found by the phone number)
+    const channelUser = booking.bot_channel_user_id
+      ? await this.channelUserRepository.findOne({ where: { id: booking.bot_channel_user_id } })
+      : booking.customer_phone
+        ? await this.channelUserRepository.findOne({ where: { company_id: companyId, platform: 'whatsapp', external_user_id: booking.customer_phone.replace(/\D/g, '') } })
+        : null;
+    if (booking.price == null && booking.service_id) {
+      const [service] = await this.orderRepository.query('SELECT price, duration_min FROM bot_service WHERE id = $1 AND company_id = $2', [booking.service_id, companyId]) as Array<{ price: string; duration_min: number | null }>;
+      if (service) {
+        booking.price = Number(service.price) || null;
+        booking.duration_min = booking.duration_min ?? service.duration_min ?? null;
+      }
+    }
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    const fileName = `booking-${booking.id}.pdf`;
+    const buffer = Buffer.from(this.buildSimplePdf(this.buildBookingInvoiceLines(booking, company, channelUser)));
+    const key = saveChatMedia(companyId, buffer, 'application/pdf', fileName);
+    const url = publicChatMediaUrl(key, 90 * 24 * 3600) ?? '';
+    booking.invoice_url = url || null;
+    await bookings.save(booking);
+
+    const caption = `Booking #${booking.id}: ${booking.service_name}, ${booking.date} ${booking.time}`.trim()
+      + (booking.price ? `\nPrice: ${this.formatMoney(booking.price)}` : '');
+    const sent = channelUser ? await this.sendCustomerFile(companyId, channelUser, { buffer, mimetype: 'application/pdf', fileName, url: url || null, caption }) : false;
+    if (sent && channelUser) await this.logInvoiceMessage(channelUser.id, channelUser.platform, `📄 Booking #${booking.id} (PDF)`);
+    return { booking_id: booking.id, invoice_url: url, sent, message: sent ? 'Booking invoice sent to customer.' : 'Booking invoice created, but sending it failed. Check the channel connection.' };
+  }
+
+  private buildBookingInvoiceLines(booking: BotBooking, company: Company | null, channelUser: BotChannelUser | null) {
+    const companyDetails = [
+      company?.address?.trim(),
+      company?.phone?.trim() ? `Phone: ${company.phone.trim()}` : '',
+      company?.email?.trim() ? `Email: ${company.email.trim()}` : '',
+    ].filter((detail): detail is string => Boolean(detail));
+    const status = { requested: 'Requested (the team will confirm the time)', confirmed: 'Confirmed', done: 'Done', cancelled: 'Cancelled' }[booking.status] ?? booking.status;
+    return [
+      company?.name?.trim() || 'Booking',
+      ...companyDetails,
+      '============================================================',
+      `BOOKING #${booking.id}`,
+      `Issued : ${this.formatDate(new Date())}`,
+      `Status : ${status}`,
+      '',
+      'CUSTOMER',
+      `Name    : ${booking.customer_name || channelUser?.display_name || '-'}`,
+      `Phone   : ${booking.customer_phone || '-'}`,
+      '',
+      'APPOINTMENT',
+      '------------------------------------------------------------',
+      `Service : ${booking.service_name}`,
+      `Date    : ${booking.date || '-'}`,
+      `Time    : ${booking.time || '-'}${booking.duration_min ? ` (${booking.duration_min} min)` : ''}`,
+      '------------------------------------------------------------',
+      `${'TOTAL'.padEnd(49)}${(booking.price != null ? this.formatMoney(booking.price) : 'to be confirmed').padStart(10)}`,
+      '============================================================',
+      '',
+      'Thank you for your booking.',
+    ];
   }
 
   /** Shows the invoice in the chat history of the customer's latest conversation. */

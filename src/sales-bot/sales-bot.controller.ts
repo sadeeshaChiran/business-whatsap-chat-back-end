@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import {
   BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, FollowUpActionDto, RepliesQueryDto, ReportQueryDto, SalesBotTestDto,
-  SimulateCustomerMessageDto, SimulatorConversationQueryDto, UpdateBookingStatusDto, UpdateBotServiceDto,
+  SimulateCustomerMessageDto, SimulatorConversationQueryDto, UpdateBookingNotesDto, UpdateBookingStatusDto, UpdateBotServiceDto,
   UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
 } from './dto/sales-bot.dto';
 import { SalesBotAdminService } from './sales-bot-admin.service';
@@ -75,6 +75,16 @@ export class SalesBotController {
   @Patch('bookings/:id/status')
   updateBookingStatus(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingStatusDto) {
     return this.service.updateBookingStatus(user, id, dto);
+  }
+
+  @Patch('bookings/:id/notes')
+  updateBookingNotes(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingNotesDto) {
+    return this.service.updateBookingNotes(user, id, dto);
+  }
+
+  @Post('bookings/:id/invoice')
+  sendBookingInvoice(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.service.sendBookingInvoice(user, id);
   }
 
   /* What the business sells (products / services / both) – any signed-in user */

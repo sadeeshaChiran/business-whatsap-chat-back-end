@@ -41,8 +41,12 @@ export type SalesBotResult = {
   } | null;
   /** Customer wants to cancel a placed order */
   cancel_request: { order_id?: number; reason?: string } | null;
-  /** Customer asked for the invoice / bill of an order */
-  send_invoice: { order_id?: number } | null;
+  /** Customer asked for the invoice / bill of an order (or a booking) */
+  send_invoice: { order_id?: number; booking_id?: number } | null;
+  /** Customer wants to change an open booking (new date / time / service) */
+  booking_change?: { booking_id?: number; request?: string; service_id?: number; date?: string; time?: string; notes?: string } | null;
+  /** Customer wants to cancel an open booking */
+  booking_cancel?: { booking_id?: number; reason?: string } | null;
   /** the bot's short notes about this customer (kept in the session, sent back with the next messages) */
   memory?: string | null;
   /** how close the customer is to buying (none | browsing | interested | ready) */
@@ -115,6 +119,8 @@ export class SalesBotClient {
       order_change: result.order_change && typeof result.order_change === 'object' ? result.order_change : null,
       cancel_request: result.cancel_request && typeof result.cancel_request === 'object' ? result.cancel_request : null,
       send_invoice: result.send_invoice && typeof result.send_invoice === 'object' ? result.send_invoice : null,
+      booking_change: result.booking_change && typeof result.booking_change === 'object' ? result.booking_change : null,
+      booking_cancel: result.booking_cancel && typeof result.booking_cancel === 'object' ? result.booking_cancel : null,
       memory: typeof result.memory === 'string' && result.memory.trim() ? result.memory.trim().slice(0, 600) : null,
       guard: typeof result.guard === 'string' ? result.guard : null,
       interest: ['none', 'browsing', 'interested', 'ready'].includes(String(result.interest)) ? result.interest : null,

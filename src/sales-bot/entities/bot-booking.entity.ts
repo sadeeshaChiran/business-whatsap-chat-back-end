@@ -42,6 +42,16 @@ export class BotBooking {
   @Column({ type: 'varchar', length: 20, default: 'requested' })
   status: BotBookingStatus;
 
+  /** service price and length when booked (for the booking invoice) */
+  @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true, transformer: { to: (v: number | null) => v, from: (v: string | number | null) => (v == null ? null : Number(v)) } })
+  price: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  duration_min: number | null;
+
+  @Column({ type: 'varchar', length: 1000, nullable: true })
+  invoice_url: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

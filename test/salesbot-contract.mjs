@@ -16,7 +16,7 @@ const prod = await api('POST', '/products', { token: t, body: { name: 'Red shoe'
 console.log('product', prod.status, prod.status !== 201 ? JSON.stringify(prod.json).slice(0, 300) : '');
 const p2 = await api('POST', '/products', { token: t, body: { name: 'Blue sock', price: 300, quantity: 0, category_id: cat.data.id } });
 console.log('product2', p2.status);
-const zone = await api('POST', '/bot/delivery-zones', { token: t, body: { area: 'Colombo', fee: 350, days: '1-2 days', included_kg: 1, per_extra_kg: 100 } });
+const zone = await api('POST', '/bot/delivery-zones', { token: t, body: { area: 'Colombo', fee: 350, days: '1-2 days', included_kg: 1, per_extra_kg: 100, weight_rounding: 'exact' } });
 console.log('zone', zone.status, zone.status >= 300 ? JSON.stringify(zone.json) : '');
 const svc = await api('POST', '/bot/services', { token: t, body: { name: 'Shoe cleaning', price: 1000, duration_min: 30 } });
 console.log('service', svc.status, svc.status >= 300 ? JSON.stringify(svc.json).slice(0, 200) : '');
@@ -32,7 +32,7 @@ console.log('TEST CHAT', test.status, JSON.stringify(test.json).slice(0, 700));
 assert.equal(test.status, 201);
 assert.ok(test.data.reply, 'bot replied');
 assert.ok(test.data.tools_used.includes('delivery_fee'), 'lookups ran');
-assert.equal(test.data.order.delivery_fee, 370, 'weight-based delivery fee = 350 + 0.2 kg x 100');
+assert.equal(test.data.order.delivery_fee, 370, 'weight-based delivery fee = 350 + 0.2 kg x 100 (exact weight)');
 
 // 2) full engine path (customer simulator → engine → bot → actions → reply saved)
 const fd = new FormData(); fd.append('phone', '99994771112233'); fd.append('name', 'Nimal'); fd.append('text', 'red shoe size 40 2k ona');

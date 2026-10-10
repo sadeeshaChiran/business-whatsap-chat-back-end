@@ -29,7 +29,7 @@ import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
-import { SalesBotContextService, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
+import { SalesBotContextService, sriLankaNow, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
 
@@ -56,7 +56,7 @@ export function splitReply(text: string, maxParts = 3): string[] {
 }
 
 /** intent is stored on the bot message, e.g. "lead,handoff" (one reply can do several things). */
-type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[] };
+type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[]; invoiceBookingIds?: number[] };
 type LeadStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
 const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 2, proposal: 3, won: 4, lost: 4 };
 
@@ -359,6 +359,24 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
 
+    // Booking confirmation PDF after a new or changed booking, or when the customer asks for it
+    if (outcome.invoiceBookingIds?.length) {
+      const settings = await this.contextService.getSettings(companyId);
+      const askedFor = String(outcome.intent ?? '').includes('invoice');
+      for (const bookingId of outcome.invoiceBookingIds) {
+        if (!settings.auto_send_invoice && !askedFor) break;
+        if (simulated) {
+          await this.messageRepository.save(this.messageRepository.create({
+            conversation_id: conversation.id, direction: 'outbound', message_type: 'text', platform: channelUser.platform || 'whatsapp',
+            content: `[booking invoice #${bookingId} – not sent in the simulator]`, source: BOT_SOURCE,
+          }));
+          continue;
+        }
+        await this.botAdminService.sendBookingInvoiceForCompany(companyId, bookingId).catch((error: unknown) =>
+          this.logger.warn(`auto invoice for booking ${bookingId} failed: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+
     await this.usageRepository.save(this.usageRepository.create({
       company_id: companyId, conversation_id: conversationId, model: result.usage.model,
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens,
@@ -529,6 +547,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const intents = new Set<string>();
     let replyOverride: string | null = null;
     const invoiceOrderIds: number[] = [];
+    const invoiceBookingIds: number[] = [];
     let savedOrderId: number | null = null;
     const who = channelUser.display_name || channelUser.external_user_id;
 
@@ -548,6 +567,8 @@ export class SalesBotEngineService implements OnModuleInit {
         customer_name: booking.customer_name || channelUser.display_name || '',
         customer_phone: socialPlatformOf(channelUser.platform) ? null : channelUser.external_user_id, // Messenger/Instagram ids are not phone numbers
         notes: booking.notes ?? '', status: 'requested',
+        price: service ? Number(service.price) || null : null,
+        duration_min: service?.duration_min ?? null,
       });
       // the time must still be free (two customers can ask for the same time at once: lock that day while checking)
       const taken = await this.bookingRepository.manager.transaction(async (manager) => {
@@ -567,6 +588,7 @@ export class SalesBotEngineService implements OnModuleInit {
         await this.advanceLead(conversation.id, 'proposal', { booking: `${booking.service_name} ${date} ${time} (time taken)`.trim() });
       } else {
         intents.add('booking');
+        if (row.id) invoiceBookingIds.push(row.id);
         await this.advanceLead(conversation.id, 'won', { booking: `${booking.service_name} ${date} ${time}`.trim() });
       }
     } else if (booking?.service_name) {
@@ -635,10 +657,28 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
 
+    if (result.booking_change) {
+      const change = await this.handleBookingChange(companyId, conversation, channelUser, result.booking_change, result.language, who);
+      if (change.intent) intents.add(change.intent);
+      if (change.replyOverride) replyOverride = change.replyOverride;
+      if (change.invoice && !invoiceBookingIds.includes(change.invoice)) invoiceBookingIds.push(change.invoice);
+    }
+
+    if (result.booking_cancel) {
+      const cancelled = await this.handleBookingCancel(companyId, conversation, channelUser, result.booking_cancel, who);
+      if (cancelled) intents.add('booking_cancelled');
+    }
+
     if (result.send_invoice) {
-      const order = await this.findInvoiceOrder(companyId, channelUser.id, result.send_invoice.order_id);
-      if (order && !invoiceOrderIds.includes(order.id)) invoiceOrderIds.push(order.id);
-      if (order) intents.add('invoice');
+      if (result.send_invoice.booking_id) {
+        const bookingRow = await this.findOpenBooking(companyId, channelUser.id, result.send_invoice.booking_id, true);
+        if (bookingRow && !invoiceBookingIds.includes(bookingRow.id)) invoiceBookingIds.push(bookingRow.id);
+        if (bookingRow) intents.add('invoice');
+      } else {
+        const order = await this.findInvoiceOrder(companyId, channelUser.id, result.send_invoice.order_id);
+        if (order && !invoiceOrderIds.includes(order.id)) invoiceOrderIds.push(order.id);
+        if (order) intents.add('invoice');
+      }
     }
 
     for (const note of result.notes ?? []) {
@@ -650,7 +690,84 @@ export class SalesBotEngineService implements OnModuleInit {
       await this.handoff(companyId, conversation, channelUser, 'bot_handoff', result.handoff.reason || 'The bot asked for a person.');
       intents.add('handoff');
     }
-    return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds };
+    return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds, invoiceBookingIds };
+  }
+
+  /** A booking of this customer (requested / confirmed; any status when `any`), or their latest open one. */
+  private async findOpenBooking(companyId: number, channelUserId: number, bookingId?: number, any = false): Promise<BotBooking | null> {
+    const qb = this.bookingRepository.createQueryBuilder('b')
+      .where('b.company_id = :companyId AND b.bot_channel_user_id = :channelUserId', { companyId, channelUserId });
+    if (!any) qb.andWhere("b.status IN ('requested', 'confirmed')");
+    if (bookingId) qb.andWhere('b.id = :bookingId', { bookingId: Number(bookingId) });
+    return qb.orderBy('b.id', 'DESC').getOne();
+  }
+
+  private appendBookingNote(row: BotBooking, text: string) {
+    const now = sriLankaNow();
+    const stamp = `${now.date} ${now.label.split(' ').pop()}`; // 2026-10-10 14:20
+    row.notes = [String(row.notes ?? '').trim(), `[${stamp}] ${text}`].filter(Boolean).join('\n').slice(-4000);
+  }
+
+  /**
+   * Customer changes an open booking (like a Pending order): new date / time / service, checked against the
+   * booked times (its own old time does not count). A confirmed booking goes back to "requested" – the team
+   * confirms the new time. A note records what changed.
+   */
+  private async handleBookingChange(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    change: NonNullable<SalesBotResult['booking_change']>, language: string, who: string): Promise<{ intent: string | null; replyOverride?: string; invoice?: number }> {
+    const row = await this.findOpenBooking(companyId, channelUser.id, change.booking_id);
+    if (!row) return { intent: null };
+    const request = String(change.request ?? '').trim() || 'wants to change the booking';
+    const service = change.service_id && Number(change.service_id) !== Number(row.service_id)
+      ? await this.serviceRepository.findOne({ where: { id: Number(change.service_id), company_id: companyId } })
+      : null;
+    const date = normalizeBookingDate(change.date) ?? row.date;
+    const start = bookingMinutes(change.time) ?? bookingMinutes(row.time);
+    const time = start == null ? row.time : formatMinutes(start);
+    const before = `${row.service_name} ${row.date} ${row.time}`.trim();
+    const serviceId = service?.id ?? row.service_id;
+
+    const taken = await this.bookingRepository.manager.transaction(async (manager) => {
+      if (start != null && normalizeBookingDate(date)) {
+        await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [companyId, date]);
+        const day = await this.contextService.bookingDay(companyId, date, { excludeId: row.id });
+        const duration = day.durationOf(serviceId);
+        if (!isFree(day.busy, start, start + duration, day.capacity)) return nearestFreeTimes(day.busy, start, duration, day.capacity, 3, day.window);
+      }
+      if (service) {
+        row.service_id = service.id;
+        row.service_name = service.name;
+        row.price = Number(service.price) || null;
+        row.duration_min = service.duration_min ?? null;
+      }
+      const wasConfirmed = row.status === 'confirmed';
+      row.date = date;
+      row.time = time;
+      if (change.notes?.trim()) this.appendBookingNote(row, `Customer note: ${change.notes.trim()}`);
+      this.appendBookingNote(row, `✏️ Changed by the customer: ${before} → ${row.service_name} ${date} ${time} (${request})${wasConfirmed ? ' – was confirmed, please confirm the new time' : ''}`);
+      if (wasConfirmed) row.status = 'requested';
+      await manager.save(row);
+      return null;
+    });
+    if (taken) return { intent: null, replyOverride: slotTakenMessage(language, date, start as number, taken) };
+    await this.notifyTeam(companyId, 'booking_changed', 'MEDIUM', `Booking #${row.id} changed by the customer`,
+      `${who}: ${before} → ${row.service_name} ${row.date} ${row.time}`, conversation.id);
+    await this.advanceLead(conversation.id, 'won', { booking: `${row.service_name} ${row.date} ${row.time}`.trim() });
+    return { intent: 'booking_changed', invoice: row.id };
+  }
+
+  /** Customer cancels an open booking: cancelled right away (the time is free again), with a note and a team alert. */
+  private async handleBookingCancel(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    cancel: NonNullable<SalesBotResult['booking_cancel']>, who: string): Promise<boolean> {
+    const row = await this.findOpenBooking(companyId, channelUser.id, cancel.booking_id);
+    if (!row) return false;
+    const reason = String(cancel.reason ?? '').trim() || 'no reason given';
+    this.appendBookingNote(row, `❌ Cancelled by the customer: ${reason}`);
+    row.status = 'cancelled';
+    await this.bookingRepository.save(row);
+    await this.notifyTeam(companyId, 'booking_cancelled', 'MEDIUM', `Booking #${row.id} cancelled by the customer`,
+      `${who}: ${row.service_name} ${row.date} ${row.time} – ${reason}`, conversation.id);
+    return true;
   }
 
   /* ───────────────── Follow-ups (interested customers who went quiet) ───────────────── */

@@ -14,7 +14,7 @@ import { SalesBotHook } from '../common/sales-bot-hook';
 import { Company } from '../company/entities/company.entity';
 import type {
   BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, RepliesQueryDto, SalesBotTestDto,
-  SimulateCustomerMessageDto, UpdateBookingStatusDto, UpdateBotServiceDto, UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
+  SimulateCustomerMessageDto, UpdateBookingNotesDto, UpdateBookingStatusDto, UpdateBotServiceDto, UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
 } from './dto/sales-bot.dto';
 import { BotAiUsage } from './entities/bot-ai-usage.entity';
 import { BotBooking } from './entities/bot-booking.entity';
@@ -23,6 +23,7 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 import { SalesBotClient } from './sales-bot.client';
 import { SalesBotContextService } from './sales-bot-context.service';
+import { BotAdminService } from '../bot-admin/bot-admin.service';
 import { BOT_SOURCE, SalesBotEngineService } from './sales-bot-engine.service';
 import { PlanService } from '../platform/plan.service';
 import { TokenQuotaService } from '../platform/token-quota.service';
@@ -55,6 +56,7 @@ export class SalesBotAdminService {
     private readonly agentRoutingService: AgentRoutingService,
     private readonly planService: PlanService,
     private readonly tokenQuota: TokenQuotaService,
+    private readonly botAdminService: BotAdminService,
   ) {}
 
   /** Same rule as the rest of the bot admin: only the company admin. */
@@ -135,6 +137,7 @@ export class SalesBotAdminService {
       id: row.id, area: row.area, fee: num(row.fee), days: row.days,
       included_kg: row.included_kg == null ? null : num(row.included_kg),
       per_extra_kg: row.per_extra_kg == null ? null : num(row.per_extra_kg),
+      weight_rounding: row.weight_rounding || 'up',
     };
   }
 
@@ -160,6 +163,7 @@ export class SalesBotAdminService {
     const saved = await this.zoneRepository.save(this.zoneRepository.create({
       company_id: Number(company.id), area, fee: dto.fee, days: dto.days?.trim() ?? '',
       included_kg: dto.included_kg ?? null, per_extra_kg: dto.per_extra_kg ?? null,
+      weight_rounding: dto.weight_rounding ?? 'up',
     }));
     return this.zoneView(saved);
   }
@@ -176,6 +180,7 @@ export class SalesBotAdminService {
     if (dto.days !== undefined) row.days = dto.days.trim();
     if (dto.included_kg !== undefined) row.included_kg = dto.included_kg ?? null;
     if (dto.per_extra_kg !== undefined) row.per_extra_kg = dto.per_extra_kg ?? null;
+    if (dto.weight_rounding !== undefined) row.weight_rounding = dto.weight_rounding;
     return this.zoneView(await this.zoneRepository.save(row));
   }
 
@@ -192,8 +197,24 @@ export class SalesBotAdminService {
     return {
       id: row.id, service_id: row.service_id, service_name: row.service_name, date: row.date, time: row.time,
       customer_name: row.customer_name, customer_phone: row.customer_phone, notes: row.notes, status: row.status,
-      conversation_id: row.conversation_id, created_at: row.created_at,
+      conversation_id: row.conversation_id, created_at: row.created_at, updated_at: row.updated_at,
+      price: row.price == null ? null : Number(row.price), duration_min: row.duration_min, invoice_url: row.invoice_url,
     };
+  }
+
+  async updateBookingNotes(user: AuthenticatedUser, id: number, dto: UpdateBookingNotesDto) {
+    const company = await this.adminCompany(user);
+    const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
+    if (!row) throw new NotFoundException('Booking not found.');
+    row.notes = dto.notes.trim();
+    return this.bookingView(await this.bookingRepository.save(row));
+  }
+
+  async sendBookingInvoice(user: AuthenticatedUser, id: number) {
+    const company = await this.adminCompany(user);
+    const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
+    if (!row) throw new NotFoundException('Booking not found.');
+    return this.botAdminService.sendBookingInvoiceForCompany(Number(company.id), id);
   }
 
   async listBookings(user: AuthenticatedUser, query: BookingsQueryDto) {

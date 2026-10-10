@@ -1,7 +1,8 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from 'typeorm';
 
 export type BotNotificationKind =
-  | 'special_note' | 'order_changed' | 'change_request' | 'order_cancelled' | 'cancel_request' | 'new_order' | 'handoff';
+  | 'special_note' | 'order_changed' | 'change_request' | 'order_cancelled' | 'cancel_request' | 'new_order' | 'handoff'
+  | 'booking_changed' | 'booking_cancelled';
 
 /** An alert for the team from the sales bot (shown in the Notifications feed). */
 @Entity('bot_notification')
