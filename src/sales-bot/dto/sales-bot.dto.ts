@@ -119,12 +119,17 @@ export class CreateDeliveryZoneDto {
   @Min(0)
   included_kg?: number | null;
 
-  /** Weight rule (optional): fee for each extra kg (exact kg). */
+  /** Weight rule (optional): fee for each extra kg (counted as weight_rounding says). */
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   per_extra_kg?: number | null;
+
+  /** up = 2.3 kg counts as 3 kg · nearest = 2.3 -> 2, 2.5 -> 3 · exact = 2.3 kg */
+  @IsOptional()
+  @IsIn(['up', 'nearest', 'exact'])
+  weight_rounding?: 'up' | 'nearest' | 'exact';
 }
 
 export class UpdateDeliveryZoneDto {
@@ -152,12 +157,17 @@ export class UpdateDeliveryZoneDto {
   @Min(0)
   included_kg?: number | null;
 
-  /** Weight rule (optional): fee for each extra kg (exact kg). */
+  /** Weight rule (optional): fee for each extra kg (counted as weight_rounding says). */
   @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   per_extra_kg?: number | null;
+
+  /** up = 2.3 kg counts as 3 kg · nearest = 2.3 -> 2, 2.5 -> 3 · exact = 2.3 kg */
+  @IsOptional()
+  @IsIn(['up', 'nearest', 'exact'])
+  weight_rounding?: 'up' | 'nearest' | 'exact';
 }
 
 /* ───────── Bookings ───────── */
@@ -165,6 +175,12 @@ export class UpdateDeliveryZoneDto {
 export class UpdateBookingStatusDto {
   @IsIn(BOT_BOOKING_STATUSES)
   status: BotBookingStatus;
+}
+
+export class UpdateBookingNotesDto {
+  @IsString()
+  @MaxLength(4000)
+  notes: string;
 }
 
 export class BookingsQueryDto {

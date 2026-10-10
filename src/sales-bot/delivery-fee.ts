@@ -1,9 +1,19 @@
 /**
  * Delivery fee with an optional weight rule (same formula as the Python bot's delivery_fee tool):
- *   fee = base fee + max(0, order kg - included_kg) × per_extra_kg      (exact kg, no rounding up)
+ *   counted kg = order kg rounded as the zone says: up (2.3 -> 3), nearest (2.3 -> 2, 2.5 -> 3) or exact (2.3)
+ *   fee = base fee + max(0, counted kg - included_kg) × per_extra_kg
  * A zone without a weight rule (included_kg or per_extra_kg empty) has a flat fee.
  */
-export type ZoneRule = { area: string; fee: number | string; included_kg?: number | string | null; per_extra_kg?: number | string | null };
+export type WeightRounding = 'up' | 'nearest' | 'exact';
+export type ZoneRule = { area: string; fee: number | string; included_kg?: number | string | null; per_extra_kg?: number | string | null; weight_rounding?: string | null };
+
+/** The weight the fee is counted on. Tiny float noise (2.0000001) never pushes it up a kg. */
+export function countedKg(weightKg: number, rounding: string | null | undefined): number {
+  const kg = Math.max(0, Math.round((Number(weightKg) || 0) * 1000) / 1000);
+  if (rounding === 'exact') return kg;
+  if (rounding === 'nearest') return Math.round(kg);
+  return Math.ceil(kg); // 'up' (default)
+}
 
 export function hasWeightRule(zone: ZoneRule): boolean {
   return zone.included_kg != null && zone.per_extra_kg != null && Number(zone.per_extra_kg) > 0;
@@ -12,7 +22,7 @@ export function hasWeightRule(zone: ZoneRule): boolean {
 export function zoneFee(zone: ZoneRule, weightKg: number): number {
   const base = Number(zone.fee) || 0;
   if (!hasWeightRule(zone)) return base;
-  const extraKg = Math.max(0, (Number(weightKg) || 0) - Number(zone.included_kg));
+  const extraKg = Math.max(0, countedKg(weightKg, zone.weight_rounding) - Number(zone.included_kg));
   return Math.round((base + extraKg * Number(zone.per_extra_kg)) * 100) / 100;
 }
 

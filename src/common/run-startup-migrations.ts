@@ -52,6 +52,8 @@ const MIGRATION_FILES = [
   'supabase_package_services.sql',
   'supabase_simulator_test_numbers.sql',
   'supabase_booking_slots.sql',
+  'supabase_zone_weight_rounding.sql',
+  'supabase_booking_changes.sql',
 ] as const;
 
 function migrationDir(): string | null {

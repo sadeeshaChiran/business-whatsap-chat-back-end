@@ -40,7 +40,8 @@ export type SalesBotContext = {
   products: ContextProduct[];
   services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null; available: boolean }>;
   /** included_kg + per_extra_kg set = weight rule (fee = fee + extra kg × per_extra_kg) */
-  delivery_zones: Array<{ area: string; fee: number; days: string; included_kg: number | null; per_extra_kg: number | null }>;
+  /** weight_rounding: up (2.3 kg -> 3), nearest (2.3 -> 2, 2.5 -> 3), exact */
+  delivery_zones: Array<{ area: string; fee: number; days: string; included_kg: number | null; per_extra_kg: number | null; weight_rounding?: string }>;
   policies: Array<{ question: string; answer: string }>;
   styles: Array<{ question: string; answer: string }>;
   faqs: Array<{ question: string; answer: string }>;
@@ -56,7 +57,9 @@ export type SalesBotContext = {
   /** Sri Lanka date and time now, e.g. "2026-10-09 Friday 14:20" (for "tomorrow", "next Monday") */
   today?: string;
   /** booked times (next 90 days) - the bot's check_booking_time tool uses this */
-  bookings?: { mode: 'requested' | 'confirmed'; capacity: number; open: string; close: string; busy: Array<{ date: string; start: string; end: string }> };
+  bookings?: { mode: 'requested' | 'confirmed'; capacity: number; open: string; close: string; busy: Array<{ id: number; date: string; start: string; end: string }> };
+  /** this customer's bookings that are still open (requested / confirmed) - the bot changes or cancels these */
+  open_bookings?: Array<{ booking_id: number; service_id: number | null; service: string; date: string; time: string; status: string; price: number | null; notes: string }>;
 };
 
 /** Sri Lanka date/time now: { date: "2026-10-09", label: "2026-10-09 Friday 14:20" } */
@@ -213,6 +216,22 @@ export class SalesBotContextService {
     };
   }
 
+  /** The customer's requested / confirmed bookings that are today or later (or have an unclear date). */
+  async openBookings(companyId: number, channelUserId: number, today: string): Promise<SalesBotContext['open_bookings']> {
+    if (!this.bookingRepository) return [];
+    const rows = await this.bookingRepository.createQueryBuilder('b')
+      .where('b.company_id = :companyId AND b.bot_channel_user_id = :channelUserId', { companyId, channelUserId })
+      .andWhere("b.status IN ('requested', 'confirmed')")
+      .andWhere("(b.date !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' OR b.date >= :today)", { today })
+      .orderBy('b.date', 'ASC').addOrderBy('b.time', 'ASC')
+      .take(10)
+      .getMany();
+    return rows.map((row) => ({
+      booking_id: row.id, service_id: row.service_id, service: row.service_name, date: row.date, time: row.time,
+      status: row.status, price: row.price == null ? null : Number(row.price), notes: String(row.notes ?? '').slice(-300),
+    }));
+  }
+
   /** Booked times for the next 90 days (only for shops that take bookings). */
   private async upcomingBookings(companyId: number, settings: SalesBotSettings, today: string): Promise<SalesBotContext['bookings']> {
     if (!this.bookingRepository) return undefined;
@@ -229,7 +248,7 @@ export class SalesBotContextService {
       mode: settings.booking_block_status === 'confirmed' ? 'confirmed' : 'requested',
       capacity: Math.max(1, Number(settings.booking_capacity ?? 1)),
       open: formatMinutes(window.open), close: formatMinutes(window.close),
-      busy: rows.flatMap((row) => busyRanges([row], durationOf).map((range) => ({ date: row.date, start: formatMinutes(range.start), end: formatMinutes(range.end) }))),
+      busy: rows.flatMap((row) => busyRanges([row], durationOf).map((range) => ({ id: row.id, date: row.date, start: formatMinutes(range.start), end: formatMinutes(range.end) }))),
     };
   }
 
@@ -310,6 +329,7 @@ export class SalesBotContextService {
         area: zone.area, fee: toNumber(zone.fee), days: zone.days,
         included_kg: zone.included_kg == null ? null : toNumber(zone.included_kg),
         per_extra_kg: zone.per_extra_kg == null ? null : toNumber(zone.per_extra_kg),
+        weight_rounding: zone.weight_rounding || 'up',
       })),
       policies: policies.slice(0, 40),
       styles: styles.slice(0, 300),
@@ -350,6 +370,7 @@ export class SalesBotContextService {
       campaign,
       today: now.label,
       bookings: effectiveSellsOf(company, settings) === 'products' ? undefined : await this.upcomingBookings(companyId, settings, now.date),
+      open_bookings: effectiveSellsOf(company, settings) === 'products' || !channelUserId ? undefined : await this.openBookings(companyId, channelUserId, now.date),
     };
   }
 
