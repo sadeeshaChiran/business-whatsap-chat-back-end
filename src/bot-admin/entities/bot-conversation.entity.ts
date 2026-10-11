@@ -51,6 +51,14 @@ export class BotConversation {
   @Column({ type: 'timestamptz', nullable: true })
   agent_last_read_at: Date | null;
 
+  /** When the company admin last read this chat (the agent's unread count uses agent_last_read_at only) */
+  @Column({ type: 'timestamptz', nullable: true })
+  admin_last_read_at: Date | null;
+
+  /** When the agent accepted the chat (time to accept = accepted_at - assigned_at) */
+  @Column({ type: 'timestamptz', nullable: true })
+  accepted_at: Date | null;
+
   /** Why the chat waits in the unassigned queue: bot_handoff | order_check | bot_error (sales bot) */
   @Column({ type: 'varchar', length: 30, nullable: true })
   queue_reason: string | null;

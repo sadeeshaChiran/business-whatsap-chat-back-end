@@ -236,7 +236,9 @@ export class SalesBotEngineService implements OnModuleInit {
     if (social && !(await this.planService.hasFeature(Number(company.id), social))) return false;
     // tokens used up / package expired / suspended → the bot stops, the chat stays with the agents
     if (!(await this.tokenQuota.canBotReply(Number(company.id)))) return false;
-    if (conversation.status === 'active' || conversation.status === 'closed') return false; // an agent is handling it
+    // An agent who accepted the chat works WITH the bot: the bot keeps helping until someone switches it off for this
+    // customer (bot_enabled = false). Only a closed chat stops it.
+    if (conversation.status === 'closed') return false;
     if (channelUser.bot_enabled) return true;
     // Never toggled by an agent (manual_mode false) → new customer: switch the bot on if the company wants that.
     if (!channelUser.manual_mode) {
@@ -315,7 +317,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // An agent may have taken over while the AI was thinking
     const fresh = await this.conversationRepository.findOne({ where: { id: conversationId } });
     const freshUser = await this.channelUserRepository.findOne({ where: { id: channelUser.id } });
-    if (!fresh || fresh.status === 'active' || fresh.status === 'closed' || !freshUser?.bot_enabled) return;
+    if (!fresh || fresh.status === 'closed' || !freshUser?.bot_enabled) return;
 
     // Save first, so a blocked order never gets a "confirmed!" message
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
@@ -569,6 +571,7 @@ export class SalesBotEngineService implements OnModuleInit {
         notes: booking.notes ?? '', status: 'requested',
         price: service ? Number(service.price) || null : null,
         duration_min: service?.duration_min ?? null,
+        created_by: 'bot', agent_id: await this.customerAgent(conversation),
       });
       // the time must still be free (two customers can ask for the same time at once: lock that day while checking)
       const taken = await this.bookingRepository.manager.transaction(async (manager) => {
@@ -691,6 +694,12 @@ export class SalesBotEngineService implements OnModuleInit {
       intents.add('handoff');
     }
     return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds, invoiceBookingIds };
+  }
+
+  /** The agent a bot order / booking counts for: the agent who accepted this chat. Nobody yet → set when an agent accepts. */
+  private async customerAgent(conversation: BotConversation): Promise<number | null> {
+    const fresh = await this.conversationRepository.findOne({ where: { id: conversation.id } });
+    return fresh?.assigned_agent_id && fresh.status === 'active' ? Number(fresh.assigned_agent_id) : null;
   }
 
   /** A booking of this customer (requested / confirmed; any status when `any`), or their latest open one. */
@@ -1159,11 +1168,12 @@ export class SalesBotEngineService implements OnModuleInit {
 
 
   /** Prices always come from the products table – never from the AI. */
-  async priceItems(companyId: number, items: NonNullable<SalesBotOrder['items']>): Promise<{ items: PricedItem[]; problem: string }> {
+  async priceItems(companyId: number, items: NonNullable<SalesBotOrder['items']>, pricing: { anyProduct?: boolean } = {}): Promise<{ items: PricedItem[]; problem: string }> {
     const priced: PricedItem[] = [];
     for (const item of items) {
       const product = await this.productRepository.findOne({
-        where: { id: Number(item.product_id), company_id: companyId, is_deleted: false, show_to_bot: true },
+        // the team may sell products hidden from the bot; the bot only sells products shown to it
+        where: { id: Number(item.product_id), company_id: companyId, is_deleted: false, ...(pricing.anyProduct ? {} : { show_to_bot: true }) },
         relations: ['variants'],
       });
       if (!product) return { items: priced, problem: `unknown_product_${item.product_id}` };
@@ -1258,6 +1268,7 @@ export class SalesBotEngineService implements OnModuleInit {
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
       total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
       admin_note: ['Created by the sales bot.', ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].join('\n'),
+      created_by: 'bot', agent_id: await this.customerAgent(conversation),
     }));
     for (const item of items) {
       await this.orderItemRepository.save(this.orderItemRepository.create({

@@ -11,9 +11,10 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import {
   BookingsQueryDto, CreateBotServiceDto, CreateDeliveryZoneDto, FollowUpActionDto, RepliesQueryDto, ReportQueryDto, SalesBotTestDto,
   SimulateCustomerMessageDto, SimulatorConversationQueryDto, UpdateBookingNotesDto, UpdateBookingStatusDto, UpdateBotServiceDto,
-  UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto,
+  UpdateDeliveryZoneDto, UpdateSalesBotSettingsDto, CatalogQueryDto, ManualBookingDto, ManualOrderDto, ManualQuoteDto,
 } from './dto/sales-bot.dto';
 import { SalesBotAdminService } from './sales-bot-admin.service';
+import { ManualOrdersService } from './manual-orders.service';
 
 /** Endpoints for the Sales bot pages (docs: frontend docs/SALES_BOT_API.md). Admin only. */
 @Controller('bot')
@@ -22,7 +23,32 @@ import { SalesBotAdminService } from './sales-bot-admin.service';
 @UseGuards(JwtAuthGuard)
 @AdminOnly()
 export class SalesBotController {
-  constructor(private readonly service: SalesBotAdminService) {}
+  constructor(private readonly service: SalesBotAdminService, private readonly manual: ManualOrdersService) {}
+
+  /* Orders / bookings added by the team in a chat (admin, or the agent who holds the chat) */
+  @Get('manual/catalog')
+  @Roles('admin', 'agent')
+  manualCatalog(@CurrentUser() user: AuthenticatedUser, @Query() query: CatalogQueryDto) {
+    return this.manual.catalog(user, query.search ?? '');
+  }
+
+  @Post('manual/quote')
+  @Roles('admin', 'agent')
+  manualQuote(@CurrentUser() user: AuthenticatedUser, @Body() dto: ManualQuoteDto) {
+    return this.manual.quote(user, dto.items, dto.delivery_area);
+  }
+
+  @Post('conversations/:id/manual-order')
+  @Roles('admin', 'agent')
+  manualOrder(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ManualOrderDto) {
+    return this.manual.createOrder(user, id, dto);
+  }
+
+  @Post('conversations/:id/manual-booking')
+  @Roles('admin', 'agent')
+  manualBooking(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ManualBookingDto) {
+    return this.manual.createBooking(user, id, dto);
+  }
 
   /* Services */
   @Get('services')
@@ -75,6 +101,18 @@ export class SalesBotController {
   @Patch('bookings/:id/status')
   updateBookingStatus(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingStatusDto) {
     return this.service.updateBookingStatus(user, id, dto);
+  }
+
+  /* Agent performance (company admin) */
+  @Get('team/performance')
+  teamPerformance(@CurrentUser() user: AuthenticatedUser, @Query('days') days?: string) {
+    return this.service.teamPerformance(user, Number(days));
+  }
+
+  /* Home dashboard (company admin) */
+  @Get('dashboard')
+  dashboard(@CurrentUser() user: AuthenticatedUser, @Query('days') days?: string) {
+    return this.service.dashboard(user, Number(days));
   }
 
   @Patch('bookings/:id/notes')

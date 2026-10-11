@@ -24,6 +24,7 @@ import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
+import { ManualOrdersService } from './manual-orders.service';
 import { SalesBotAdminService } from './sales-bot-admin.service';
 import { SalesBotClient } from './sales-bot.client';
 import { SalesBotContextService } from './sales-bot-context.service';
@@ -47,7 +48,7 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
     ]),
   ],
   controllers: [SalesBotController],
-  providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, PusherService, MetaSocialSenderService],
+  providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, ManualOrdersService, PusherService, MetaSocialSenderService],
   exports: [SalesBotContextService],
 })
 export class SalesBotModule {}

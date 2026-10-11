@@ -36,13 +36,14 @@ export class PlanService {
     if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache;
     const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number } }> = await this.packageRepository.manager
       .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
-    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || 50_000);
     const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
+    // default: 1 credit = 1 average AI reply (easy to explain to shops)
+    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || perReply);
     this.creditCache = { at: Date.now(), value, perReply };
     return this.creditCache;
   }
 
-  /** 1 credit = this many AI tokens (super admin setting, default 50,000). Companies only see credits. */
+  /** 1 credit = this many AI tokens (super admin setting, default = one average AI reply). Companies only see credits. */
   async tokensPerCredit(): Promise<number> {
     return (await this.creditSetting()).value;
   }

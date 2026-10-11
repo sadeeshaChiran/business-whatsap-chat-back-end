@@ -1,4 +1,4 @@
-import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
+import { FeatureGuard, RequiresAnyFeature, RequiresFeature } from '../platform/feature.guard';
 import { Body, Controller, Delete, Get, Header, Module, Param, ParseIntPipe, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -14,6 +14,26 @@ import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../bot-admin/entities/bot-message.entity';
 import { CampaignsService, CHANNELS } from './campaigns.service';
 import { MarketingService } from './marketing.service';
+
+class TemplateButtonDto {
+  @IsIn(['QUICK_REPLY', 'URL', 'PHONE_NUMBER']) type: 'QUICK_REPLY' | 'URL' | 'PHONE_NUMBER';
+  @IsString() @MaxLength(25) text: string;
+  @IsOptional() @IsString() @MaxLength(2000) url?: string;
+  @IsOptional() @IsString() @MaxLength(2000) url_example?: string;
+  @IsOptional() @IsString() @MaxLength(20) phone_number?: string;
+}
+
+class TemplateDto {
+  @IsString() @Matches(/^[a-z0-9_]{1,512}$/, { message: 'Template name: only small letters, numbers and _' }) name: string;
+  @IsString() @Matches(/^[a-z]{2,3}(_[A-Z]{2})?$/) language: string;
+  @IsIn(['MARKETING', 'UTILITY']) category: 'MARKETING' | 'UTILITY';
+  @IsOptional() @IsString() @MaxLength(60) header_text?: string;
+  @IsOptional() @IsString() @MaxLength(200) header_example?: string;
+  @IsString() @MinLength(1) @MaxLength(1024) body: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(200, { each: true }) body_examples?: string[];
+  @IsOptional() @IsString() @MaxLength(60) footer?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @ValidateNested({ each: true }) @Type(() => TemplateButtonDto) buttons?: TemplateButtonDto[];
+}
 
 const STAGES = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'];
 
@@ -173,6 +193,24 @@ export class MarketingController {
   @Get('capi/events')
   @RequiresFeature('marketing_pro')
   capiEvents(@CurrentUser() user: AuthenticatedUser) { return this.marketing.capiLog(user); }
+
+  /* marketing home */
+  @Get('overview')
+  @RequiresAnyFeature('campaigns', 'marketing_ads', 'broadcasts', 'marketing_pro')
+  overview(@CurrentUser() user: AuthenticatedUser, @Query() query: DaysDto) { return this.marketing.overview(user, query.days); }
+
+  /* WhatsApp message templates */
+  @Get('templates/all')
+  @RequiresFeature('broadcasts')
+  allTemplates(@CurrentUser() user: AuthenticatedUser) { return this.marketing.allTemplates(user); }
+
+  @Post('templates')
+  @RequiresFeature('broadcasts')
+  createTemplate(@CurrentUser() user: AuthenticatedUser, @Body() dto: TemplateDto) { return this.marketing.createTemplate(user, dto); }
+
+  @Delete('templates/:name')
+  @RequiresFeature('broadcasts')
+  deleteTemplate(@CurrentUser() user: AuthenticatedUser, @Param('name') name: string) { return this.marketing.deleteTemplate(user, name); }
 
   /* 5) broadcasts */
   @Get('templates')

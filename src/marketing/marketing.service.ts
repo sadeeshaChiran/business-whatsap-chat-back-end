@@ -7,6 +7,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../bot-admin/entities/bot-message.entity';
 import { MarketingHook } from '../common/marketing-hook';
+import { buildTemplateComponents, type TemplateInput } from './templates';
 import { applyPendingRefs, attributeAd, attributeBroadcastReply, attributeRef, attributeText, linkTags, savePendingRef } from './attribution';
 import {
   GraphError, adsLoginUrl, exchangeAdsCode, fromMinorUnits, graphRequest, normalisePhone, readAdsState, sha256, toMinorUnits,
@@ -508,6 +509,114 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         };
       });
     } catch (error) { this.graphError(error); }
+  }
+
+  /* ───── Message templates (create / list / delete in WhatsApp Manager through the API) ───── */
+
+  /** Every template with its Meta status (approved, pending, rejected …). */
+  async allTemplates(user: AuthenticatedUser) {
+    const companyId = await this.adminCompany(user);
+    const channel = await this.cloudChannel(companyId);
+    type Raw = {
+      id: string; name: string; language: string; category: string; status: string; rejected_reason?: string; quality_score?: { score?: string };
+      components?: Array<{ type: string; text?: string; format?: string; buttons?: Array<{ type: string; text: string; url?: string; phone_number?: string }> }>;
+    };
+    try {
+      const result = await graphRequest<{ data: Raw[] }>('GET', `/${channel.meta_waba_id}/message_templates`, channel.meta_access_token,
+        { fields: 'id,name,language,category,status,rejected_reason,quality_score,components', limit: '250' });
+      return result.data.map((t) => {
+        const part = (type: string) => t.components?.find((c) => c.type === type);
+        const body = part('BODY')?.text ?? '';
+        const header = part('HEADER');
+        return {
+          id: t.id, name: t.name, language: t.language, category: t.category, status: t.status,
+          rejected_reason: t.rejected_reason && t.rejected_reason !== 'NONE' ? t.rejected_reason : null,
+          quality: t.quality_score?.score ?? null,
+          header: header ? { format: header.format ?? 'TEXT', text: header.text ?? '' } : null,
+          body, footer: part('FOOTER')?.text ?? '',
+          buttons: (part('BUTTONS')?.buttons ?? []).map((b) => ({ type: b.type, text: b.text, url: b.url ?? null, phone_number: b.phone_number ?? null })),
+          variables: (body.match(/\{\{\d+\}\}/g) ?? []).length,
+        };
+      });
+    } catch (error) { this.graphError(error); }
+  }
+
+  /** Sends a new template to Meta for review (usually approved in minutes, up to 24 hours). */
+  async createTemplate(user: AuthenticatedUser, dto: TemplateInput) {
+    const companyId = await this.adminCompany(user);
+    const channel = await this.cloudChannel(companyId);
+    const components = buildTemplateComponents(dto);
+    try {
+      const result = await graphRequest<{ id: string; status: string; category: string }>('POST', `/${channel.meta_waba_id}/message_templates`, channel.meta_access_token, {
+        name: dto.name, language: dto.language, category: dto.category, components,
+      });
+      return { id: result.id, status: result.status, category: result.category ?? dto.category, name: dto.name, language: dto.language };
+    } catch (error) { this.graphError(error); }
+  }
+
+  async deleteTemplate(user: AuthenticatedUser, name: string) {
+    const companyId = await this.adminCompany(user);
+    const channel = await this.cloudChannel(companyId);
+    if (!/^[a-z0-9_]{1,512}$/.test(name)) throw new BadRequestException('Unknown template.');
+    try {
+      await graphRequest('DELETE', `/${channel.meta_waba_id}/message_templates`, channel.meta_access_token, { name });
+      return { name, deleted: true };
+    } catch (error) { this.graphError(error); }
+  }
+
+  /** Marketing home: broadcasts, links, campaigns, ads and opt-outs in one view. */
+  async overview(user: AuthenticatedUser, daysRaw?: number) {
+    const companyId = await this.adminCompany(user);
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365);
+    const [channel] = await this.dataSource.query(`SELECT provider_type, meta_phone_number_id FROM whatsapp_channels WHERE company_id = $1 LIMIT 1`, [companyId]);
+    const broadcasts: Array<Record<string, unknown>> = await this.dataSource.query(`
+      SELECT id, name, status, template_name, total, scheduled_at, created_at FROM marketing_broadcast
+       WHERE company_id = $1 AND created_at > NOW() - make_interval(days => $2::int) ORDER BY id DESC`, [companyId, days]);
+    const stats = await this.statsFor(broadcasts.map((b) => Number(b.id)));
+    const sum = (key: string) => [...stats.values()].reduce((total, row) => total + num(row[key]), 0);
+    const [links] = await this.dataSource.query(`
+      SELECT COUNT(*) FILTER (WHERE l.is_active)::int AS active,
+             (SELECT COUNT(*) FROM marketing_link_click k JOIN marketing_link x ON x.id = k.link_id
+               WHERE x.company_id = $1 AND k.created_at > NOW() - make_interval(days => $2::int))::int AS clicks
+        FROM marketing_link l WHERE l.company_id = $1`, [companyId, days]);
+    const [campaigns] = await this.dataSource.query(
+      `SELECT COUNT(*) FILTER (WHERE status = 'active')::int AS active, COUNT(*)::int AS total FROM marketing_campaign WHERE company_id = $1`, [companyId]);
+    const [chats] = await this.dataSource.query(`
+      SELECT COUNT(*) FILTER (WHERE c.ad_source_id IS NOT NULL AND c.ad_referred_at > NOW() - make_interval(days => $2::int))::int AS from_ads,
+             COUNT(*) FILTER (WHERE c.link_id IS NOT NULL AND c.campaign_at > NOW() - make_interval(days => $2::int))::int AS from_links,
+             COUNT(*) FILTER (WHERE c.campaign_id IS NOT NULL AND c.campaign_at > NOW() - make_interval(days => $2::int))::int AS from_campaigns
+        FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE cu.company_id = $1`, [companyId, days]);
+    const [audience] = await this.dataSource.query(`
+      SELECT COUNT(*) FILTER (WHERE cu.platform = 'whatsapp' AND cu.external_user_id ~ '^[0-9+]{9,16}$'
+               AND NOT EXISTS (SELECT 1 FROM marketing_optout o WHERE o.company_id = $1 AND o.bot_channel_user_id = cu.id))::int AS reachable,
+             (SELECT COUNT(*) FROM marketing_optout o WHERE o.company_id = $1)::int AS opted_out,
+             (SELECT COUNT(*) FROM marketing_optout o WHERE o.company_id = $1 AND o.created_at > NOW() - make_interval(days => $2::int))::int AS opted_out_period
+        FROM bot_channel_user cu WHERE cu.company_id = $1`, [companyId, days]);
+    const daily: Array<Record<string, unknown>> = await this.dataSource.query(`
+      WITH d AS (SELECT generate_series((NOW() AT TIME ZONE 'Asia/Colombo')::date - ($2::int - 1), (NOW() AT TIME ZONE 'Asia/Colombo')::date, INTERVAL '1 day')::date AS day)
+      SELECT to_char(d.day, 'YYYY-MM-DD') AS date,
+             (SELECT COUNT(*) FROM marketing_link_click k JOIN marketing_link x ON x.id = k.link_id
+               WHERE x.company_id = $1 AND (k.created_at AT TIME ZONE 'Asia/Colombo')::date = d.day)::int AS clicks,
+             (SELECT COUNT(*) FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+               WHERE cu.company_id = $1 AND c.ad_source_id IS NOT NULL AND (c.ad_referred_at AT TIME ZONE 'Asia/Colombo')::date = d.day)::int AS ad_chats,
+             (SELECT COUNT(*) FROM marketing_broadcast_recipient r JOIN marketing_broadcast b ON b.id = r.broadcast_id
+               WHERE b.company_id = $1 AND r.status = 'sent' AND (r.sent_at AT TIME ZONE 'Asia/Colombo')::date = d.day)::int AS broadcast_messages
+        FROM d ORDER BY d.day`, [companyId, Math.min(days, 90)]);
+    const sent = sum('sent');
+    return {
+      days,
+      whatsapp_cloud: channel?.provider_type === 'meta' && Boolean(channel?.meta_phone_number_id),
+      broadcasts: {
+        count: broadcasts.length, sent, delivered: sum('delivered'), read: sum('read'), replied: sum('replied'), failed: sum('failed'),
+        read_rate: sent ? Math.round((sum('read') / sent) * 100) : 0, reply_rate: sent ? Math.round((sum('replied') / sent) * 100) : 0,
+        recent: broadcasts.slice(0, 5).map((b) => ({ ...b, stats: stats.get(Number(b.id)) ?? MarketingService.EMPTY_STATS })),
+      },
+      links: { active: num(links?.active), clicks: num(links?.clicks) },
+      campaigns: { active: num(campaigns?.active), total: num(campaigns?.total) },
+      chats: { from_ads: num(chats?.from_ads), from_links: num(chats?.from_links), from_campaigns: num(chats?.from_campaigns) },
+      audience: { reachable: num(audience?.reachable), opted_out: num(audience?.opted_out), opted_out_period: num(audience?.opted_out_period) },
+      daily,
+    };
   }
 
   /** WhatsApp contacts that match the audience and did not opt out. */

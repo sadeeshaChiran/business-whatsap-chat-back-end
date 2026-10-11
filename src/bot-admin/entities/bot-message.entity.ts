@@ -59,6 +59,10 @@ export class BotMessage {
   @Column({ type: 'varchar', length: 50, nullable: true })
   source: string | null;
 
+  /** The team member (agent / admin) who sent it */
+  @Column({ type: 'int', nullable: true })
+  sender_user_id: number | null;
+
   /** the earlier message this one replies to (WhatsApp / Messenger quote) */
   @Column({ type: 'int', nullable: true })
   reply_to_message_id: number | null;

@@ -44,6 +44,20 @@ class CreatePostDto {
   @IsOptional() @IsString() @MaxLength(1000) @Matches(/^https?:\/\//) link?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) media_urls?: string[];
   @IsOptional() @IsString() scheduled_at?: string | null;
+  @IsOptional() @IsBoolean() draft?: boolean;
+}
+class UpdatePostDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(2) @IsIn(['facebook', 'instagram'], { each: true }) platforms?: string[];
+  @IsOptional() @IsString() @MaxLength(5000) message?: string;
+  @IsOptional() @IsString() @MaxLength(1000) @Matches(/^(https?:\/\/.*)?$/) link?: string;
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) media_urls?: string[];
+  @IsOptional() @IsString() scheduled_at?: string | null;
+  @IsOptional() @IsBoolean() draft?: boolean;
+}
+class SavedReplyDto {
+  @IsIn(['reply', 'dm', 'hashtags']) kind: string;
+  @IsString() @MinLength(1) @MaxLength(80) title: string;
+  @IsString() @MinLength(1) @MaxLength(2000) text: string;
 }
 class DaysDto {
   @IsOptional() @Type(() => Number) @IsInt() days?: number;
@@ -84,6 +98,11 @@ export class SocialController {
   media(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { buffer: Buffer; mimetype: string; originalname: string }) { return this.social.uploadMedia(user, file); }
   @Post('caption') caption(@CurrentUser() user: AuthenticatedUser, @Body() dto: CaptionDto) { return this.social.caption(user, dto); }
   @Get('schedules') schedules(@CurrentUser() user: AuthenticatedUser) { return this.social.schedules(user); }
+  @Patch('schedules/:id') updateSchedule(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdatePostDto) { return this.social.updateSchedule(user, id, dto); }
+  @Post('schedules/:id/publish') publishSchedule(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.social.publishSchedule(user, id); }
+  @Get('saved') saved(@CurrentUser() user: AuthenticatedUser) { return this.social.savedReplies(user); }
+  @Post('saved') saveReply(@CurrentUser() user: AuthenticatedUser, @Body() dto: SavedReplyDto) { return this.social.saveReply(user, dto); }
+  @Delete('saved/:id') deleteReply(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.social.deleteReply(user, id); }
   @Delete('schedules/:id') cancel(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.social.cancelSchedule(user, id); }
 
   @Get('insights') insights(@CurrentUser() user: AuthenticatedUser, @Query() query: DaysDto) { return this.social.insights(user, query.days); }

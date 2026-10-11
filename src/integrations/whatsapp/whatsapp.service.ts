@@ -286,6 +286,8 @@ export class WhatsappService {
     conversationId: number,
     inboundText: string,
   ): Promise<void> {
+    // Automation flows are not finished (hidden in the dashboard): they never run unless switched on on purpose
+    if (!['1', 'true', 'yes'].includes(String(process.env.AUTOMATION_FLOWS_ENABLED ?? '').trim().toLowerCase())) return;
     const inboundCount = await this.messageRepository.count({
       where: { conversation_id: conversationId, direction: 'inbound' },
     });
