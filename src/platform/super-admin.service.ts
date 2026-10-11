@@ -44,6 +44,7 @@ export class SuperAdminService {
       companies: num(totals?.companies),
       active_companies_7d: num(totals?.active_companies_7d),
       tokens_this_month: num(totals?.tokens_this_month),
+      tokens_per_credit: await this.planService.tokensPerCredit(),
       replies_this_month: num(totals?.replies_this_month),
       cost_this_month_usd: num(totals?.cost_this_month),
       by_package: byPackage,

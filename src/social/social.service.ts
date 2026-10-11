@@ -9,6 +9,7 @@ import { GraphError, graphRequest } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
 
+export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean };
 type Platform = 'facebook' | 'instagram';
 type Page = { page_id: string; page_name: string | null; page_access_token: string; instagram_business_account_id: string | null };
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
@@ -542,12 +543,20 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     return { url };
   }
 
-  async createPost(user: AuthenticatedUser, dto: { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null }) {
+  async createPost(user: AuthenticatedUser, dto: PostInput) {
     const companyId = await this.adminCompany(user);
     const platforms = [...new Set((dto.platforms ?? []).filter((p) => p === 'facebook' || p === 'instagram'))] as Platform[];
     if (!platforms.length) throw new BadRequestException('Choose Facebook and / or Instagram.');
     const media = (dto.media_urls ?? []).filter((u) => /^https:\/\//.test(u)).slice(0, 10);
     if (!dto.message?.trim() && !media.length && !dto.link) throw new BadRequestException('Write something or add a photo.');
+    if (dto.draft) {
+      const when = dto.scheduled_at ? new Date(dto.scheduled_at) : null;
+      const [row] = await this.dataSource.query(`
+        INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by, status)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'draft') RETURNING *`,
+        [companyId, platforms, dto.message ?? '', dto.link ?? null, JSON.stringify(media), when && !Number.isNaN(when.getTime()) ? when : null, user.id]);
+      return { draft: row };
+    }
     if (platforms.includes('instagram') && !media.length) throw new BadRequestException('Instagram posts need at least one photo.');
     const page = await this.page(companyId);
     if (platforms.includes('instagram') && !page.instagram_business_account_id) throw new BadRequestException('Instagram is not linked to this Facebook Page.');
@@ -633,13 +642,89 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   async schedules(user: AuthenticatedUser) {
     const companyId = await this.adminCompany(user);
-    return this.dataSource.query(`SELECT * FROM social_post_schedule WHERE company_id = $1 ORDER BY scheduled_at DESC LIMIT 100`, [companyId]);
+    return this.dataSource.query(`
+      SELECT * FROM social_post_schedule WHERE company_id = $1 AND status <> 'cancelled'
+       ORDER BY (status = 'draft') DESC, COALESCE(scheduled_at, created_at) DESC LIMIT 300`, [companyId]);
   }
 
+  /** A scheduled post is cancelled; a draft (or a failed post) is removed. */
   async cancelSchedule(user: AuthenticatedUser, id: number) {
     const companyId = await this.adminCompany(user);
-    await this.dataSource.query(`UPDATE social_post_schedule SET status = 'cancelled' WHERE id = $1 AND company_id = $2 AND status = 'scheduled'`, [id, companyId]);
+    await this.dataSource.query(`DELETE FROM social_post_schedule WHERE id = $1 AND company_id = $2 AND status IN ('draft', 'failed')`, [id, companyId]);
+    await this.dataSource.query(`UPDATE social_post_schedule SET status = 'cancelled', updated_at = NOW() WHERE id = $1 AND company_id = $2 AND status = 'scheduled'`, [id, companyId]);
     return this.schedules(user);
+  }
+
+  private async editable(companyId: number, id: number) {
+    const [row] = await this.dataSource.query(`SELECT * FROM social_post_schedule WHERE id = $1 AND company_id = $2`, [id, companyId]);
+    if (!row) throw new NotFoundException('Post not found.');
+    if (!['draft', 'scheduled', 'failed'].includes(row.status)) throw new BadRequestException('This post is already published – edit it on the Page instead.');
+    return row;
+  }
+
+  /** Change a draft or scheduled post. scheduled_at: a time = scheduled, null = back to draft. */
+  async updateSchedule(user: AuthenticatedUser, id: number, dto: Partial<PostInput>) {
+    const companyId = await this.adminCompany(user);
+    const row = await this.editable(companyId, id);
+    const platforms = dto.platforms ? [...new Set(dto.platforms.filter((p) => p === 'facebook' || p === 'instagram'))] : row.platforms;
+    if (!platforms.length) throw new BadRequestException('Choose Facebook and / or Instagram.');
+    const media = dto.media_urls ? dto.media_urls.filter((u) => /^https:\/\//.test(u)).slice(0, 10) : row.media_urls ?? [];
+    const message = dto.message ?? row.message;
+    const link = dto.link !== undefined ? dto.link || null : row.link;
+    if (!String(message).trim() && !media.length && !link) throw new BadRequestException('Write something or add a photo.');
+    let status = row.status === 'failed' ? 'draft' : row.status;
+    let when: Date | null = row.scheduled_at ? new Date(row.scheduled_at) : null;
+    if (dto.scheduled_at !== undefined) {
+      when = dto.scheduled_at ? new Date(dto.scheduled_at) : null;
+      if (when && Number.isNaN(when.getTime())) throw new BadRequestException('Choose a valid time.');
+      status = when && !dto.draft ? 'scheduled' : 'draft';
+    } else if (dto.draft) status = 'draft';
+    if (status === 'scheduled') {
+      if (!when || when.getTime() < Date.now() + 60_000) throw new BadRequestException('Choose a time at least 1 minute from now.');
+      if (platforms.includes('instagram') && !media.length) throw new BadRequestException('Instagram posts need at least one photo.');
+      const page = await this.page(companyId);
+      if (platforms.includes('instagram') && !page.instagram_business_account_id) throw new BadRequestException('Instagram is not linked to this Facebook Page.');
+    }
+    const [updated] = await this.dataSource.query(`
+      UPDATE social_post_schedule SET platforms = $2, message = $3, link = $4, media_urls = $5::jsonb, scheduled_at = $6, status = $7, error = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`, [id, platforms, message, link, JSON.stringify(media), when, status]).then((r) => (Array.isArray(r[0]) ? r[0] : r));
+    return updated;
+  }
+
+  /** Publish a draft / scheduled post right now. */
+  async publishSchedule(user: AuthenticatedUser, id: number) {
+    const companyId = await this.adminCompany(user);
+    const row = await this.editable(companyId, id);
+    const platforms = row.platforms as Platform[];
+    if (platforms.includes('instagram') && !(row.media_urls ?? []).length) throw new BadRequestException('Instagram posts need at least one photo.');
+    const results = await this.publish(companyId, platforms, row.message, row.link, row.media_urls ?? []);
+    const failed = Object.entries(results).filter(([, r]) => r.error);
+    await this.dataSource.query(`UPDATE social_post_schedule SET status = 'published', scheduled_at = NOW(), results = $2::jsonb, error = $3, updated_at = NOW() WHERE id = $1`,
+      [id, JSON.stringify(results), failed.length ? failed.map(([p, r]) => `${p}: ${r.error}`).join(' | ') : null]);
+    return { published: results };
+  }
+
+  /* ───── Saved replies and hashtag sets ───── */
+
+  async savedReplies(user: AuthenticatedUser) {
+    const companyId = await this.adminCompany(user);
+    return this.dataSource.query(`SELECT id, kind, title, text, created_at FROM social_saved_reply WHERE company_id = $1 ORDER BY kind, title`, [companyId]);
+  }
+
+  async saveReply(user: AuthenticatedUser, dto: { kind: string; title: string; text: string }) {
+    const companyId = await this.adminCompany(user);
+    const [count] = await this.dataSource.query(`SELECT COUNT(*)::int AS n FROM social_saved_reply WHERE company_id = $1`, [companyId]);
+    if (Number(count?.n) >= 200) throw new BadRequestException('Up to 200 saved replies – delete some first.');
+    const [row] = await this.dataSource.query(`
+      INSERT INTO social_saved_reply (company_id, kind, title, text, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING id, kind, title, text, created_at`,
+      [companyId, dto.kind, dto.title.trim(), dto.text.trim(), user.id]);
+    return row;
+  }
+
+  async deleteReply(user: AuthenticatedUser, id: number) {
+    const companyId = await this.adminCompany(user);
+    await this.dataSource.query(`DELETE FROM social_saved_reply WHERE id = $1 AND company_id = $2`, [id, companyId]);
+    return { id, deleted: true };
   }
 
   /** Every minute: publish scheduled posts that are due. */

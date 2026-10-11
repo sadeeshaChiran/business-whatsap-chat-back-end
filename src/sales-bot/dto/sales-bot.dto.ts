@@ -367,3 +367,38 @@ export class FollowUpActionDto {
   @IsIn(['stop', 'resume'])
   action: 'stop' | 'resume';
 }
+
+/* ───────── Orders / bookings added by the team in a chat ───────── */
+
+export class ManualItemDto {
+  @Type(() => Number) @IsInt() product_id: number;
+  @IsOptional() @Type(() => Number) @IsInt() variant_id?: number | null;
+  @Type(() => Number) @IsInt() @Min(1) @Max(1000) quantity: number;
+}
+
+export class ManualQuoteDto {
+  @IsArray() @ValidateNested({ each: true }) @Type(() => ManualItemDto) items: ManualItemDto[];
+  @IsOptional() @IsString() @MaxLength(120) delivery_area?: string;
+}
+
+export class ManualOrderDto extends ManualQuoteDto {
+  @IsOptional() @IsString() @MaxLength(255) customer_name?: string;
+  @IsOptional() @IsString() @MaxLength(50) customer_phone?: string;
+  @IsOptional() @IsString() @MaxLength(1000) address?: string;
+  @IsOptional() @IsString() @MaxLength(60) payment_method?: string;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+  @IsOptional() @IsBoolean() send_invoice?: boolean;
+}
+
+export class ManualBookingDto {
+  @Type(() => Number) @IsInt() service_id: number;
+  @IsString() @MaxLength(20) date: string;
+  @IsString() @MaxLength(20) time: string;
+  @IsOptional() @IsString() @MaxLength(255) customer_name?: string;
+  @IsOptional() @IsString() @MaxLength(1000) notes?: string;
+  @IsOptional() @IsBoolean() send_invoice?: boolean;
+}
+
+export class CatalogQueryDto {
+  @IsOptional() @IsString() @MaxLength(100) search?: string;
+}

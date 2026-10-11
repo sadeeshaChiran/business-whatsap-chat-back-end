@@ -52,6 +52,17 @@ export class BotBooking {
   @Column({ type: 'varchar', length: 1000, nullable: true })
   invoice_url: string | null;
 
+  /** The agent this booking counts for (see bot_order.agent_id) */
+  @Column({ type: 'int', nullable: true })
+  agent_id: number | null;
+
+  /** Who made it: bot | agent | admin */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  created_by: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  created_by_user_id: number | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

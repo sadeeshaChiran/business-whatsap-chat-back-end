@@ -485,6 +485,7 @@ export class BotAdminService {
     conv.status = 'active';
     conv.timeout_at = null;
     conv.agent_last_read_at = new Date();
+    conv.accepted_at = new Date();
     const saved = await this.conversationRepository.save(conv);
 
     const channelUser = conv.channelUser;
@@ -503,29 +504,9 @@ export class BotAdminService {
       await this.channelUserRepository.save(channelUser);
     }
 
-    const agentLabel =
-      user.name?.trim() || user.email?.split('@')[0]?.trim() || 'Our team';
-    const welcomeText = `Hi! ${agentLabel} is now here to help you. How can I assist you today?`;
-    if (phone) {
-      try {
-        await this.sendCompanyWhatsappText(user.company_id, phone, welcomeText);
-        await this.messageRepository.save(
-          this.messageRepository.create({
-            conversation_id: saved.id,
-            direction: 'outbound',
-            message_type: 'text',
-            platform: channelUser?.platform || 'whatsapp',
-            content: welcomeText,
-            source: 'admin',
-          }),
-        );
-      } catch (error) {
-        console.warn(
-          `Accept welcome WhatsApp failed for conversation ${saved.id}:`,
-          error instanceof Error ? error.message : error,
-        );
-      }
-    }
+    // No message is sent to the customer and the sales bot keeps helping (the agent can switch it off for this chat).
+    // Orders / bookings the bot took before anyone accepted (e.g. at night) now count for this agent.
+    if (channelUser) await this.attributeToAgent(user.company_id, channelUser.id, user.id, conv.created_at);
 
     this.pusherService.trigger(
       `company-${user.company_id}`,
@@ -533,6 +514,20 @@ export class BotAdminService {
       { conversation_id: saved.id, status: saved.status, agent_id: user.id },
     );
     return { id: saved.id, status: saved.status };
+  }
+
+  /**
+   * Orders and bookings of this customer that no agent got yet (made by the bot while the chat waited, from the
+   * start of this chat or the last 3 days) count for the agent who accepted the chat.
+   */
+  async attributeToAgent(companyId: number, channelUserId: number, agentId: number, since: Date | null | undefined) {
+    const from = new Date(Math.min(since ? new Date(since).getTime() : Date.now(), Date.now() - 3 * 86_400_000));
+    await this.orderRepository.query(
+      `UPDATE bot_order SET agent_id = $3 WHERE CAST(company_id AS BIGINT) = $1 AND bot_channel_user_id = $2 AND agent_id IS NULL
+         AND created_at::timestamptz >= $4`, [companyId, channelUserId, agentId, from]);
+    await this.orderRepository.query(
+      `UPDATE bot_booking SET agent_id = $3 WHERE company_id = $1 AND bot_channel_user_id = $2 AND agent_id IS NULL
+         AND created_at >= $4`, [companyId, channelUserId, agentId, from]);
   }
 
   /** Agent rejects a pending conversation and routes it to the next available agent */
@@ -545,8 +540,12 @@ export class BotAdminService {
     if (!conv) {
       throw new NotFoundException('Conversation not found or not assigned to you.');
     }
-    if (conv.status !== 'pending') {
-      throw new BadRequestException('Only pending conversations can be rejected.');
+    if (conv.status !== 'pending' && conv.status !== 'active') {
+      throw new BadRequestException('Only your waiting or accepted chats can be handed back.');
+    }
+    if (conv.status === 'active') {
+      // hand an accepted chat back: it goes to another online agent (or the queue)
+      await this.conversationRepository.update(conv.id, { status: 'pending' });
     }
 
     const phone = conv.channelUser?.external_user_id ?? '';
@@ -1352,7 +1351,12 @@ export class BotAdminService {
   }
 
   async updateContact(user: AuthenticatedUser, id: number, payload: UpdateContactDto) {
-    await this.assertAdminAccess(user);
+    // the admin, or the agent whose customer this is (agents may fix their customer's name)
+    const company = await this.getCompanyForUser(user);
+    if (!company) throw new ForbiddenException('Company not found.');
+    if (Number(company.admin_user_id) !== Number(user.id) && !(await this.agentClientIds(Number(company.id), Number(user.id))).includes(Number(id))) {
+      throw new ForbiddenException('You can only edit your own customers.');
+    }
     const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
     if (!contact) throw new NotFoundException('Contact not found.');
     const displayName = payload.display_name.trim();
@@ -1689,10 +1693,23 @@ export class BotAdminService {
     return qb.getCount();
   }
 
+  /**
+   * The agent's inbox: the same rows as the admin inbox, only the agent's own chats (waiting to accept, accepted and
+   * finished). Unread = customer messages the AGENT has not read (the admin reading the chat does not change it).
+   */
+  async getAgentInbox(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
+    const companyId = this.requireUserCompanyId(user);
+    const company = await this.getCompanyForUser(user);
+    if (!company || Number(company.id) !== companyId) throw new ForbiddenException('Company not found.');
+    if (Number(company.admin_user_id) === Number(user.id)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
+    return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, Number(user.id));
+  }
+
   private async buildCompanyConversationRows(
     companyId: number,
     requestedPage?: number,
     requestedLimit?: number,
+    agentId?: number,
   ): Promise<CompanyContactRow[]> {
     const page = Number.isInteger(requestedPage) && Number(requestedPage) > 0 ? Number(requestedPage) : 1;
     const limit = Number.isInteger(requestedLimit) && Number(requestedLimit) > 0 ? Math.min(Number(requestedLimit), 100) : 60;
@@ -1702,6 +1719,7 @@ export class BotAdminService {
       .createQueryBuilder('conversation')
       .innerJoinAndSelect('conversation.channelUser', 'channelUser')
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
+      .andWhere(agentId ? 'CAST(conversation.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)' : '1=1', { agentId })
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('conversation.id', 'DESC')
       // many-to-one join: plain OFFSET/LIMIT is safe and avoids TypeORM's extra DISTINCT query
@@ -1734,7 +1752,16 @@ export class BotAdminService {
 
       // Unread = customer messages after the later of: last time the team opened the chat,
       // or the last reply sent to the customer (by an agent, admin or the bot).
-      const unread: Array<{ conversation_id: number; unread: number }> = await this.messageRepository.query(
+      const unread: Array<{ conversation_id: number; unread: number }> = agentId
+        // agent: every customer message since the agent last opened the chat (bot replies do not count as read)
+        ? await this.messageRepository.query(
+          `SELECT m.conversation_id, COUNT(*)::int AS unread
+             FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ANY($1) AND m.direction::text = 'inbound'
+              AND m.created_at::timestamptz > COALESCE(c.agent_last_read_at, c.assigned_at::timestamptz - INTERVAL '1 millisecond', 'epoch'::timestamptz)
+            GROUP BY m.conversation_id`,
+          [conversationIds])
+        : await this.messageRepository.query(
         // last reply per chat computed once (was a sub-query per message: ~5x faster)
         `WITH last_out AS (
            SELECT o.conversation_id, MAX(o.created_at) AS at
@@ -1750,6 +1777,7 @@ export class BotAdminService {
             AND m.direction::text = 'inbound'
             AND m.created_at > GREATEST(
                   COALESCE(c.agent_last_read_at::timestamp, 'epoch'::timestamp),
+                  COALESCE(c.admin_last_read_at::timestamp, 'epoch'::timestamp),
                   COALESCE(lo.at, 'epoch'::timestamp))
           GROUP BY m.conversation_id`,
         [conversationIds],
@@ -1809,6 +1837,7 @@ export class BotAdminService {
           lead_details: conversation.lead_details ?? null,
           ...followUpView(conversation),
           assigned_agent_id: conversation.assigned_agent_id,
+          assigned_at: conversation.assigned_at,
           last_message_at: conversation.last_message_at,
         },
         evolution_remote_jid: null,
@@ -2302,7 +2331,7 @@ export class BotAdminService {
     const isNewestView = options.beforeId == null && page === 1;
     const gotNewInbound = dbMessages.messages.some((message) => message.direction === 'inbound');
     if (isNewestView && (!options.light || gotNewInbound)) {
-      void this.markConversationRead(conversation, user.company_id).catch((error) =>
+      void this.markConversationRead(conversation, user.company_id, Number(user.id)).catch((error) =>
         console.warn(`Mark read failed for conversation ${conversation.id}:`, error instanceof Error ? error.message : error),
       );
     }
@@ -2896,7 +2925,7 @@ export class BotAdminService {
       message_type: 'text',
       platform: channelUser.platform || 'whatsapp',
       content: trimmed,
-      source: isAdmin ? 'admin' : 'agent',
+      source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
       provider_message_id: providerMessageId,
       delivery_status: providerMessageId ? 'sent' : null,
       reply_to_message_id: quoted?.id ?? null,
@@ -3022,7 +3051,7 @@ export class BotAdminService {
         delivery_status: providerMessageId ? 'sent' : null,
         content: mediaType === 'document' ? fileName : trimmedCaption || `[${mediaType}]`,
         media_url: storedKey,
-        source: isAdmin ? 'admin' : 'agent',
+        source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
       }),
     );
 
@@ -3087,7 +3116,21 @@ export class BotAdminService {
   }
 
   /** Marks the chat read for the team and sends a read receipt (blue ticks) when something was unread. */
-  private async markConversationRead(conversation: BotConversation, companyId: number): Promise<void> {
+  /**
+   * The assigned agent reading the chat clears THEIR unread count. Anyone else (the admin checking the chat) only
+   * sets admin_last_read_at, so the agent still sees the messages as unread.
+   */
+  private async markConversationRead(conversation: BotConversation, companyId: number, readerId?: number): Promise<void> {
+    const isAgent = readerId != null && conversation.assigned_agent_id != null && Number(conversation.assigned_agent_id) === Number(readerId);
+    if (!isAgent) {
+      await this.conversationRepository.update({ id: conversation.id }, { admin_last_read_at: new Date() });
+      // nobody holds the chat: the admin is the one answering, so the customer may see it as read
+      if (conversation.assigned_agent_id == null && (await this.countUnreadInboundMessages(conversation)) > 0) {
+        await this.conversationRepository.update({ id: conversation.id }, { agent_last_read_at: new Date() });
+        await this.sendReadReceipt(conversation, companyId);
+      }
+      return;
+    }
     const unreadBefore = await this.countUnreadInboundMessages(conversation);
     await this.conversationRepository.update({ id: conversation.id }, { agent_last_read_at: new Date() });
     if (unreadBefore > 0) {
@@ -3210,7 +3253,7 @@ export class BotAdminService {
         provider_message_id: providerMessageId,
         delivery_status: providerMessageId ? 'sent' : null,
         content: text,
-        source: isAdmin ? 'admin' : 'agent',
+        source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
       }),
     );
     conversation.last_message_at = new Date();
@@ -3438,33 +3481,9 @@ export class BotAdminService {
       throw new ForbiddenException('Agent company mismatch.');
     }
 
-    const assignedConversations = await this.conversationRepository
-      .createQueryBuilder('c')
-      .innerJoin('c.channelUser', 'channelUser')
-      .where('CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)', {
-        agentId,
-      })
-      .andWhere(
-        'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
-        { companyId },
-      )
-      .andWhere('LOWER(c.status) IN (:...statuses)', {
-        statuses: ['pending', 'active'],
-      })
-      .getMany();
+    const channelUserIds = await this.agentClientIds(companyId, agentId);
 
-    const channelUserIds = [
-      ...new Set(
-        assignedConversations
-          .map((row) => Number(row.bot_channel_user_id))
-          .filter((id) => Number.isFinite(id) && id > 0),
-      ),
-    ];
-
-    if (channelUserIds.length === 0) {
-      return [];
-    }
-
+    // orders of my current clients + every order that counts for me (also of customers I no longer hold)
     return this.orderRepository
       .createQueryBuilder('o')
       .leftJoinAndSelect('o.channelUser', 'channelUser')
@@ -3473,8 +3492,8 @@ export class BotAdminService {
       .where('CAST(o.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
         companyId,
       })
-      .andWhere('o.bot_channel_user_id IN (:...channelUserIds)', {
-        channelUserIds,
+      .andWhere(channelUserIds.length ? '(o.bot_channel_user_id IN (:...channelUserIds) OR o.agent_id = :agentId)' : 'o.agent_id = :agentId', {
+        channelUserIds, agentId,
       })
       .orderBy('o.id', 'DESC')
       .take(100)
@@ -3988,6 +4007,16 @@ export class BotAdminService {
       }
     }
 
+    const fee = order.delivery_fee == null ? null : Number(order.delivery_fee);
+    if (fee != null) {
+      const subtotal = (order.items ?? []).reduce((sum, item) => sum + Number(item.total_price || 0), 0);
+      lines.push(
+        '------------------------------------------------------------',
+        `${'Subtotal'.padEnd(49)}${this.formatMoney(subtotal).padStart(10)}`,
+        `${`Delivery${order.delivery_area ? ` (${order.delivery_area})` : ''}`.padEnd(49).slice(0, 49)}${(fee === 0 ? 'Free' : this.formatMoney(fee)).padStart(10)}`,
+      );
+    }
+    if (order.payment_method) lines.push(`Payment : ${order.payment_method}`);
     lines.push(
       '------------------------------------------------------------',
       `${'TOTAL'.padEnd(49)}${this.formatMoney(order.total_amount).padStart(10)}`,
@@ -4209,14 +4238,12 @@ export class BotAdminService {
         { companyId },
       );
 
-    // Agents only see labels on conversations currently assigned to them.
+    // Agents only see labels on their own chats (waiting, accepted or finished).
     if (!isAdmin) {
       qb.andWhere(
         'CAST(conversation.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
         { agentId: Number(user.id) },
-      ).andWhere('LOWER(conversation.status) IN (:...statuses)', {
-        statuses: ['pending', 'active'],
-      });
+      );
     }
 
     const rows = await qb
@@ -4455,6 +4482,45 @@ export class BotAdminService {
     };
   }
 
+  /**
+   * The agent's customers: their latest chat is assigned to the agent (waiting, accepted or finished).
+   * An agent only ever sees these customers' notes, orders, labels and CRM details.
+   */
+  async agentClientIds(companyId: number, agentId: number): Promise<number[]> {
+    const rows: Array<{ id: number }> = await this.conversationRepository.query(
+      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS id, c.assigned_agent_id
+         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        WHERE CAST(cu.company_id AS BIGINT) = $1
+          AND c.bot_channel_user_id IN (SELECT bot_channel_user_id FROM bot_conversation WHERE assigned_agent_id = $2)
+        ORDER BY c.bot_channel_user_id, c.id DESC`,
+      [companyId, agentId],
+    ).then((list: Array<{ id: number; assigned_agent_id: number | null }>) => list.filter((row) => Number(row.assigned_agent_id) === agentId));
+    return rows.map((row) => Number(row.id));
+  }
+
+  /** Who wrote each note (admin / agent / bot) and which agent the customer belongs to now. */
+  private async enrichNotes<T extends { bot_channel_user_id: number; created_by_user_id: number | null; created_by_name: string | null }>(
+    companyId: number, notes: T[],
+  ): Promise<Array<T & { author_role: 'admin' | 'agent' | 'bot'; assigned_agent: { id: number; name: string } | null }>> {
+    if (!notes.length) return [];
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    const adminId = Number(company?.admin_user_id ?? 0);
+    const ids = [...new Set(notes.map((note) => Number(note.bot_channel_user_id)))];
+    const owners: Array<{ channel_user_id: number; agent_id: number | null; agent_name: string | null }> = await this.conversationRepository.query(
+      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS channel_user_id, c.assigned_agent_id AS agent_id, u.name AS agent_name
+         FROM bot_conversation c LEFT JOIN app_user u ON u.id = c.assigned_agent_id
+        WHERE c.bot_channel_user_id = ANY($1::int[]) ORDER BY c.bot_channel_user_id, c.id DESC`, [ids]);
+    const ownerOf = new Map(owners.map((row) => [Number(row.channel_user_id), row]));
+    return notes.map((note) => {
+      const owner = ownerOf.get(Number(note.bot_channel_user_id));
+      const role = note.created_by_user_id == null ? 'bot' : Number(note.created_by_user_id) === adminId ? 'admin' : 'agent';
+      return {
+        ...note, author_role: role,
+        assigned_agent: owner?.agent_id ? { id: Number(owner.agent_id), name: owner.agent_name || `Agent #${owner.agent_id}` } : null,
+      };
+    });
+  }
+
   private mapCustomerNote(note: BotCustomerNote) {
     const channelUser = note.channelUser;
     return {
@@ -4510,18 +4576,8 @@ export class BotAdminService {
     }
 
     if (!isAdmin) {
-      const assigned = await this.conversationRepository
-        .createQueryBuilder('c')
-        .where('c.bot_channel_user_id = :channelUserId', { channelUserId })
-        .andWhere(
-          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
-          { agentId: Number(user.id) },
-        )
-        .andWhere('LOWER(c.status) IN (:...statuses)', {
-          statuses: ['pending', 'active'],
-        })
-        .getOne();
-      if (!assigned) {
+      const mine = await this.agentClientIds(companyId, Number(user.id));
+      if (!mine.includes(Number(channelUserId))) {
         throw new ForbiddenException(
           'You can only manage notes for clients currently assigned to you.',
         );
@@ -4546,7 +4602,7 @@ export class BotAdminService {
       .orderBy('note.created_at', 'DESC')
       .addOrderBy('note.id', 'DESC')
       .getMany();
-    return rows.map((row) => this.mapCustomerNote(row));
+    return this.enrichNotes(companyId, rows.map((row) => this.mapCustomerNote(row)));
   }
 
   async listCustomerNotes(user: AuthenticatedUser) {
@@ -4565,29 +4621,7 @@ export class BotAdminService {
       });
 
     if (!isAdmin) {
-      const assignedConversations = await this.conversationRepository
-        .createQueryBuilder('c')
-        .innerJoin('c.channelUser', 'channelUser')
-        .where(
-          'CAST(c.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)',
-          { agentId: Number(user.id) },
-        )
-        .andWhere(
-          'CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)',
-          { companyId },
-        )
-        .andWhere('LOWER(c.status) IN (:...statuses)', {
-          statuses: ['pending', 'active'],
-        })
-        .getMany();
-
-      const channelUserIds = [
-        ...new Set(
-          assignedConversations
-            .map((row) => Number(row.bot_channel_user_id))
-            .filter((id) => Number.isFinite(id) && id > 0),
-        ),
-      ];
+      const channelUserIds = await this.agentClientIds(companyId, Number(user.id));
       if (channelUserIds.length === 0) {
         return [];
       }
@@ -4599,10 +4633,10 @@ export class BotAdminService {
     const rows = await qb
       .orderBy('note.created_at', 'DESC')
       .addOrderBy('note.id', 'DESC')
-      .take(200)
+      .take(500)
       .getMany();
 
-    return rows.map((row) => this.mapCustomerNote(row));
+    return this.enrichNotes(companyId, rows.map((row) => this.mapCustomerNote(row)));
   }
 
   async listChannelUserNotes(user: AuthenticatedUser, channelUserId: number) {
@@ -4658,7 +4692,10 @@ export class BotAdminService {
     if (!note) {
       throw new NotFoundException('Note not found.');
     }
-    await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
+    const { isAdmin } = await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
+    if (!isAdmin && Number(note.created_by_user_id) !== Number(user.id)) {
+      throw new ForbiddenException('You can only delete your own notes.');
+    }
     await this.customerNoteRepository.remove(note);
     return { id: noteId, removed: true };
   }
@@ -4741,7 +4778,7 @@ export class BotAdminService {
           message_type: 'text',
           platform: channelUser.platform || 'whatsapp',
           content: text,
-          source: isAdmin ? 'admin' : 'agent',
+          source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
         }),
       );
       conversation.last_message_at = new Date();

@@ -2,7 +2,7 @@
 -- Prices: normal price is safe for the 2027 Gemini price. Offer price until 31 Dec 2026 (Gemini launch price).
 -- FINAL (8 Oct 2026): Rs 6,500 / 12,000 / 20,000 / 32,000 with 2,500 / 5,500 / 10,000 / 17,500 AI replies.
 -- Launch offer until 31 Dec 2026: Rs 4,990 / 8,990 / 14,990 / 23,990. Yearly = 10 x monthly (2 months free).
--- AI replies are stored as tokens: 1 reply ~ 9,000 tokens (measured 8,100-12,000 incl. cached prompt; Super admin > Settings > credits).
+-- AI replies are stored as tokens: 1 reply ~ 9,000 tokens (measured 8,100-12,000 incl. cached prompt). Shops see credits: 1 credit = 1 average reply.
 -- Afterwards check each package in Super admin > Packages (agents, products, features).
 
 -- Needs the max_services column: start the new API once first (it adds the column automatically).
@@ -31,6 +31,14 @@ ON CONFLICT (code) DO UPDATE SET
 -- The old Scale package: hidden from the pricing page, companies already on it keep it.
 UPDATE platform_package SET is_public = FALSE, updated_at = NOW() WHERE code = 'scale';
 
--- Reply count shown on the packages (about 9,000 tokens per bot reply).
-INSERT INTO platform_setting (key, value) VALUES ('credits', '{"tokens_per_credit": 50000, "tokens_per_reply": 9000}'::jsonb)
-ON CONFLICT (key) DO UPDATE SET value = platform_setting.value || '{"tokens_per_reply": 9000}'::jsonb, updated_at = NOW();
+-- Credits: 1 credit = 1 average AI reply (about 9,000 tokens). Starter 22.5M tokens = 2,500 credits = about 2,500 replies.
+INSERT INTO platform_setting (key, value) VALUES ('credits', '{"tokens_per_credit": 9000, "tokens_per_reply": 9000}'::jsonb)
+ON CONFLICT (key) DO UPDATE SET value = '{"tokens_per_credit": 9000, "tokens_per_reply": 9000}'::jsonb, updated_at = NOW();
+
+-- Credit top-ups in whole credits (1 credit = 1 AI reply). The old token packs (100k / 500k / 2M tokens) are hidden.
+-- About Rs 2.40-3.00 per reply, a little more than inside a package. Valid 30 days.
+UPDATE token_pack SET is_active = FALSE WHERE tokens IN (100000, 500000, 2000000) AND name LIKE '%top-up%';
+INSERT INTO token_pack (name, tokens, price, valid_days, sort_order, is_active)
+SELECT v.name, v.tokens, v.price, 30, v.sort_order, TRUE
+FROM (VALUES ('500 credits', 4500000, 1500, 11), ('1,500 credits', 13500000, 4000, 12), ('5,000 credits', 45000000, 12000, 13)) AS v(name, tokens, price, sort_order)
+WHERE NOT EXISTS (SELECT 1 FROM token_pack t WHERE t.name = v.name);

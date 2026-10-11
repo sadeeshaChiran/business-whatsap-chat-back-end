@@ -301,6 +301,12 @@ export class BotAdminController {
     return this.botAdminService.rejectConversation(user, id);
   }
 
+  /** The agent's inbox (same rows as the admin inbox, only the agent's own chats) */
+  @Get('agent/inbox')
+  getAgentInbox(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.botAdminService.getAgentInbox(user, page ? Number(page) : 1, limit ? Number(limit) : 80);
+  }
+
   /** Get only conversations assigned to the currently logged-in agent */
   @Get('agent/conversations')
   getAgentConversations(@CurrentUser() user: AuthenticatedUser) {

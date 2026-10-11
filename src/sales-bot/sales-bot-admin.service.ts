@@ -23,6 +23,8 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 import { SalesBotClient } from './sales-bot.client';
 import { SalesBotContextService } from './sales-bot-context.service';
+import { botReportDetails, dashboardReport } from './dashboard-report';
+import { teamReport } from './team-report';
 import { BotAdminService } from '../bot-admin/bot-admin.service';
 import { BOT_SOURCE, SalesBotEngineService } from './sales-bot-engine.service';
 import { PlanService } from '../platform/plan.service';
@@ -199,6 +201,7 @@ export class SalesBotAdminService {
       customer_name: row.customer_name, customer_phone: row.customer_phone, notes: row.notes, status: row.status,
       conversation_id: row.conversation_id, created_at: row.created_at, updated_at: row.updated_at,
       price: row.price == null ? null : Number(row.price), duration_min: row.duration_min, invoice_url: row.invoice_url,
+      agent_id: row.agent_id ?? null, created_by: row.created_by ?? null,
     };
   }
 
@@ -450,6 +453,7 @@ export class SalesBotAdminService {
 
   async findSimulatorConversation(user: AuthenticatedUser, phoneRaw: string) {
     const company = await this.adminCompany(user);
+    if (!SalesBotEngineService.testMode()) throw new ForbiddenException('Test mode is off (set SALES_BOT_TEST_MODE=true).');
     const phone = this.normalizePhone(phoneRaw);
     if (!phone) return { conversation_id: null };
     const channelUser = await this.channelUserRepository.findOne({ where: { company_id: Number(company.id), platform: 'whatsapp', external_user_id: phone } });
@@ -555,6 +559,19 @@ export class SalesBotAdminService {
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
       conversion: conversations ? (orders + bookings) / conversations : 0,
       daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),
+      details: await botReportDetails(this.dataSource, companyId, days),
     };
+  }
+
+  /** Agent performance (company admin): chats, speed, replies and the orders / bookings that count for each agent. */
+  async teamPerformance(user: AuthenticatedUser, daysRaw?: number) {
+    const company = await this.adminCompany(user);
+    return teamReport(this.dataSource, Number(company.id), Number(daysRaw) || 30);
+  }
+
+  /** Home dashboard: engagement, replies, delivery, channels, orders, bookings, leads, what needs attention. */
+  async dashboard(user: AuthenticatedUser, daysRaw?: number) {
+    const company = await this.adminCompany(user);
+    return dashboardReport(this.dataSource, Number(company.id), Number(daysRaw) || 7);
   }
 }

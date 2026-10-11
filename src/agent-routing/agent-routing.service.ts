@@ -269,6 +269,32 @@ export class AgentRoutingService {
     );
   }
 
+  /**
+   * The online agent with the fewest open chats (waiting to accept + accepted, with a message in the last 24 hours).
+   * Equal load → the next one in round-robin order, so work is shared fairly and nobody is flooded.
+   */
+  private async pickLeastBusyAgent(companyId: number, agents: User[], lastAgentId: number | null): Promise<User> {
+    if (agents.length <= 1) return this.pickRoundRobinAgent(agents, lastAgentId);
+    const rows: Array<{ agent_id: number; n: number }> = await this.conversationRepository.query(
+      `SELECT c.assigned_agent_id AS agent_id, COUNT(*)::int AS n
+         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.assigned_agent_id = ANY($2::int[]) AND c.status IN ('pending', 'active')
+          AND c.last_message_at::timestamptz >= NOW() - INTERVAL '24 hours'
+        GROUP BY 1`,
+      [companyId, agents.map((agent) => Number(agent.id))],
+    );
+    const load = new Map(rows.map((row) => [Number(row.agent_id), Number(row.n)]));
+    const least = Math.min(...agents.map((agent) => load.get(Number(agent.id)) ?? 0));
+    const candidates = agents.filter((agent) => (load.get(Number(agent.id)) ?? 0) === least);
+    // round robin among the least busy: the first one after the last assigned agent (in id order)
+    const start = lastAgentId == null ? -1 : agents.findIndex((agent) => Number(agent.id) === lastAgentId);
+    for (let step = 1; step <= agents.length; step++) {
+      const next = agents[(start + step + agents.length) % agents.length];
+      if (candidates.includes(next)) return next;
+    }
+    return candidates[0];
+  }
+
   private pickRoundRobinAgent(
     agents: User[],
     lastAgentId: number | null,
@@ -411,7 +437,7 @@ export class AgentRoutingService {
     }
 
     const lastAgentId = await this.getLastAssignedAgentId(companyId);
-    const targetAgent = this.pickRoundRobinAgent(agents, lastAgentId);
+    const targetAgent = await this.pickLeastBusyAgent(companyId, agents, lastAgentId);
     await this.assignConversationToAgent(
       companyId,
       conversationId,
@@ -463,21 +489,9 @@ export class AgentRoutingService {
     ) {
       throw new NotFoundException('Conversation not found.');
     }
-    if (conv.status === 'active' || conv.status === 'closed') {
-      throw new NotFoundException(
-        'Active or closed conversations cannot be manually reassigned.',
-      );
-    }
-    if (conv.assigned_agent_id != null) {
-      const heldOnline = await this.isHeldByOnlineSupportAgent(
-        companyId,
-        conv.assigned_agent_id,
-      );
-      if (heldOnline) {
-        throw new NotFoundException(
-          'Conversation is already assigned to an online agent.',
-        );
-      }
+    // The admin can move any chat (also an accepted one) to another agent - e.g. when someone is on leave.
+    if (conv.status === 'closed') {
+      throw new NotFoundException('Closed conversations cannot be reassigned.');
     }
 
     const adminUserId = await this.getCompanyAdminUserId(companyId);

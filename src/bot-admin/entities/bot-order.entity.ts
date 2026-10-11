@@ -67,6 +67,17 @@ export class BotOrder {
   @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
   total_weight_kg: number | null;
 
+  /** The agent this order counts for (the customer's agent: assigned when the order was made, or who accepted the chat later) */
+  @Column({ type: 'int', nullable: true })
+  agent_id: number | null;
+
+  /** Who made it: bot | agent | admin (null = before Oct 2026) */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  created_by: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  created_by_user_id: number | null;
+
   @ManyToOne(() => BotChannelUser, { nullable: false, onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'bot_channel_user_id' })
   channelUser: BotChannelUser;
