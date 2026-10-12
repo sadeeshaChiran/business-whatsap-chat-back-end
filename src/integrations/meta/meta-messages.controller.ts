@@ -18,6 +18,8 @@ import { saveChatMedia } from '../../bot-admin/chat-media.store';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
 import { SalesBotHook } from '../../common/sales-bot-hook';
 import { MetaGraphService } from './meta-graph.service';
+import { metaAppSecrets } from '../whatsapp/webhook-auth';
+import { webhookAccepted, webhookReceived, webhookRejected } from './webhook-stats';
 
 type Attachment = {
   type?: string; // image | video | audio | file | location | fallback | template | share | story_mention | ig_reel | reel
@@ -91,20 +93,27 @@ export class MetaMessagesController {
     @Req() request: Request & { rawBody?: Buffer },
     @Headers('x-hub-signature-256') signature?: string,
   ) {
-    const secret = process.env.META_APP_SECRET?.trim();
-    const raw = request.rawBody;
     const events = (body?.entry ?? []).reduce((n, e) => n + (e.messaging?.length ?? 0), 0);
     this.logger.log(`webhook received: object=${body?.object ?? '?'} entries=${body?.entry?.length ?? 0} messaging=${events}`);
-    if (!secret || !raw || !signature?.startsWith('sha256=')) {
+    webhookReceived('messenger');
+    const secrets = metaAppSecrets();
+    const raw = request.rawBody;
+    if (!secrets.length || !raw || !signature?.startsWith('sha256=')) {
       this.logger.warn('webhook rejected: missing signature or META_APP_SECRET');
+      webhookRejected('messenger', !secrets.length ? 'META_APP_SECRET is not set on the server.' : 'Missing webhook signature (the request did not come from Meta).');
       throw new ForbiddenException('Meta webhook signature could not be verified.');
     }
-    const expected = createHmac('sha256', secret).update(raw).digest();
     const supplied = Buffer.from(signature.slice(7), 'hex');
-    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+    const valid = secrets.some((secret) => {
+      const expected = createHmac('sha256', secret).update(raw).digest();
+      return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+    });
+    if (!valid) {
       this.logger.warn('webhook rejected: invalid signature – META_APP_SECRET does not match the Meta app');
+      webhookRejected('messenger', 'Invalid signature – META_APP_SECRET on the server is not the secret of the Meta app that sent it (old app still subscribed, or the secret was reset).');
       throw new ForbiddenException('Invalid Meta webhook signature.');
     }
+    webhookAccepted('messenger');
 
     let saved = 0;
     // comments and posts (Page "feed" / Instagram "comments") go to the Social section

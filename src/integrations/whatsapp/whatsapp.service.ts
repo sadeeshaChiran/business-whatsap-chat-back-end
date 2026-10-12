@@ -484,6 +484,11 @@ export class WhatsappService {
     if (!token) {
       return false;
     }
+    // the platform-wide token (one Meta app for every shop) – the per-shop token is only for shops with their own Meta app
+    const platformToken = process.env.META_WEBHOOK_VERIFY_TOKEN?.trim();
+    if (platformToken && token === platformToken) {
+      return true;
+    }
     const match = await this.whatsappChannelRepository.findOne({
       where: {
         provider_type: 'meta',

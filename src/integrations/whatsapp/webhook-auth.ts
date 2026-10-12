@@ -1,5 +1,6 @@
 import { ForbiddenException, Logger } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
+import { webhookAccepted, webhookReceived, webhookRejected, type WebhookKind } from '../meta/webhook-stats';
 
 const logger = new Logger('WebhookAuth');
 const env = (name: string) => String(process.env[name] ?? '').trim();
@@ -17,8 +18,21 @@ function safeEqual(a: string, b: string) {
  * Secrets: META_APP_SECRET plus optional META_APP_SECRETS_EXTRA (comma separated, for extra Meta apps).
  * WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE=false turns the check off (not recommended).
  */
-export function assertMetaSignature(rawBody: Buffer | undefined, signature: string | undefined) {
-  const secrets = [env('META_APP_SECRET'), ...env('META_APP_SECRETS_EXTRA').split(',')].map((s) => s.trim()).filter(Boolean);
+export const metaAppSecrets = () => [env('META_APP_SECRET'), ...env('META_APP_SECRETS_EXTRA').split(',')].map((s) => s.trim()).filter(Boolean);
+
+export function assertMetaSignature(rawBody: Buffer | undefined, signature: string | undefined, kind: WebhookKind = 'whatsapp') {
+  webhookReceived(kind);
+  try {
+    checkMetaSignature(rawBody, signature);
+  } catch (error) {
+    webhookRejected(kind, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+  webhookAccepted(kind);
+}
+
+function checkMetaSignature(rawBody: Buffer | undefined, signature: string | undefined) {
+  const secrets = metaAppSecrets();
   const required = env('WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE').toLowerCase() !== 'false';
   if (!secrets.length) {
     if (required && process.env.NODE_ENV === 'production') {
@@ -32,13 +46,13 @@ export function assertMetaSignature(rawBody: Buffer | undefined, signature: stri
   }
   if (!required) return;
   if (!rawBody || !signature?.startsWith('sha256=')) {
-    throw new ForbiddenException('Missing webhook signature.');
+    throw new ForbiddenException('Missing webhook signature (the request did not come from Meta).');
   }
   const supplied = signature.slice(7);
   const valid = secrets.some((secret) => safeEqual(createHmac('sha256', secret).update(rawBody).digest('hex'), supplied));
   if (!valid) {
-    logger.warn('WhatsApp Meta webhook rejected: signature does not match META_APP_SECRET');
-    throw new ForbiddenException('Invalid webhook signature.');
+    logger.warn('Meta webhook rejected: signature does not match META_APP_SECRET (is the message from another Meta app?)');
+    throw new ForbiddenException('Invalid webhook signature – META_APP_SECRET on the server is not the secret of the Meta app that sent it (old app still subscribed, or the secret was reset).');
   }
 }
 

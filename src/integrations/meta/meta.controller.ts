@@ -26,6 +26,7 @@ import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service'
 import { randomBytes } from 'crypto';
 import { MetaGraphService, type MetaSocialPost } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
+import { webhookCheck } from './webhook-stats';
 
 @Controller('integrations/meta')
 @ApiTags('Integrations - Meta')
@@ -140,7 +141,7 @@ export class MetaController {
   @Get('health')
   async health(@CurrentUser() user: AuthenticatedUser) {
     await this.assertAdmin(user);
-    type Check = { key: string; label: string; ok: boolean | null; detail: string };
+    type Check = { key: string; label: string; ok: boolean | null; detail: string; fix?: string };
     const publicBase = process.env.PUBLIC_API_BASE_URL?.trim() || '';
     const whatsapp: Check[] = [];
     const channel = await this.whatsappChannelService.getForCompany(user.company_id);
@@ -151,14 +152,34 @@ export class MetaController {
     } else if (!channel?.meta_phone_number_id || !token) {
       whatsapp.push({ key: 'connected', label: 'WhatsApp number connected', ok: false, detail: 'Not connected yet – use "Connect WhatsApp".' });
     } else {
-      const phone = await this.metaGraphService.healthGet<{ display_phone_number?: string; verified_name?: string; quality_rating?: string; code_verification_status?: string }>(
-        `/${channel.meta_phone_number_id}`, token, { fields: 'display_phone_number,verified_name,quality_rating,code_verification_status' });
+      const phone = await this.metaGraphService.healthGet<{ display_phone_number?: string; verified_name?: string; quality_rating?: string; code_verification_status?: string; platform_type?: string; status?: string }>(
+        `/${channel.meta_phone_number_id}`, token, { fields: 'display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,status' });
       whatsapp.push({ key: 'token', label: 'Access token works', ok: phone.ok, detail: phone.ok ? `${phone.data?.display_phone_number ?? ''} · ${phone.data?.verified_name ?? ''}` : phone.error ?? '' });
-      if (phone.ok) whatsapp.push({ key: 'quality', label: 'Number quality', ok: phone.data?.quality_rating !== 'RED', detail: phone.data?.quality_rating ?? 'unknown' });
-      if (channel.meta_waba_id) {
-        const apps = await this.metaGraphService.healthGet<{ data?: Array<{ whatsapp_business_api_data?: { id?: string } }> }>(`/${channel.meta_waba_id}/subscribed_apps`, token);
-        whatsapp.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: apps.ok && Boolean(apps.data?.data?.length), detail: apps.ok ? `${apps.data?.data?.length ?? 0} app(s) subscribed` : apps.error ?? '' });
+      const tokenInfo = await this.tokenCheck(token);
+      if (tokenInfo) whatsapp.push(tokenInfo);
+      if (phone.ok) {
+        whatsapp.push({ key: 'quality', label: 'Number quality', ok: phone.data?.quality_rating !== 'RED', detail: phone.data?.quality_rating ?? 'unknown' });
+        const registered = phone.data?.platform_type === 'CLOUD_API';
+        whatsapp.push({
+          key: 'registered', label: 'Number is registered for the Cloud API', ok: registered,
+          detail: registered ? `Status: ${phone.data?.status ?? 'CONNECTED'}` : `Meta says: ${phone.data?.platform_type ?? 'not registered'} / ${phone.data?.status ?? '?'}. A number that is not registered cannot send or receive. Press “Fix it” and enter the 6-digit two-step PIN (or a new one if none was set).`,
+          fix: registered ? undefined : 'whatsapp_register',
+        });
       }
+      if (channel.meta_waba_id) {
+        const apps = await this.metaGraphService.healthGet<{ data?: Array<{ whatsapp_business_api_data?: { id?: string; name?: string } }> }>(`/${channel.meta_waba_id}/subscribed_apps`, token);
+        const rows = apps.data?.data ?? [];
+        const appId = process.env.META_APP_ID?.trim() ?? '';
+        const ours = rows.some((row) => String(row.whatsapp_business_api_data?.id ?? '') === appId);
+        const names = rows.map((row) => `${row.whatsapp_business_api_data?.name ?? 'app'} (${row.whatsapp_business_api_data?.id ?? '?'})`).join(', ');
+        whatsapp.push({
+          key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: apps.ok && ours,
+          detail: !apps.ok ? apps.error ?? '' : ours ? `This platform's Meta app is subscribed${rows.length > 1 ? ` (all: ${names})` : ''}` : rows.length ? `Subscribed: ${names} – not this platform's Meta app (${appId}). Press “Fix it”.` : 'No Meta app is subscribed to this WhatsApp Business Account. Press “Fix it”.',
+          fix: apps.ok && !ours ? 'whatsapp_subscribe' : undefined,
+        });
+      }
+      whatsapp.push({ key: 'delivery', label: 'Meta is calling the webhook', ...webhookCheck('whatsapp') });
+      whatsapp.push({ key: 'app_webhook', label: 'Meta app: WhatsApp webhook verified, field “messages” subscribed', ok: null, detail: 'Meta Developers → your app → WhatsApp → Configuration → Webhook. Callback: .../integrations/whatsapp/webhook/meta' });
     }
 
     const messenger: Check[] = [];
@@ -172,7 +193,10 @@ export class MetaController {
       messenger.push({ key: 'token', label: 'Page token works', ok: me.ok, detail: me.ok ? me.data?.name ?? '' : me.error ?? '' });
       const subs = await this.metaGraphService.healthGet<{ data?: Array<{ subscribed_fields?: string[] }> }>(`/${page.page_id}/subscribed_apps`, page.page_access_token);
       const fields = subs.data?.data?.flatMap((row) => row.subscribed_fields ?? []) ?? [];
-      messenger.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: subs.ok && fields.includes('messages'), detail: subs.ok ? (fields.join(', ') || 'no fields') : subs.error ?? '' });
+      const subscribed = subs.ok && fields.includes('messages');
+      messenger.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: subscribed, detail: subs.ok ? (fields.join(', ') || 'Page is not subscribed – press “Fix it”.') : subs.error ?? '', fix: subscribed ? undefined : 'messenger_subscribe' });
+      messenger.push({ key: 'delivery', label: 'Meta is calling the webhook', ...webhookCheck('messenger') });
+      messenger.push({ key: 'app_webhook', label: 'Meta app: Messenger webhook verified, fields “messages”, “messaging_postbacks”, “feed” subscribed', ok: null, detail: 'Meta Developers → your app → Messenger → Settings → Webhooks. While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
       instagram.push({ key: 'page', label: 'Facebook Page connected', ok: true, detail: page.page_name ?? page.page_id });
       instagram.push({ key: 'linked', label: 'Instagram professional account linked to the Page', ok: Boolean(page.instagram_business_account_id),
         detail: page.instagram_business_account_id ? `Instagram account ${page.instagram_business_account_id}` : 'Link the Instagram account to this Facebook Page (Instagram → Settings → Linked accounts / Meta Business Suite).' });
@@ -180,6 +204,53 @@ export class MetaController {
       instagram.push({ key: 'app_webhook', label: 'Meta app: Instagram webhook "messages" is subscribed', ok: null, detail: 'Meta Developers → your app → Webhooks → Instagram → subscribe to "messages".' });
     }
     return { whatsapp, messenger, instagram };
+  }
+
+  /** Who made this access token, and does it expire? (debug_token with the app token) */
+  private async tokenCheck(token: string): Promise<{ key: string; label: string; ok: boolean | null; detail: string } | null> {
+    const appId = process.env.META_APP_ID?.trim();
+    const secret = process.env.META_APP_SECRET?.trim();
+    if (!appId || !secret) return null;
+    const debug = await this.metaGraphService.healthGet<{ data?: { app_id?: string; is_valid?: boolean; expires_at?: number; scopes?: string[] } }>('/debug_token', `${appId}|${secret}`, { input_token: token });
+    const data = debug.data?.data;
+    if (!debug.ok || !data) return { key: 'token_app', label: 'Token belongs to this platform\'s Meta app', ok: false, detail: `${debug.error ?? 'Meta could not read the token'} – the token was probably made in another Meta app. Create a System User token in the new app and save it again.` };
+    const problems: string[] = [];
+    if (String(data.app_id ?? '') !== appId) problems.push(`made for Meta app ${data.app_id ?? '?'}, but the server uses ${appId}`);
+    if (data.is_valid === false) problems.push('not valid any more');
+    const scopes = data.scopes ?? [];
+    for (const scope of ['whatsapp_business_messaging', 'whatsapp_business_management']) if (!scopes.includes(scope)) problems.push(`missing ${scope}`);
+    const expires = Number(data.expires_at ?? 0);
+    if (expires > 0) problems.push(`expires ${new Date(expires * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC – use a permanent System User token`);
+    return { key: 'token_app', label: 'Token is permanent and belongs to this platform\'s Meta app', ok: problems.length === 0, detail: problems.length ? `Token ${problems.join('; ')}.` : 'Permanent token with WhatsApp permissions.' };
+  }
+
+  /** "Fix it" buttons of the connection check. */
+  @Post('health/fix')
+  async fixHealth(@CurrentUser() user: AuthenticatedUser, @Body() body: { action?: string; pin?: string }) {
+    await this.assertAdmin(user);
+    const action = String(body?.action ?? '');
+    if (action === 'whatsapp_subscribe' || action === 'whatsapp_register') {
+      const channel = await this.whatsappChannelService.getForCompany(user.company_id);
+      const token = channel?.meta_access_token?.trim();
+      if (!token || !channel?.meta_phone_number_id) throw new BadRequestException('Connect a WhatsApp number first.');
+      if (action === 'whatsapp_subscribe') {
+        if (!channel.meta_waba_id) throw new BadRequestException('Enter the WhatsApp Business Account ID first.');
+        await this.metaGraphService.subscribeWhatsappApp(channel.meta_waba_id, token);
+        return { ok: true, message: 'Messages for this WhatsApp number now go to Agent Metra.' };
+      }
+      const pin = String(body?.pin ?? '').trim();
+      if (!/^\d{6}$/.test(pin)) throw new BadRequestException('Enter a 6-digit PIN.');
+      const result = await this.metaGraphService.registerWhatsappNumber(channel.meta_phone_number_id, token, pin);
+      if (!result.registered) throw new BadRequestException(`Meta: ${result.message}`);
+      return { ok: true, message: result.message };
+    }
+    if (action === 'messenger_subscribe') {
+      const page = await this.metaPageConnectionRepository.findOne({ where: { company_id: user.company_id, status: 'CONNECTED' }, order: { id: 'DESC' } });
+      if (!page?.page_access_token) throw new BadRequestException('Connect a Facebook Page first.');
+      await this.metaGraphService.subscribePageMessaging(page.page_id, page.page_access_token);
+      return { ok: true, message: 'Page messages now go to Agent Metra.' };
+    }
+    throw new BadRequestException('Unknown fix.');
   }
 
   @Get('auth-url')
