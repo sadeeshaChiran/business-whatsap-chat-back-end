@@ -191,10 +191,19 @@ export class MetaController {
     } else {
       const me = await this.metaGraphService.healthGet<{ name?: string }>(`/${page.page_id}`, page.page_access_token, { fields: 'name' });
       messenger.push({ key: 'token', label: 'Page token works', ok: me.ok, detail: me.ok ? me.data?.name ?? '' : me.error ?? '' });
-      const subs = await this.metaGraphService.healthGet<{ data?: Array<{ subscribed_fields?: string[] }> }>(`/${page.page_id}/subscribed_apps`, page.page_access_token);
-      const fields = subs.data?.data?.flatMap((row) => row.subscribed_fields ?? []) ?? [];
+      const subs = await this.metaGraphService.healthGet<{ data?: Array<{ id?: string; name?: string; subscribed_fields?: string[] }> }>(`/${page.page_id}/subscribed_apps`, page.page_access_token);
+      const appId = process.env.META_APP_ID?.trim() ?? '';
+      const rows = subs.data?.data ?? [];
+      const ours = rows.find((row) => String(row.id ?? '') === appId);
+      const others = rows.filter((row) => String(row.id ?? '') !== appId);
+      const fields = ours?.subscribed_fields ?? [];
       const subscribed = subs.ok && fields.includes('messages');
-      messenger.push({ key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: subscribed, detail: subs.ok ? (fields.join(', ') || 'Page is not subscribed – press “Fix it”.') : subs.error ?? '', fix: subscribed ? undefined : 'messenger_subscribe' });
+      const otherText = others.length ? ` Other app(s) still subscribed: ${others.map((row) => `${row.name ?? 'app'} (${row.id})`).join(', ')} – remove them, or their messages are refused.` : '';
+      messenger.push({
+        key: 'webhook', label: 'Messages are sent to Agent Metra (webhook)', ok: subscribed,
+        detail: !subs.ok ? subs.error ?? '' : subscribed ? `${fields.join(', ')}${otherText}` : `This platform's Meta app (${appId}) is not subscribed to the Page – press “Fix it”.${otherText}`,
+        fix: subs.ok && !subscribed ? 'messenger_subscribe' : undefined,
+      });
       messenger.push({ key: 'delivery', label: 'Meta is calling the webhook', ...webhookCheck('messenger') });
       messenger.push({ key: 'app_webhook', label: 'Meta app: Messenger webhook verified, fields “messages”, “messaging_postbacks”, “feed” subscribed', ok: null, detail: 'Meta Developers → your app → Messenger → Settings → Webhooks. While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
       instagram.push({ key: 'page', label: 'Facebook Page connected', ok: true, detail: page.page_name ?? page.page_id });

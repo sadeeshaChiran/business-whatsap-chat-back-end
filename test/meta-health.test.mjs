@@ -39,7 +39,7 @@ const meta = createServer((req, res) => {
     if (path === '/page-health') return send({ id: 'page-health', name: 'Health Page' });
     if (path === '/page-health/subscribed_apps') {
       if (req.method === 'POST') { state.pageFields = url.searchParams.get('subscribed_fields').split(','); return send({ success: true }); }
-      return send({ data: state.pageFields.length ? [{ subscribed_fields: state.pageFields }] : [] });
+      return send({ data: [{ id: 'old-app', name: 'Old app', subscribed_fields: ['messages'] }, ...(state.pageFields.length ? [{ id: 'new-app', name: 'Agent Metra', subscribed_fields: state.pageFields }] : [])] });
     }
     res.statusCode = 404;
     send({ error: { message: `not faked: ${req.method} ${path}` } });
@@ -81,7 +81,8 @@ test('connection check finds the old app, a temporary token and an unregistered 
   assert.match(hook.detail, /Old app \(old-app\) – not this platform's Meta app/);
   const messenger = res.data.messenger;
   assert.equal(check(messenger, 'webhook').ok, false);
-  assert.equal(check(messenger, 'webhook').fix, 'messenger_subscribe');
+  assert.equal(check(messenger, 'webhook').fix, 'messenger_subscribe', 'another app subscribed does not count');
+  assert.match(check(messenger, 'webhook').detail, /Old app \(old-app\)/);
 });
 
 test('"Fix it": subscribe WhatsApp + Page, register the number with the PIN', async () => {
