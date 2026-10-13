@@ -16,13 +16,13 @@ import { EvolutionModule } from './integrations/evolution/evolution.module';
 import { MetaModule } from './integrations/meta/meta.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.module';
-import { AutomationModule } from './automation/automation.module';
 import { SalesBotModule } from './sales-bot/sales-bot.module';
 import { PlatformModule } from './platform/platform.module';
 import { VerificationModule } from './verification/verification';
 import { CrmModule } from './crm/crm';
 import { MobileModule } from './mobile/mobile';
 import { MarketingModule } from './marketing/marketing.controller';
+import { FlowsModule } from './flows/flows.controller';
 import { SocialModule } from './social/social.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
 
@@ -55,12 +55,12 @@ if (!supabaseDatabaseUrl) {
     MetaModule,
     WhatsappIntegrationModule,
     UsersModule,
-    AutomationModule,
     PlatformModule,
     VerificationModule,
     CrmModule,
     MobileModule,
     MarketingModule,
+    FlowsModule,
     SocialModule,
     SalesBotModule,
     RealtimeModule,

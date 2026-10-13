@@ -51,6 +51,26 @@ export class CompanySubscription {
   @Column({ type: 'timestamptz', nullable: true })
   reminded_1_at: Date | null;
 
+  /** free trial of a package: when period_end passes the company moves to fallback_package_id (Free) */
+  @Column({ type: 'boolean', default: false })
+  is_trial: boolean;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  trial_note: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  fallback_package_id: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  trial_reminded_at: Date | null;
+
+  /** end of the free AI-bot days of a package with bot_days (set once, the first time the company gets such a package) */
+  @Column({ type: 'timestamptz', nullable: true })
+  bot_free_until: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  bot_free_reminded_at: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 

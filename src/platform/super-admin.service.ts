@@ -4,7 +4,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { Company } from '../company/entities/company.entity';
-import type { ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
+import type { BulkTrialDto, CustomPackageDto, GrantTrialDto, ListQueryDto, PackageDto, SignupTrialDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
 import { CompanySubscription } from './entities/company-subscription.entity';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { TokenAdjustment } from './entities/token-adjustment.entity';
@@ -91,6 +91,7 @@ export class SuperAdminService {
           billing_cycle: usage.billing_cycle, status: usage.status, period_end: usage.period_end,
           tokens_used: usage.used, tokens_quota: usage.quota, tokens_extra: usage.extra, percent: usage.percent,
           token_period_end: usage.token_period_end, blocked: usage.blocked, blocked_reason: usage.blocked_reason,
+          trial: usage.trial, free_bot_until: usage.free_bot_until, free_bot_ended: usage.free_bot_ended,
           cost_this_period_usd: costById.get(Number(row.id)) ?? 0,
         });
       });
@@ -109,7 +110,11 @@ export class SuperAdminService {
              COALESCE((SELECT SUM(cost_usd) FROM bot_ai_usage a WHERE a.company_id = $1 AND a.created_at::date = d::date), 0) AS cost,
              (SELECT COUNT(*) FROM bot_ai_usage a WHERE a.company_id = $1 AND a.created_at::date = d::date)::int AS replies
         FROM generate_series(CURRENT_DATE - 29, CURRENT_DATE, INTERVAL '1 day') d ORDER BY d`, [id]);
+    const trials = await this.dataSource.query(`
+      SELECT t.id, t.days, t.source, t.note, t.starts_at, t.ends_at, t.ended_at, t.converted, p.name AS package_name
+        FROM company_trial t LEFT JOIN platform_package p ON p.id = t.package_id WHERE t.company_id = $1 ORDER BY t.id DESC LIMIT 20`, [id]).catch(() => []);
     return {
+      trials,
       id: Number(company.id), name: company.name, plan: company.plan, business_category: company.business_category,
       status: company.status ?? 'ACTIVE',
       usage,
@@ -127,6 +132,13 @@ export class SuperAdminService {
     if (dto.package_id !== undefined) {
       const pkg = await this.packageRepository.findOne({ where: { id: dto.package_id } });
       if (!pkg) throw new BadRequestException('Package not found.');
+      if (pkg.company_id != null && Number(pkg.company_id) !== id) throw new BadRequestException('This custom package belongs to another company.');
+      if (sub.is_trial) {
+        await this.dataSource.query(`UPDATE company_trial SET ended_at = NOW() WHERE company_id = $1 AND ended_at IS NULL`, [id]);
+        sub.is_trial = false;
+        sub.fallback_package_id = null;
+        sub.trial_note = null;
+      }
       sub.package_id = pkg.id;
       company.plan = pkg.code; // companies.plan keeps the package code (old code paths use it)
       await this.companyRepository.update(id, { plan: pkg.code });
@@ -174,6 +186,77 @@ export class SuperAdminService {
     return this.company(id);
   }
 
+  /* ───────────── Free trials & custom packages ───────────── */
+
+  async grantTrial(id: number, dto: GrantTrialDto, user: AuthenticatedUser) {
+    if (!(await this.companyRepository.findOne({ where: { id } }))) throw new NotFoundException('Company not found.');
+    await this.quota.grantTrial(id, dto.package_id, dto.days, { note: dto.note, userId: Number(user.id) });
+    return this.company(id);
+  }
+
+  /** Marketing: the same trial for many companies. Companies that pay now are skipped. */
+  async bulkTrial(dto: BulkTrialDto, user: AuthenticatedUser) {
+    const ids = [...new Set(dto.company_ids.map(Number))];
+    const given: number[] = [];
+    const skipped: Array<{ id: number; reason: string }> = [];
+    for (const id of ids) {
+      try {
+        if (!(await this.companyRepository.findOne({ where: { id } }))) throw new Error('not found');
+        await this.quota.grantTrial(id, dto.package_id, dto.days, { note: dto.note, userId: Number(user.id) });
+        given.push(id);
+      } catch (error) {
+        skipped.push({ id, reason: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { given: given.length, skipped };
+  }
+
+  async endTrial(id: number) {
+    await this.quota.endTrial(id);
+    return this.company(id);
+  }
+
+  signupTrial() { return this.quota.signupTrialSetting(); }
+  setSignupTrial(dto: SignupTrialDto) { return this.quota.setSignupTrial({ enabled: dto.enabled, package_id: dto.package_id ?? null, days: dto.days }); }
+
+  /** Trials report: how many started, are running, ended, and paid afterwards. */
+  async trialsReport() {
+    const [totals] = await this.dataSource.query(`
+      SELECT COUNT(*)::int AS given,
+             COUNT(*) FILTER (WHERE ended_at IS NULL)::int AS running,
+             COUNT(*) FILTER (WHERE converted)::int AS converted,
+             COUNT(*) FILTER (WHERE source = 'signup')::int AS from_signup
+        FROM company_trial`).catch(() => [{}]);
+    const recent = await this.dataSource.query(`
+      SELECT t.id, t.company_id, c.company_name AS company_name, p.name AS package_name, t.days, t.source, t.note, t.starts_at, t.ends_at, t.ended_at, t.converted
+        FROM company_trial t LEFT JOIN companies c ON c.id = t.company_id LEFT JOIN platform_package p ON p.id = t.package_id
+       ORDER BY t.id DESC LIMIT 100`).catch(() => []);
+    return { totals, recent, signup: await this.quota.signupTrialSetting() };
+  }
+
+  /** A package only this company sees and can renew. Assigned at once. */
+  async customPackage(id: number, dto: CustomPackageDto) {
+    const company = await this.companyRepository.findOne({ where: { id } });
+    if (!company) throw new NotFoundException('Company not found.');
+    const base = dto.base_package_id ? await this.packageRepository.findOne({ where: { id: dto.base_package_id } }) : null;
+    const code = `custom-${id}-${Date.now().toString(36)}`;
+    const saved = await this.packageRepository.save(this.packageRepository.create({
+      code, name: dto.name.trim(), description: dto.description?.trim() || `Custom package for ${company.name}`,
+      price_monthly: dto.price_monthly, price_yearly: dto.price_yearly ?? dto.price_monthly * 10, tokens_per_month: dto.tokens_per_month,
+      max_agents: dto.max_agents !== undefined ? dto.max_agents : base?.max_agents ?? null,
+      max_products: dto.max_products !== undefined ? dto.max_products : base?.max_products ?? null,
+      max_services: dto.max_services !== undefined ? dto.max_services : base?.max_services ?? null,
+      features: base?.features ?? [], limits: { ...(base?.limits ?? {}), ...cleanLimits(dto.limits) },
+      is_active: true, is_public: false, sort_order: 100, company_id: id, bot_days: null,
+    }));
+    this.planService.forget();
+    const months = dto.months ?? (dto.price_monthly > 0 ? 1 : 0);
+    const end = months > 0 ? addMonths(new Date(), months) : null;
+    await this.updateSubscription(id, { package_id: saved.id, billing_cycle: 'monthly', reset_tokens: true });
+    await this.updateSubscription(id, { period_end: end ? end.toISOString() : null, status: 'active' });
+    return { package: this.packageView(saved), company: await this.company(id) };
+  }
+
   /* ───────────── Packages ───────────── */
 
   async listPackages() {
@@ -199,6 +282,7 @@ export class SuperAdminService {
       max_agents: pkg.max_agents, max_products: pkg.max_products, max_services: pkg.max_services ?? null, features: pkg.features ?? [],
       limits: resolveLimits(pkg), raw_limits: pkg.limits ?? {},
       is_active: pkg.is_active, is_public: pkg.is_public, sort_order: pkg.sort_order,
+      company_id: pkg.company_id != null ? Number(pkg.company_id) : null, bot_days: pkg.bot_days ?? null,
     };
   }
 
@@ -210,6 +294,7 @@ export class SuperAdminService {
       ...dto, code, name: dto.name.trim(), description: dto.description?.trim() ?? '', features: dto.features ?? [],
       limits: cleanLimits(dto.limits),
       max_agents: dto.max_agents ?? null, max_products: dto.max_products ?? null, max_services: dto.max_services ?? null,
+      ...(dto.company_id ? { is_public: false } : {}),
     }));
     this.planService.forget();
     return this.packageView(saved);
@@ -224,6 +309,7 @@ export class SuperAdminService {
     checkOffer(pkg);
     // merge: keys the super admin did not send keep their value
     if (limits !== undefined) pkg.limits = { ...(pkg.limits ?? {}), ...cleanLimits(limits) };
+    if (pkg.company_id != null) pkg.is_public = false; // a custom package is never on the pricing page
     const saved = await this.packageRepository.save(pkg);
     this.planService.forget();
     return this.packageView(saved);

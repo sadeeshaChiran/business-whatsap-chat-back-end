@@ -10,6 +10,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { saveChatMedia } from '../bot-admin/chat-media.store';
 import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
+import { FlowHook } from '../common/flow-hook';
 import { SalesBotHook } from '../common/sales-bot-hook';
 import { Company } from '../company/entities/company.entity';
 import type {
@@ -428,7 +429,11 @@ export class SalesBotAdminService {
       content, message_type: kind ?? 'text', media_url: mediaUrl, source: 'customer',
       provider_message_id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     });
-    if (routing.conversationId) {
+    // flows answer the simulator exactly like a real WhatsApp chat (so they can be tried before going live)
+    const flowHandled = routing.conversationId
+      ? await FlowHook.inbound({ companyId: Number(company.id), conversationId: routing.conversationId, platform: 'whatsapp', text: content, adId: dto.ad_id?.trim() || null })
+      : false;
+    if (routing.conversationId && !flowHandled) {
       await SalesBotHook.notify({ companyId: Number(company.id), conversationId: routing.conversationId, phone, provider: 'simulator' });
     }
     const botNote = routing.conversationId ? await this.simulatorBotNote(company, routing.conversationId).catch(() => null) : null;

@@ -17,6 +17,7 @@ import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { saveChatMedia } from '../../bot-admin/chat-media.store';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
 import { SalesBotHook } from '../../common/sales-bot-hook';
+import { FlowHook } from '../../common/flow-hook';
 import { MetaGraphService } from './meta-graph.service';
 import { metaAppSecrets } from '../whatsapp/webhook-auth';
 import { webhookAccepted, webhookReceived, webhookRejected } from './webhook-stats';
@@ -214,6 +215,17 @@ export class MetaMessagesController {
     if (quoted && providerId) {
       await linkQuotedReply(this.messageRepository.manager, conversation.id, providerId, quoted).catch(() => undefined);
     }
+
+    // Automation flows first (first message / keyword / ad / a waiting answer); a handled message gets no AI reply
+    const referral = (event as { referral?: { ad_id?: string; source?: string } }).referral
+      ?? (message as { referral?: { ad_id?: string; source?: string } } | undefined)?.referral
+      ?? (postback as { referral?: { ad_id?: string; source?: string } } | undefined)?.referral;
+    const flowHandled = await FlowHook.inbound({
+      companyId, conversationId: conversation.id, platform, text: rows[0]?.content ?? '',
+      adId: referral && (referral.ad_id || referral.source === 'ADS') ? String(referral.ad_id ?? '') || null : null,
+      payload: (message as { quick_reply?: { payload?: string } } | undefined)?.quick_reply?.payload ?? (postback as { payload?: string } | undefined)?.payload ?? null,
+    });
+    if (flowHandled) return saved;
 
     // Python sales bot (when SALES_BOT_URL is set): answers Messenger / Instagram exactly like WhatsApp.
     // It decides by itself whether the bot may reply (company setting, agent takeover, closed chat).

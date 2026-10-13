@@ -1,10 +1,16 @@
 import { MarketingHook } from '../../common/marketing-hook';
 import { isTestPhone, testSendResult } from '../../common/test-phone';
+import { FlowHook } from '../../common/flow-hook';
+
+/** Click-to-WhatsApp ad id of a raw Meta message (referral.source_id when source_type is ad). */
+function adIdOf(raw: unknown): string | null {
+  const referral = (raw as { referral?: { source_id?: string; source_type?: string } } | null | undefined)?.referral;
+  return referral?.source_id && (!referral.source_type || referral.source_type === 'ad') ? String(referral.source_id) : null;
+}
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AgentRoutingService } from '../../agent-routing/agent-routing.service';
-import { AutomationService } from '../../automation/automation.service';
 import { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
@@ -28,7 +34,6 @@ export class WhatsappService {
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly metaAdapter: MetaAdapter,
     private readonly agentRoutingService: AgentRoutingService,
-    private readonly automationService: AutomationService,
   ) {}
 
   async resolveMetaDisplayPhoneNumber(
@@ -235,12 +240,20 @@ export class WhatsappService {
       }
     }
 
-    if (routing.conversationId && !routing.duplicate && row?.content) {
-      await this.executeAutomationFlows(channel, normalized, routing.conversationId, row.content);
-    }
+    // Automation flows (first message / keyword / ad / waiting answers) go first; a handled message gets no AI reply
+    const flowHandled =
+      Boolean(routing.conversationId) && !routing.duplicate && normalized.input_type !== 'system' && Boolean(row?.content) &&
+      (await FlowHook.inbound({
+        companyId: Number(channel.company_id),
+        conversationId: Number(routing.conversationId),
+        platform: 'whatsapp',
+        text: row?.content ?? '',
+        adId: normalized.provider === 'meta' ? adIdOf(findMetaRawMessage(body, normalized.message_id)) : null,
+      }));
 
     // Python sales bot (SALES_BOT_URL): owns bot replies for Meta and Evolution.
     const salesBotHandled =
+      !flowHandled &&
       SalesBotHook.isActive() &&
       Boolean(routing.conversationId) &&
       !routing.duplicate &&
@@ -253,6 +266,7 @@ export class WhatsappService {
       }));
 
     if (
+      !flowHandled &&
       !SalesBotHook.isActive() &&
       normalized.provider === 'meta' &&
       forwardMeta &&
@@ -280,70 +294,6 @@ export class WhatsappService {
     };
   }
 
-  private async executeAutomationFlows(
-    channel: WhatsappChannel,
-    normalized: NormalizedWhatsAppInbound,
-    conversationId: number,
-    inboundText: string,
-  ): Promise<void> {
-    // Automation flows are not finished (hidden in the dashboard): they never run unless switched on on purpose
-    if (!['1', 'true', 'yes'].includes(String(process.env.AUTOMATION_FLOWS_ENABLED ?? '').trim().toLowerCase())) return;
-    const inboundCount = await this.messageRepository.count({
-      where: { conversation_id: conversationId, direction: 'inbound' },
-    });
-    const event = inboundCount <= 1 ? 'conversation_started' : 'new_message';
-    const flows = await this.automationService.findMatchingActiveFlows(
-      Number(channel.company_id), inboundText, event,
-    );
-    if (!flows.length) return;
-
-    const adapter = this.providerFactory.getAdapterForChannel(channel);
-    for (const flow of flows) {
-      for (const node of this.automationService.orderedNodes(flow)) {
-        if (node.type === 'ai_chatbot' || ['image', 'video', 'document', 'audio', 'reminder', 'whatsapp_form'].includes(node.type)) {
-          this.logger.warn(`Automation flow ${flow.id}: node ${node.type} requires its provider-specific executor and was skipped.`);
-          continue;
-        }
-        const text = this.automationNodeText(node.type, node.config, normalized, inboundText);
-        if (!text) continue;
-        try {
-          const result = await adapter.sendText(channel, normalized.phone, text);
-          await this.messageRepository.save(this.messageRepository.create({
-            conversation_id: conversationId,
-            direction: 'outbound',
-            message_type: 'text',
-            platform: 'whatsapp',
-            provider_message_id: result.messageId,
-            delivery_status: result.messageId ? 'sent' : null,
-            content: text,
-            source: `automation:${flow.id}`,
-          }));
-        } catch (error) {
-          this.logger.error(`Automation flow ${flow.id} failed at node ${node.id}: ${error instanceof Error ? error.message : String(error)}`);
-          break;
-        }
-      }
-    }
-  }
-
-  private automationNodeText(
-    type: string,
-    config: Record<string, string>,
-    normalized: NormalizedWhatsAppInbound,
-    inboundText: string,
-  ): string {
-    let text = '';
-    if (type === 'text') text = config.message || '';
-    else if (type === 'url') text = [config.message, config.buttonLabel, config.url].filter(Boolean).join('\n');
-    else if (type === 'list') text = [config.header, config.message, config.options].filter(Boolean).join('\n');
-    else if (type === 'buttons') text = [config.message, config.buttons].filter(Boolean).join('\n');
-    else if (type === 'location') text = [config.locationName, config.address, config.latitude && config.longitude ? `https://maps.google.com/?q=${config.latitude},${config.longitude}` : ''].filter(Boolean).join('\n');
-    return text
-      .replace(/\{\{\s*message\s*\}\}/gi, inboundText)
-      .replace(/\{\{\s*name\s*\}\}/gi, normalized.display_name || '')
-      .replace(/\{\{\s*phone\s*\}\}/gi, normalized.phone)
-      .trim();
-  }
   /** Meta webhook hits Nest first; forward raw payload to n8n AI workflow. */
   private async forwardMetaInboundToN8nBot(
     body: unknown,

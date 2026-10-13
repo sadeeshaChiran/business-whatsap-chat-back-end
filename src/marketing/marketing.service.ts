@@ -18,6 +18,22 @@ const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) 
 const STOP = /^\s*(stop|unsubscribe|opt[\s-]?out|stop promotions|stop messages|nawaththanna|nawattanna|නවත්වන්න|නතර කරන්න|niruththu|நிறுத்து|நிறுத்தவும்)\s*[.!]*\s*$/iu;
 const ATTRIBUTION_DAYS = 28;
 
+/** Meta "actions" → the clicks that mean a customer reached out. */
+export function contactActions(actions: unknown) {
+  const list = Array.isArray(actions) ? (actions as Array<{ action_type?: string; value?: string }>) : [];
+  const sum = (test: (type: string) => boolean) => list.filter((a) => test(String(a.action_type ?? ''))).reduce((n, a) => n + (Number(a.value) || 0), 0);
+  // Meta reports the same chat under several names (7d / total); take the largest of them, not the sum
+  const max = (types: string[]) => Math.max(0, ...types.map((t) => sum((type) => type === t)));
+  return {
+    conversations_started: max(['onsite_conversion.messaging_conversation_started_7d', 'onsite_conversion.total_messaging_connection', 'messaging_conversation_started_7d']),
+    first_replies: max(['onsite_conversion.messaging_first_reply']),
+    calls: max(['click_to_call_native_call_placed', 'click_to_call_call_confirm']),
+    leads: max(['lead', 'onsite_conversion.lead_grouped', 'leadgen_grouped']),
+    post_engagement: max(['post_engagement']),
+    page_likes: max(['like']),
+  };
+}
+
 type Settings = {
   company_id: number; meta_user_token: string | null; token_expires_at: Date | null; ad_account_id: string | null;
   ad_account_name: string | null; ad_currency: string | null; dataset_id: string | null; capi_token: string | null;
@@ -316,7 +332,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         graphRequest<{ data: Array<Record<string, any>> }>('GET', `/${account}/campaigns`, token,
           { fields: 'id,name,status,effective_status,objective,daily_budget,lifetime_budget', limit: '100' }),
         graphRequest<{ data: Array<Record<string, any>> }>('GET', `/${account}/insights`, token,
-          { level: 'campaign', date_preset: preset, fields: 'campaign_id,spend,impressions,reach,clicks,actions', limit: '200' }),
+          { level: 'campaign', date_preset: preset, fields: 'campaign_id,spend,impressions,reach,clicks,inline_link_clicks,ctr,actions', limit: '200' }),
       ]);
       const ours = await this.attribution(user, days);
       const byCampaign = new Map<string, { chats: number; orders: number; revenue: number; bookings: number }>();
@@ -332,13 +348,16 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         campaigns: campaigns.data.map((c) => {
           const i = insight.get(String(c.id)) ?? {};
           const actions = (i.actions as Array<{ action_type: string; value: string }> | undefined) ?? [];
-          const started = actions.filter((a) => a.action_type.includes('messaging_conversation_started')).reduce((sum, a) => sum + num(a.value), 0);
+          const contact = contactActions(actions);
+          const started = contact.conversations_started;
           const spend = num(i.spend);
           const result = byCampaign.get(String(c.id)) ?? { chats: 0, orders: 0, revenue: 0, bookings: 0 };
           return {
             id: c.id, name: c.name, status: c.status, effective_status: c.effective_status, objective: c.objective,
             daily_budget: fromMinorUnits(c.daily_budget), lifetime_budget: fromMinorUnits(c.lifetime_budget),
             spend, impressions: num(i.impressions), reach: num(i.reach), clicks: num(i.clicks), conversations_started: started,
+            link_clicks: num(i.inline_link_clicks), ctr: num(i.ctr), contact_clicks: started + contact.calls + contact.leads,
+            cost_per_conversation: started ? spend / started : null,
             chats: result.chats, orders: result.orders, bookings: result.bookings, revenue: result.revenue,
             cost_per_chat: result.chats ? spend / result.chats : null, cost_per_order: result.orders ? spend / result.orders : null,
             roas: spend > 0 ? result.revenue / spend : null,
@@ -346,6 +365,118 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         }),
       };
     } catch (error) { this.graphError(error); }
+  }
+
+  /**
+   * One Meta ad campaign in depth: totals, day-by-day, contact clicks (chats started, first replies, link clicks, calls, leads),
+   * ad sets and ads with their results, where it was shown, and the people it brought into the chats (with their orders).
+   */
+  async campaignDetail(user: AuthenticatedUser, campaignId: string, daysRaw?: number) {
+    const companyId = await this.adminCompany(user);
+    const { token, account, settings } = await this.adsToken(companyId);
+    await this.assertCampaign(token, account, campaignId);
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 90);
+    const until = new Date();
+    const since = new Date(until.getTime() - (days - 1) * 86400_000);
+    const ymd = (d: Date) => d.toISOString().slice(0, 10);
+    const time_range = JSON.stringify({ since: ymd(since), until: ymd(until) });
+    const metricFields = 'spend,impressions,reach,frequency,clicks,unique_clicks,inline_link_clicks,ctr,cpc,cpm,actions,cost_per_action_type';
+    type Row = Record<string, any>;
+    const safe = <T>(promise: Promise<T>, fallback: T) => promise.catch((error) => { this.logger.warn(`campaign detail: ${error instanceof Error ? error.message : String(error)}`); return fallback; });
+    let campaign: Row;
+    try {
+      campaign = await graphRequest<Row>('GET', `/${campaignId}`, token, { fields: 'id,name,status,effective_status,objective,daily_budget,lifetime_budget,start_time,stop_time,created_time' });
+    } catch (error) { this.graphError(error); }
+    const [total, daily, adsets, ads, placements, ageGender] = await Promise.all([
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/insights`, token, { time_range, fields: metricFields }), { data: [] }),
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/insights`, token, { time_range, time_increment: '1', fields: 'spend,impressions,reach,clicks,inline_link_clicks,actions', limit: '100' }), { data: [] }),
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/adsets`, token, { fields: `id,name,status,effective_status,daily_budget,optimization_goal,insights.time_range(${time_range}){spend,impressions,reach,clicks,inline_link_clicks,ctr,actions}`, limit: '50' }), { data: [] }),
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/ads`, token, { fields: `id,name,status,effective_status,adset_id,creative{thumbnail_url,title,body},insights.time_range(${time_range}){spend,impressions,reach,clicks,inline_link_clicks,ctr,actions}`, limit: '100' }), { data: [] }),
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/insights`, token, { time_range, breakdowns: 'publisher_platform', fields: 'spend,impressions,clicks,actions' }), { data: [] }),
+      safe(graphRequest<{ data: Row[] }>('GET', `/${campaignId}/insights`, token, { time_range, breakdowns: 'age,gender', fields: 'spend,impressions,clicks,actions', limit: '100' }), { data: [] }),
+    ]);
+
+    // ── our side: chats and orders from this campaign's ads ──
+    const people: Row[] = await this.dataSource.query(`
+      WITH convs AS (
+        SELECT c.id, c.bot_channel_user_id, c.ad_source_id, c.ad_referred_at, c.ad_platform
+          FROM bot_conversation c
+          JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+          JOIN marketing_ad_cache m ON m.ad_id = c.ad_source_id
+         WHERE cu.company_id = $1 AND m.campaign_id = $2 AND c.ad_referred_at > NOW() - make_interval(days => $3::int)
+      )
+      SELECT cu.id AS contact_user_id, cu.display_name, cu.external_user_id, cu.platform,
+             MIN(v.ad_referred_at) AS first_click, MAX(v.ad_referred_at) AS last_click, COUNT(*)::int AS chats,
+             MAX(m.ad_name) AS ad_name, MAX(v.id) AS conversation_id,
+             (SELECT COUNT(*) FROM bot_order o WHERE o.bot_channel_user_id = cu.id AND o.status::text <> 'Cancelled'
+                AND o.created_at >= MIN(v.ad_referred_at) AND o.created_at < MAX(v.ad_referred_at) + make_interval(days => $4::int))::int AS orders,
+             (SELECT COALESCE(SUM(o.total_amount), 0) FROM bot_order o WHERE o.bot_channel_user_id = cu.id AND o.status::text <> 'Cancelled'
+                AND o.created_at >= MIN(v.ad_referred_at) AND o.created_at < MAX(v.ad_referred_at) + make_interval(days => $4::int)) AS revenue
+        FROM convs v JOIN bot_channel_user cu ON cu.id = v.bot_channel_user_id
+        LEFT JOIN marketing_ad_cache m ON m.ad_id = v.ad_source_id
+       GROUP BY cu.id ORDER BY MAX(v.ad_referred_at) DESC LIMIT 500`, [companyId, campaignId, days, ATTRIBUTION_DAYS]);
+    const ourDaily: Array<{ day: string; chats: number }> = await this.dataSource.query(`
+      SELECT to_char(date_trunc('day', c.ad_referred_at), 'YYYY-MM-DD') AS day, COUNT(*)::int AS chats
+        FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        JOIN marketing_ad_cache m ON m.ad_id = c.ad_source_id
+       WHERE cu.company_id = $1 AND m.campaign_id = $2 AND c.ad_referred_at > NOW() - make_interval(days => $3::int)
+       GROUP BY 1`, [companyId, campaignId, days]);
+    const ourByAd: Array<{ ad_id: string; chats: number }> = await this.dataSource.query(`
+      SELECT c.ad_source_id AS ad_id, COUNT(*)::int AS chats
+        FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+       WHERE cu.company_id = $1 AND c.ad_source_id = ANY($2::text[]) AND c.ad_referred_at > NOW() - make_interval(days => $3::int)
+       GROUP BY 1`, [companyId, ads.data.map((a) => String(a.id)), days]);
+
+    const t = total.data[0] ?? {};
+    const contact = contactActions(t.actions);
+    const spend = num(t.spend);
+    const orders = people.reduce((n, p) => n + num(p.orders), 0);
+    const revenue = people.reduce((n, p) => n + num(p.revenue), 0);
+    const chatsTracked = people.reduce((n, p) => n + num(p.chats), 0);
+    const ourDay = new Map(ourDaily.map((d) => [d.day, num(d.chats)]));
+    const adChats = new Map(ourByAd.map((r) => [String(r.ad_id), num(r.chats)]));
+    const metrics = (i: Row | undefined) => {
+      const c = contactActions(i?.actions);
+      const sp = num(i?.spend);
+      return {
+        spend: sp, impressions: num(i?.impressions), reach: num(i?.reach), clicks: num(i?.clicks), link_clicks: num(i?.inline_link_clicks),
+        ctr: num(i?.ctr), conversations_started: c.conversations_started, cost_per_conversation: c.conversations_started ? sp / c.conversations_started : null,
+      };
+    };
+    return {
+      currency: settings.ad_currency, days, since: ymd(since), until: ymd(until),
+      campaign: {
+        id: campaign.id, name: campaign.name, status: campaign.status, effective_status: campaign.effective_status, objective: campaign.objective,
+        daily_budget: fromMinorUnits(campaign.daily_budget), lifetime_budget: fromMinorUnits(campaign.lifetime_budget),
+        start_time: campaign.start_time ?? null, stop_time: campaign.stop_time ?? null,
+      },
+      totals: {
+        spend, impressions: num(t.impressions), reach: num(t.reach), frequency: num(t.frequency), clicks: num(t.clicks), unique_clicks: num(t.unique_clicks),
+        link_clicks: num(t.inline_link_clicks), ctr: num(t.ctr), cpc: num(t.cpc), cpm: num(t.cpm),
+        ...contact,
+        contact_clicks: contact.conversations_started + contact.calls + contact.leads,
+        cost_per_conversation: contact.conversations_started ? spend / contact.conversations_started : null,
+        chats_tracked: chatsTracked, people: people.length, orders, revenue,
+        cost_per_order: orders ? spend / orders : null, roas: spend > 0 ? revenue / spend : null,
+        conversion_rate: people.length ? orders / people.length : null,
+      },
+      daily: daily.data.map((d) => ({
+        day: String(d.date_start), spend: num(d.spend), impressions: num(d.impressions), reach: num(d.reach), clicks: num(d.clicks), link_clicks: num(d.inline_link_clicks),
+        conversations_started: contactActions(d.actions).conversations_started, chats_tracked: ourDay.get(String(d.date_start)) ?? 0,
+      })),
+      adsets: adsets.data.map((a) => ({ id: a.id, name: a.name, status: a.effective_status ?? a.status, daily_budget: fromMinorUnits(a.daily_budget), optimization_goal: a.optimization_goal ?? null, ...metrics(a.insights?.data?.[0]) })),
+      ads: ads.data.map((a) => ({
+        id: a.id, name: a.name, status: a.effective_status ?? a.status, adset_id: a.adset_id,
+        thumbnail: a.creative?.thumbnail_url ?? null, title: a.creative?.title ?? null, body: a.creative?.body ?? null,
+        ...metrics(a.insights?.data?.[0]), chats_tracked: adChats.get(String(a.id)) ?? 0,
+      })),
+      placements: placements.data.map((p) => ({ platform: String(p.publisher_platform ?? 'other'), spend: num(p.spend), impressions: num(p.impressions), clicks: num(p.clicks), conversations_started: contactActions(p.actions).conversations_started })),
+      audience: ageGender.data.map((p) => ({ age: String(p.age ?? ''), gender: String(p.gender ?? ''), spend: num(p.spend), impressions: num(p.impressions), clicks: num(p.clicks), conversations_started: contactActions(p.actions).conversations_started })),
+      people: people.map((p) => ({
+        contact_user_id: Number(p.contact_user_id), conversation_id: Number(p.conversation_id), name: p.display_name || p.external_user_id, phone: p.platform === 'whatsapp' ? p.external_user_id : null,
+        platform: p.platform, ad_name: p.ad_name, first_click: p.first_click, last_click: p.last_click, chats: num(p.chats), orders: num(p.orders), revenue: num(p.revenue),
+      })),
+    };
   }
 
   async setCampaignStatus(user: AuthenticatedUser, campaignId: string, status: 'ACTIVE' | 'PAUSED') {

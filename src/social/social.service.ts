@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
 import { PusherService } from '../common/pusher.service';
 import { SocialHook } from '../common/social-hook';
+import { FlowHook } from '../common/flow-hook';
 import { GraphError, graphRequest, tokenScopes } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
@@ -185,7 +186,11 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
             parent_id: v.parent_id && v.parent_id !== v.post_id ? String(v.parent_id) : null, author_id: v.from?.id ? String(v.from.id) : null,
             author_name: String(v.from?.name ?? ''), message: String(v.message ?? ''), created_time: created,
           });
-          if (saved.isNew) await this.autoHandle(companyId, saved.id);
+          if (saved.isNew) {
+            const byFlow = await FlowHook.comment({ companyId, platform: 'facebook', commentId: String(v.comment_id), postId: v.post_id ? String(v.post_id) : null,
+              text: String(v.message ?? ''), authorId: v.from?.id ? String(v.from.id) : null, authorName: v.from?.name ? String(v.from.name) : null });
+            if (!byFlow) await this.autoHandle(companyId, saved.id);
+          }
         }
         if (payload.object === 'instagram' && change.field === 'comments') {
           const [conn] = await this.dataSource.query(`SELECT company_id FROM meta_page_connections WHERE instagram_business_account_id = $1 AND status = 'CONNECTED' LIMIT 1`, [String(entry.id)]);
@@ -199,7 +204,11 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
             platform: 'instagram', comment_id: String(v.id), post_id: v.media?.id ? String(v.media.id) : null, parent_id: v.parent_id ? String(v.parent_id) : null,
             author_id: v.from?.id ? String(v.from.id) : null, author_name: String(v.from?.username ?? ''), message: String(v.text ?? ''), created_time: new Date(),
           });
-          if (saved.isNew) await this.autoHandle(companyId, saved.id);
+          if (saved.isNew) {
+            const byFlow = await FlowHook.comment({ companyId, platform: 'instagram', commentId: String(v.id), postId: v.media?.id ? String(v.media.id) : null,
+              text: String(v.text ?? ''), authorId: v.from?.id ? String(v.from.id) : null, authorName: v.from?.username ? String(v.from.username) : null });
+            if (!byFlow) await this.autoHandle(companyId, saved.id);
+          }
         }
       }
     }
@@ -369,9 +378,20 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const c = await this.comment(companyId, id);
     const page = await this.page(companyId);
     try {
-      await graphRequest('POST', `/${c.comment_id}`, page.page_access_token, c.platform === 'instagram' ? { hide: hidden } : { is_hidden: hidden });
+      if (c.platform === 'instagram') {
+        await graphRequest('POST', `/${c.comment_id}?hide=${hidden}`, page.page_access_token, {});
+      } else {
+        // Facebook: comments written by the Page itself (or already deleted) cannot be hidden – say so instead of failing silently
+        const info = await graphRequest<{ can_hide?: boolean; is_hidden?: boolean; from?: { id?: string } }>('GET', `/${c.comment_id}`, page.page_access_token, { fields: 'can_hide,is_hidden,from' }).catch(() => null);
+        if (info && info.from?.id === page.page_id) throw new BadRequestException('This comment was written by your Page – Facebook does not allow hiding your own comments. Delete it instead.');
+        if (info && info.can_hide === false) throw new BadRequestException('Facebook does not allow hiding this comment (it may be from a Page admin, or already removed).');
+        await graphRequest('POST', `/${c.comment_id}?is_hidden=${hidden}`, page.page_access_token, {});
+        const after = await graphRequest<{ is_hidden?: boolean }>('GET', `/${c.comment_id}`, page.page_access_token, { fields: 'is_hidden' }).catch(() => null);
+        if (after && typeof after.is_hidden === 'boolean' && after.is_hidden !== hidden) throw new BadRequestException('Facebook did not change this comment. Reconnect the Page (Channels → Messenger → Switch Page) and try again.');
+      }
       await this.dataSource.query(`UPDATE social_comment SET is_hidden = $2, status = CASE WHEN $2 THEN 'hidden' WHEN our_reply IS NOT NULL THEN 'replied' ELSE 'open' END, updated_at = NOW() WHERE id = $1`, [id, hidden]);
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       this.graphError(error);
     }
     return this.comment(companyId, id);
@@ -486,7 +506,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       if (ai.hide && settings.auto_hide_spam) {
         const c = await this.comment(companyId, id);
         const page = await this.page(companyId);
-        await graphRequest('POST', `/${c.comment_id}`, page.page_access_token, c.platform === 'instagram' ? { hide: true } : { is_hidden: true });
+        await graphRequest('POST', `/${c.comment_id}?${c.platform === 'instagram' ? 'hide' : 'is_hidden'}=true`, page.page_access_token, {});
         await this.dataSource.query(`UPDATE social_comment SET is_hidden = TRUE, status = 'hidden', updated_at = NOW() WHERE id = $1`, [id]);
         return;
       }
@@ -521,7 +541,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
           posts: (media.data ?? []).map((m) => ({
             id: m.id, platform: 'instagram', text: m.caption ?? '', image: m.media_type === 'VIDEO' ? m.thumbnail_url : m.media_url, type: m.media_type,
             link: m.permalink, created_time: m.timestamp, likes: num(m.like_count), comments: num(m.comments_count), shares: null,
-            can_edit: false, can_delete: false,
+            can_edit: false, can_delete: true,
           })),
         };
       }
@@ -584,24 +604,25 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   private async publish(companyId: number, platforms: Platform[], message: string, link: string | null, media: string[]) {
     const page = await this.page(companyId);
     const results: Record<string, { id?: string; error?: string }> = {};
-    if (platforms.includes('facebook')) {
+    const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+    // Facebook and Instagram run at the same time: one after the other was slow enough to time out,
+    // and a problem on one platform must never stop the other.
+    const facebook = async () => {
       try {
         if (media.length === 1) {
-          results.facebook = await graphRequest<{ id: string; post_id?: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url: media[0], caption: message })
+          return await graphRequest<{ id: string; post_id?: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url: media[0], caption: message })
             .then((r) => ({ id: r.post_id ?? r.id }));
-        } else if (media.length > 1) {
-          const ids: string[] = [];
-          for (const url of media) ids.push((await graphRequest<{ id: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url, published: false })).id);
-          results.facebook = await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token,
-            { message, attached_media: ids.map((id) => ({ media_fbid: id })) });
-        } else {
-          results.facebook = await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token, { message, ...(link ? { link } : {}) });
         }
+        if (media.length > 1) {
+          const ids = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url, published: false }).then((r) => r.id)));
+          return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token, { message, attached_media: ids.map((id) => ({ media_fbid: id })) });
+        }
+        return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token, { message, ...(link ? { link } : {}) });
       } catch (error) {
-        results.facebook = { error: error instanceof Error ? error.message : String(error) };
+        return { error: errorText(error) };
       }
-    }
-    if (platforms.includes('instagram')) {
+    };
+    const instagram = async () => {
       const ig = page.instagram_business_account_id as string;
       const caption = link ? `${message}\n${link}` : message;
       try {
@@ -609,20 +630,51 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         if (media.length === 1) {
           creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { image_url: media[0], caption })).id;
         } else {
-          const children: string[] = [];
-          for (const url of media) children.push((await graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { image_url: url, is_carousel_item: true })).id);
+          const children = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { image_url: url, is_carousel_item: true }).then((r) => r.id)));
+          for (const child of children) await this.waitForInstagramMedia(child, page.page_access_token);
           creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { media_type: 'CAROUSEL', children: children.join(','), caption })).id;
         }
-        results.instagram = await graphRequest<{ id: string }>('POST', `/${ig}/media_publish`, page.page_access_token, { creation_id: creation });
+        // Instagram downloads and processes the photo first; publishing before it is FINISHED fails ("Media ID is not available")
+        await this.waitForInstagramMedia(creation, page.page_access_token);
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          try {
+            return await graphRequest<{ id: string }>('POST', `/${ig}/media_publish`, page.page_access_token, { creation_id: creation });
+          } catch (error) {
+            lastError = error;
+            if (!/not available|not ready|9007|2207027/i.test(errorText(error))) break;
+            await new Promise((r) => setTimeout(r, 3000));
+          }
+        }
+        throw lastError;
       } catch (error) {
-        results.instagram = { error: error instanceof Error ? error.message : String(error) };
+        return { error: errorText(error) };
       }
-    }
+    };
+    const [fb, ig] = await Promise.all([
+      platforms.includes('facebook') ? facebook() : Promise.resolve(null),
+      platforms.includes('instagram') ? instagram() : Promise.resolve(null),
+    ]);
+    if (fb) results.facebook = fb;
+    if (ig) results.instagram = ig;
     const failed = Object.entries(results).filter(([, r]) => r.error);
     if (failed.length === platforms.length) {
       throw new BadRequestException(`Meta: ${failed.map(([p, r]) => `${p}: ${r.error}`).join(' | ')}`);
     }
     return results;
+  }
+
+  /** Waits until Instagram has processed an uploaded photo (status_code FINISHED), up to ~40 s (Apache and Cloudflare cut requests at 60–100 s). */
+  private async waitForInstagramMedia(containerId: string, token: string) {
+    const deadline = Date.now() + Number(process.env.IG_MEDIA_WAIT_MS ?? 40_000);
+    for (;;) {
+      const status = await graphRequest<{ status_code?: string; status?: string }>('GET', `/${containerId}`, token, { fields: 'status_code,status' }).catch(() => null);
+      const code = status?.status_code ?? 'FINISHED';
+      if (code === 'FINISHED' || code === 'PUBLISHED') return;
+      if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Instagram could not use the photo (${status?.status ?? code}). Use a JPG/PNG photo under 8 MB, 4:5 to 1.91:1.`);
+      if (Date.now() > deadline) return;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   }
 
   async editPost(user: AuthenticatedUser, postId: string, message: string) {
@@ -640,13 +692,29 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   async deletePost(user: AuthenticatedUser, postId: string) {
     const companyId = await this.adminCompany(user);
     const page = await this.page(companyId);
-    if (!postId.startsWith(`${page.page_id}_`)) throw new BadRequestException('Only Facebook posts of your Page can be deleted (Instagram does not allow deleting through the API).');
+    if (postId.startsWith(`${page.page_id}_`)) {
+      try {
+        await graphRequest('DELETE', `/${postId}`, page.page_access_token);
+      } catch (error) {
+        this.graphError(error);
+      }
+      return { id: postId, deleted: true };
+    }
+    // Instagram: only media of the connected account
+    const ig = page.instagram_business_account_id;
+    if (!ig || !/^\d+$/.test(postId)) throw new BadRequestException('This post does not belong to your Page or Instagram account.');
+    const media = await graphRequest<{ id: string; permalink?: string; owner?: { id: string } }>('GET', `/${postId}`, page.page_access_token, { fields: 'id,permalink,owner' })
+      .catch(() => null);
+    if (!media || (media.owner?.id && media.owner.id !== ig)) throw new BadRequestException('This post does not belong to your Instagram account.');
     try {
       await graphRequest('DELETE', `/${postId}`, page.page_access_token);
+      return { id: postId, deleted: true };
     } catch (error) {
-      this.graphError(error);
+      const why = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`instagram delete ${postId}: ${why}`);
+      // Meta does not let apps delete Instagram posts for every account – send the owner to the post instead
+      throw new BadRequestException(`Instagram did not allow deleting this post from Agent Metra. Open it on Instagram and delete it there${media.permalink ? `: ${media.permalink}` : '.'}`);
     }
-    return { id: postId, deleted: true };
   }
 
   async schedules(user: AuthenticatedUser) {
