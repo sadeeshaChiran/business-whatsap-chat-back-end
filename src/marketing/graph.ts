@@ -108,3 +108,19 @@ export function normalisePhone(value: string | null | undefined): string {
 /** Meta budgets are in the currency's minor unit (cents); LKR, USD, EUR … use 100. */
 export const toMinorUnits = (amount: number) => Math.round(Number(amount) * 100);
 export const fromMinorUnits = (value: unknown) => (value == null || value === '' ? null : Number(value) / 100);
+
+/**
+ * The permissions Meta really granted to a (user or Page) token – from debug_token with the app token.
+ * null when the app is not configured or Meta does not answer.
+ */
+export async function tokenScopes(token: string): Promise<string[] | null> {
+  const appId = env('META_APP_ID');
+  const secret = env('META_APP_SECRET');
+  if (!appId || !secret || !token) return null;
+  try {
+    const result = await graphRequest<{ data?: { scopes?: string[]; is_valid?: boolean } }>('GET', '/debug_token', `${appId}|${secret}`, { input_token: token });
+    return Array.isArray(result.data?.scopes) ? result.data!.scopes! : null;
+  } catch {
+    return null;
+  }
+}

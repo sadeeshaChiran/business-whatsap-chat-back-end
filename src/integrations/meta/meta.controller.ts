@@ -27,6 +27,7 @@ import { randomBytes } from 'crypto';
 import { MetaGraphService, type MetaSocialPost } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
 import { webhookCheck } from './webhook-stats';
+import { tokenScopes } from '../../marketing/graph';
 
 @Controller('integrations/meta')
 @ApiTags('Integrations - Meta')
@@ -302,6 +303,12 @@ export class MetaController {
       body.page_id.trim(),
       cfg.scopes,
     );
+    // save what Meta really granted (with a login configuration the server's scope list is not what was asked for)
+    const granted = await tokenScopes(connection.page_access_token);
+    if (granted?.length) {
+      await this.metaPageConnectionRepository.update({ id: connection.id } as never, { scopes: granted.join(',') } as never);
+      connection.scopes = granted.join(',');
+    }
     connection = await this.syncInstagramLink(connection);
     // Turn on the Messenger / Instagram message webhook for this Page. A failure must not block
     // connecting the Page (it is still usable for posts); it is shown as a warning instead.

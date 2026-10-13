@@ -5,7 +5,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
 import { PusherService } from '../common/pusher.service';
 import { SocialHook } from '../common/social-hook';
-import { GraphError, graphRequest } from '../marketing/graph';
+import { GraphError, graphRequest, tokenScopes } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
 
@@ -99,7 +99,15 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const settings = await this.settings(companyId);
     if (!connection?.page_access_token) return { connected: false, settings };
     const required = ['pages_manage_engagement', 'pages_read_user_content', 'pages_manage_posts', 'read_insights', 'instagram_manage_comments', 'instagram_content_publish', 'instagram_manage_insights'];
-    const granted = String(connection.scopes ?? '').split(/[\s,]+/).filter(Boolean);
+    let granted = String(connection.scopes ?? '').split(/[\s,]+/).filter(Boolean);
+    if (required.some((scope) => !granted.includes(scope))) {
+      // the saved list can be out of date (older connection, or the server's scope list) – ask Meta what this token really has
+      const real = await tokenScopes(connection.page_access_token);
+      if (real?.length) {
+        granted = real;
+        await this.dataSource.query(`UPDATE meta_page_connections SET scopes = $1 WHERE company_id = $2 AND page_id = $3`, [real.join(','), companyId, connection.page_id]);
+      }
+    }
     const page = await graphRequest<Record<string, unknown>>('GET', `/${connection.page_id}`, connection.page_access_token,
       { fields: 'id,name,about,category,fan_count,followers_count,link,picture.type(large){url}' }).catch(() => null);
     const instagram = connection.instagram_business_account_id

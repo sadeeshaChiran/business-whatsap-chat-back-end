@@ -14,7 +14,7 @@ import { createServer } from 'node:http';
 import { createHmac } from 'node:crypto';
 import { API, api, closeDb, createWorkspace, sql } from './helpers.mjs';
 
-const state = { subscribed: ['old-app'], registered: false, tokenApp: 'old-app', expires: 1_900_000_000, pageFields: [] };
+const state = { subscribed: ['old-app'], registered: false, tokenApp: 'old-app', expires: 1_900_000_000, pageFields: [], pageScopes: ['pages_messaging'] };
 const calls = [];
 const meta = createServer((req, res) => {
   let body = '';
@@ -25,7 +25,10 @@ const meta = createServer((req, res) => {
     calls.push(`${req.method} ${path}`);
     res.setHeader('Content-Type', 'application/json');
     const send = (data) => res.end(JSON.stringify(data));
-    if (path === '/debug_token') return send({ data: { app_id: state.tokenApp, is_valid: true, expires_at: state.expires, scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'] } });
+    if (path === '/debug_token') {
+      if (url.searchParams.get('input_token') === 'page-token') return send({ data: { app_id: 'new-app', is_valid: true, expires_at: 0, scopes: state.pageScopes } });
+      return send({ data: { app_id: state.tokenApp, is_valid: true, expires_at: state.expires, scopes: ['whatsapp_business_messaging', 'whatsapp_business_management'] } });
+    }
     if (path === '/pn-health') return send({ id: 'pn-health', display_phone_number: '+94 78 112 8220', verified_name: 'Shop', quality_rating: 'GREEN', platform_type: state.registered ? 'CLOUD_API' : 'NOT_APPLICABLE', status: state.registered ? 'CONNECTED' : 'PENDING' });
     if (path === '/pn-health/register' && req.method === 'POST') {
       if (JSON.parse(body).pin !== '123456') { res.statusCode = 400; return send({ error: { message: 'Two-step verification PIN mismatch' } }); }
@@ -137,4 +140,16 @@ test('only the shop admin may press "Fix it"', async () => {
   const res = await api('POST', '/integrations/meta/health/fix', { token: stranger.token, body: { action: 'whatsapp_subscribe' } });
   assert.equal(res.status, 400, 'a shop without WhatsApp cannot subscribe anything');
   assert.ok(!calls.some((c) => c.includes('undefined')));
+});
+
+test('Social: the "new permissions" bar uses what Meta really granted, not the saved list', async () => {
+  await sql(`UPDATE meta_page_connections SET scopes = 'pages_show_list,pages_messaging' WHERE company_id = $1`, [owner.companyId]);
+  let res = await api('GET', '/social/overview', { token: owner.token });
+  assert.equal(res.status, 200, JSON.stringify(res.json));
+  assert.equal(res.data.missing_permissions.length, 7, 'token really lacks them → bar shown');
+  state.pageScopes = ['pages_messaging', 'pages_manage_engagement', 'pages_read_user_content', 'pages_manage_posts', 'read_insights', 'instagram_manage_comments', 'instagram_content_publish', 'instagram_manage_insights'];
+  res = await api('GET', '/social/overview', { token: owner.token });
+  assert.deepEqual(res.data.missing_permissions, [], 'granted after reconnect → bar gone');
+  const [row] = await sql(`SELECT scopes FROM meta_page_connections WHERE company_id = $1 AND status = 'CONNECTED'`, [owner.companyId]);
+  assert.match(row.scopes, /instagram_content_publish/, 'real list saved');
 });
