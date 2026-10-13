@@ -1,5 +1,6 @@
 import { resolveLimits } from './package-limits';
 import { offerFields } from './package-offer';
+import { loadHandbook } from './handbook';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -23,6 +24,10 @@ export class SuperAdminController {
 
   @Get('overview')
   overview() { return this.service.overview(); }
+
+  /** Team handbook (support playbook, operations, how every feature works) – super admins only. */
+  @Get('handbook')
+  handbook() { return { chapters: loadHandbook() }; }
 
   @Get('companies')
   companies(@Query() query: ListQueryDto) { return this.service.companies(query); }

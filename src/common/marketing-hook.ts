@@ -11,4 +11,9 @@ export const MarketingHook = {
     if (!handler) return;
     void handler(body, platform).catch((error) => console.warn('[marketing] referral capture failed:', error));
   },
+  /** Waits for it: used right after the message is saved and BEFORE flows / the AI answer, so the bot knows which ad the customer clicked. */
+  async run(body: unknown, platform: 'whatsapp' | 'messenger' | 'instagram') {
+    if (!handler) return;
+    await handler(body, platform).catch((error) => console.warn('[marketing] referral capture failed:', error));
+  },
 };

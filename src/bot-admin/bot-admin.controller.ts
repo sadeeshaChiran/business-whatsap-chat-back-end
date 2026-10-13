@@ -191,6 +191,12 @@ export class BotAdminController {
     return this.botAdminService.searchConversationMessages(user, id, q ?? '', limit == null ? undefined : Number(limit));
   }
 
+  /** Where the chat came from (ad / post / link / broadcast) – the banner at the top of the open chat. */
+  @Get('conversations/:id/origin')
+  conversationOrigin(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
+    return this.botAdminService.conversationOrigin(user, id);
+  }
+
   @Get('conversations/:id')
   getConversation(
     @CurrentUser() user: AuthenticatedUser,

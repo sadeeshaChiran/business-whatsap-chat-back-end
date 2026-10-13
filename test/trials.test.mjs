@@ -202,3 +202,18 @@ describe('Custom package for one company', () => {
     assert.equal(assignOther.status, 400);
   });
 });
+
+describe('Team handbook', () => {
+  test('only super admins can read it, and it holds no secret values', async () => {
+    const r = await api('GET', '/super-admin/handbook', { token: superAdmin.token });
+    assert.equal(r.status, 200);
+    const chapters = r.data.chapters;
+    assert.ok(chapters.length >= 5, 'chapters loaded');
+    for (const c of chapters) assert.ok(c.slug && c.title && c.markdown.length > 200, `chapter ${c.slug}`);
+    const all = chapters.map((c) => c.markdown).join('\n');
+    assert.doesNotMatch(all, /(EAA[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|postgres(ql)?:\/\/[^\s`]*:[^\s`]*@|sk_live_)/, 'no tokens / keys / DB passwords');
+    const owner = await createWorkspace('handbook-owner');
+    assert.equal((await api('GET', '/super-admin/handbook', { token: owner.token })).status, 403);
+    assert.equal((await api('GET', '/super-admin/handbook')).status, 401);
+  });
+});

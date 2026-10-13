@@ -89,9 +89,6 @@ export class WhatsappService {
     for (const [index, normalized] of normalizedMessages.entries()) {
       results.push(await this.processNormalizedInbound(body, normalized, index === 0));
     }
-    // ad tracking: Click-to-WhatsApp referral on the saved messages
-    MarketingHook.capture(body, 'whatsapp');
-
     return results.length === 1
       ? results[0]
       : { accepted: true, processed: results.length, results };
@@ -239,6 +236,9 @@ export class WhatsappService {
           .catch((error: unknown) => this.logger.warn(`quoted reply not saved: ${error instanceof Error ? error.message : String(error)}`));
       }
     }
+
+    // ad tracking (Click-to-WhatsApp, Cloud API and QR WhatsApp): saved before flows and the AI so they know which ad it was
+    if (routing.conversationId && !routing.duplicate) await MarketingHook.run(body, 'whatsapp');
 
     // Automation flows (first message / keyword / ad / waiting answers) go first; a handled message gets no AI reply
     const flowHandled =

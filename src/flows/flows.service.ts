@@ -38,7 +38,7 @@ export type FlowInput = {
 };
 type Waiting =
   | { kind: 'buttons'; step: number; attempts: number }
-  | { kind: 'question'; step: number; form_id: number; field: number; answers: Record<string, unknown>; attempts: number };
+  | { kind: 'question'; step: number; form_id: number; field: number; answers: Record<string, unknown>; attempts: number; suggest?: string[] };
 type Run = { id: number; flow_id: number; company_id: number; conversation_id: number; bot_channel_user_id: number | null; platform: Platform; status: string; step_index: number; waiting: Waiting | null; vars: Record<string, unknown> };
 
 const STAGES = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'];
@@ -656,10 +656,10 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
               await this.sender.send(target, { kind: 'text', text: `${intro}\n${base}/f/${form.slug}?t=${token}` }, source);
               break;
             }
+            // one clean message: the intro, what is coming, and the first question
             const intro = this.fill(step.text || form.intro || '', target, vars);
-            if (intro) await this.sender.send(target, { kind: 'text', text: intro }, source);
-            await this.save(run, { status: 'waiting', waiting: { kind: 'question', step: run.step_index, form_id: form.id, field: 0, answers: {}, attempts: 0 } });
-            await this.askField(form, 0, target, source);
+            const suggest = await this.askField(form, 0, target, source, { intro });
+            await this.save(run, { status: 'waiting', waiting: { kind: 'question', step: run.step_index, form_id: form.id, field: 0, answers: {}, attempts: 0, suggest } });
             return;
           }
           case 'delay':
@@ -700,19 +700,50 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
     return { kind: 'buttons', text, buttons: labels };
   }
 
-  private async askField(form: Record<string, any>, index: number, target: Target, source: string) {
-    const field = (form.fields as FormField[])[index];
-    const label = `${field.label}${field.required ? '' : ' (or send “skip”)'}`;
-    if ((field.type === 'choice' || field.type === 'multi') && field.options?.length) {
-      if (field.type === 'choice' && field.options.length <= (target.platform === 'whatsapp' ? 10 : 13)) {
-        await this.sender.send(target, { kind: 'buttons', text: label, buttons: field.options }, source);
-      } else {
-        await this.sender.send(target, { kind: 'text', text: field.type === 'multi' ? `${numbered(label, field.options).replace('Reply with the number.', 'Reply with the numbers, e.g. 1,3.')}` : numbered(label, field.options) }, source);
-      }
-      return;
+  /**
+   * Asks one form question in the chat: "2/4 · Your address?" with a short hint. Choices and things we already know
+   * (the customer's name, their WhatsApp number) become tap buttons. The first question also carries the intro.
+   * Returns the tap suggestions (so "1" / "2" also works where buttons are shown as a numbered list).
+   */
+  private async askField(form: Record<string, any>, index: number, target: Target, source: string, opts: { intro?: string; error?: string } = {}): Promise<string[]> {
+    const fields = form.fields as FormField[];
+    const field = fields[index];
+    const wa = target.platform === 'whatsapp';
+    const bold = (text: string) => (wa ? `*${text}*` : text);
+    const italic = (text: string) => (wa ? `_${text}_` : text);
+    const lines: string[] = [];
+    if (opts.error) lines.push(`⚠️ ${opts.error}`, '');
+    if (index === 0 && !opts.error) {
+      if (opts.intro) lines.push(opts.intro, '');
+      lines.push(`📝 ${bold(form.title || form.name)}${fields.length > 1 ? ` – ${fields.length} quick questions` : ''}. Send ${bold('stop')} any time to cancel.`, '');
     }
-    const hint = field.type === 'phone' ? ' (e.g. 077 123 4567)' : field.type === 'photo' ? ' – send a photo' : field.type === 'date' ? ' (e.g. 25 Dec)' : '';
-    await this.sender.send(target, { kind: 'text', text: `${label}${hint}` }, source);
+    const label = /[?:.!]$/.test(field.label.trim()) ? field.label.trim() : `${field.label.trim()}?`;
+    lines.push(`${fields.length > 1 ? `${bold(`${index + 1}/${fields.length}`)} ` : ''}${label}`);
+
+    let suggest: string[] = [];
+    let hint = '';
+    if ((field.type === 'choice' || field.type === 'multi') && field.options?.length) {
+      if (field.type === 'multi') hint = 'You can pick several – e.g. 1,3';
+      suggest = field.options;
+    } else if (field.maps_to === 'name' || (field.type === 'text' && /name|නම/i.test(field.label))) {
+      const known = String(target.name ?? '').trim();
+      if (/\p{L}{2,}/u.test(known) && known.length <= 20) { suggest = [known]; hint = 'Tap your name or type it'; }
+    } else if (field.type === 'phone') {
+      const digits = String(target.recipient ?? '').replace(/\D/g, '');
+      if (wa && /^94\d{9}$/.test(digits)) { suggest = [`0${digits.slice(2)}`]; hint = 'Tap to use this WhatsApp number, or type another'; }
+      else hint = 'e.g. 077 123 4567';
+    } else if (field.type === 'photo') hint = 'Send a photo';
+    else if (field.type === 'date') hint = 'e.g. 25 Dec';
+    else if (field.type === 'email') hint = 'e.g. name@gmail.com';
+    if (!field.required) hint = hint ? `${hint} · or send “skip”` : 'Optional – send “skip” to leave it out';
+    if (hint) lines.push(italic(hint));
+    const text = lines.join('\n');
+
+    const canButtons = suggest.length > 0 && field.type !== 'multi' && suggest.length <= (wa ? 10 : 13);
+    if (canButtons) await this.sender.send(target, { kind: 'buttons', text, buttons: suggest.map((s) => s.slice(0, 20)) }, source);
+    else if (suggest.length) await this.sender.send(target, { kind: 'text', text: `${text}\n\n${suggest.map((s, i) => `${i + 1}. ${s}`).join('\n')}` }, source);
+    else await this.sender.send(target, { kind: 'text', text }, source);
+    return suggest;
   }
 
   /** The customer answered while the flow waits. */
@@ -756,22 +787,24 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
         return true;
       }
     }
-    const result = this.checkAnswer(field, raw, false, true);
+    // "1" / "2" picks a suggestion (numbered list instead of buttons); a tapped button arrives as its text
+    const suggestion = /^\d{1,2}$/.test(raw.trim()) && field.type !== 'number' && field.type !== 'multi' && field.type !== 'phone' ? waiting.suggest?.[Number(raw.trim()) - 1] : undefined;
+    const result = this.checkAnswer(field, suggestion ?? raw, false, true);
     if (result.error) {
-      if (waiting.attempts >= 2) { await this.finish(run, 'stopped'); await this.sender.send(target, { kind: 'text', text: 'No problem – a team member will help you.' }, source); return true; }
+      if (waiting.attempts >= 2) { await this.finish(run, 'stopped'); await this.sender.send(target, { kind: 'text', text: 'No problem – a team member will help you with this.' }, source); return true; }
       await this.save(run, { waiting: { ...waiting, attempts: waiting.attempts + 1 } });
-      await this.sender.send(target, { kind: 'text', text: result.error }, source);
+      await this.askField(form, waiting.field, target, source, { error: result.error });
       return true;
     }
     const answers = { ...waiting.answers, ...(result.value !== undefined ? { [field.id]: result.value } : {}) };
     const next = waiting.field + 1;
     if (next < fields.length) {
-      await this.save(run, { waiting: { ...waiting, field: next, answers, attempts: 0 } });
-      await this.askField(form, next, target, source);
+      const suggest = await this.askField(form, next, target, source);
+      await this.save(run, { waiting: { ...waiting, field: next, answers, attempts: 0, suggest } });
       return true;
     }
     await this.saveSubmission(form, answers, { source: 'chat', channelUserId: target.channelUserId, conversationId: target.conversationId, channel: target.platform });
-    await this.sender.send(target, { kind: 'text', text: form.thank_you }, source);
+    await this.sender.send(target, { kind: 'text', text: formSummary(form, answers, target.platform === 'whatsapp') }, source);
     const vars = { ...(run.vars ?? {}), ...Object.fromEntries(fields.filter((f) => answers[f.id] !== undefined && f.type !== 'photo').map((f) => [f.id, Array.isArray(answers[f.id]) ? (answers[f.id] as string[]).join(', ') : answers[f.id]])) };
     await this.save(run, { status: 'running', waiting: null, vars, step_index: waiting.step + 1 });
     await this.execute(run, target);
@@ -853,6 +886,17 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
     }
     return false;
   }
+}
+
+/** "✅ Thank you…" + what the customer sent, one line per answer. */
+export function formSummary(form: { thank_you?: string; fields: FormField[] }, answers: Record<string, unknown>, whatsapp = true) {
+  const rows = (form.fields ?? []).filter((f) => answers[f.id] !== undefined && answers[f.id] !== '').map((f) => {
+    const value = answers[f.id];
+    const shown = f.type === 'photo' ? 'photo received' : Array.isArray(value) ? value.join(', ') : String(value);
+    return `• ${f.label.replace(/[?:]\s*$/, '')}: ${shown}`;
+  });
+  const thanks = `✅ ${String(form.thank_you || 'Thank you! We received your details.').trim()}`;
+  return rows.length ? `${thanks}\n\n${whatsapp ? '*Your details*' : 'Your details'}\n${rows.join('\n')}` : thanks;
 }
 
 export function keywordMatch(c: TriggerConfig, text: string) {

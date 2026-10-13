@@ -1,4 +1,4 @@
-import { FlowsService, keywordMatch, type FormField } from './flows.service';
+import { FlowsService, formSummary, keywordMatch, type FormField } from './flows.service';
 
 describe('flow keywords', () => {
   it('contains matches whole words, Sinhala / Singlish too, and ignores punctuation and case', () => {
@@ -42,5 +42,17 @@ describe('form answers', () => {
   });
   it('a photo from the link page must be one we stored', () => {
     expect(service.checkAnswer(field({ type: 'photo' }), 'https://evil.example/x.jpg', true).error).toBeTruthy();
+  });
+});
+
+describe('form summary in the chat', () => {
+  it('thanks + one line per answer, photos and lists readable, empty answers left out', () => {
+    const fields: FormField[] = [
+      { id: 'name', label: 'Your name', type: 'text' }, { id: 'sizes', label: 'Sizes?', type: 'multi', options: ['S', 'M'] },
+      { id: 'pic', label: 'Photo', type: 'photo' }, { id: 'note', label: 'Note', type: 'long_text' },
+    ];
+    expect(formSummary({ thank_you: 'Thanks!', fields }, { name: 'Nimal', sizes: ['S', 'M'], pic: 'chat-media/x.jpg' }))
+      .toBe('✅ Thanks!\n\n*Your details*\n• Your name: Nimal\n• Sizes: S, M\n• Photo: photo received');
+    expect(formSummary({ thank_you: '', fields }, {}, false)).toBe('✅ Thank you! We received your details.');
   });
 });

@@ -96,10 +96,25 @@ type CompanyContactRow = {
   last_message_direction?: 'inbound' | 'outbound' | null;
   last_message_delivery_status?: 'sent' | 'delivered' | 'read' | 'failed' | null;
   labels?: Array<{ id: number; name: string; color_code: string }>;
+  /** where the chat came from: an ad / shared post, a short link or QR, a broadcast (null = the customer wrote by themselves) */
+  origin?: ChatOrigin | null;
 };
+export type ChatOrigin = { source: 'ad' | 'post' | 'link' | 'broadcast'; label: string; at: Date | string | null };
 
 /** Evolution chat list cache (per instance, 15 s) – shared by all requests of this process. */
 const evolutionChatsCache = new Map<string, { chats: Awaited<ReturnType<EvolutionService['findChats']>>; expiresAt: number }>();
+
+/** "Came from an ad / post / link / broadcast" for the chat list chip. */
+export function chatOrigin(row: { campaign_source?: string | null; ad_source_id?: string | null; ad_source_type?: string | null; ad_headline?: string | null;
+  ad_referred_at?: Date | string | null; campaign_at?: Date | string | null; link_name?: string | null; campaign_name?: string | null }): ChatOrigin | null {
+  if (row.ad_source_id) {
+    const post = row.ad_source_type === 'post';
+    return { source: post ? 'post' : 'ad', label: String(row.ad_headline || row.campaign_name || (post ? 'Shared post' : 'Facebook / Instagram ad')).slice(0, 80), at: row.ad_referred_at ?? null };
+  }
+  if (row.campaign_source === 'link') return { source: 'link', label: String(row.link_name || row.campaign_name || 'Short link / QR').slice(0, 80), at: row.campaign_at ?? null };
+  if (row.campaign_source === 'broadcast') return { source: 'broadcast', label: String(row.campaign_name || 'Broadcast reply').slice(0, 80), at: row.campaign_at ?? null };
+  return null;
+}
 
 /** Follow-up state of a chat (interested customer who went quiet) for the inbox. */
 export function followUpView(conversation: BotConversation) {
@@ -1731,6 +1746,7 @@ export class BotAdminService {
     const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound'; delivery_status: 'sent' | 'delivered' | 'read' | 'failed' | null }>();
     const unreadByConversation = new Map<number, number>();
     const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
+    const originByConversation = new Map<number, ChatOrigin | null>();
 
     if (conversationIds.length > 0) {
       // Only the newest message per conversation (was: every message of every conversation).
@@ -1785,6 +1801,14 @@ export class BotAdminService {
       for (const row of unread) {
         unreadByConversation.set(Number(row.conversation_id), Number(row.unread) || 0);
       }
+
+      const originRows: Array<{ id: number; campaign_source: string | null; ad_source_id: string | null; ad_source_type: string | null; ad_headline: string | null;
+        ad_referred_at: Date | null; campaign_at: Date | null; link_name: string | null; campaign_name: string | null }> = await this.messageRepository.query(`
+        SELECT c.id, c.campaign_source, c.ad_source_id, c.ad_source_type, c.ad_headline, c.ad_referred_at, c.campaign_at,
+               (SELECT l.name FROM marketing_link l WHERE l.id = c.link_id) AS link_name,
+               (SELECT mc.name FROM marketing_campaign mc WHERE mc.id = c.campaign_id) AS campaign_name
+          FROM bot_conversation c WHERE c.id = ANY($1) AND (c.ad_source_id IS NOT NULL OR c.campaign_source IS NOT NULL)`, [conversationIds]).catch(() => []);
+      for (const row of originRows) originByConversation.set(Number(row.id), chatOrigin(row));
 
       // Tags on each chat – used by the tag filter and the chips in the chat list.
       const labelRows = await this.conversationLabelRepository
@@ -1846,8 +1870,54 @@ export class BotAdminService {
         last_message_delivery_status: preview?.delivery_status ?? null,
         unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
         labels: labelsByConversation.get(Number(conversation.id)) ?? [],
+        origin: originByConversation.get(Number(conversation.id)) ?? null,
       };
     });
+  }
+
+  /**
+   * Where this chat came from, for the banner in the open chat: the ad / shared post the customer clicked (text, picture, link,
+   * Meta ad + campaign name), every earlier ad click, or the short link / broadcast campaign.
+   */
+  async conversationOrigin(user: AuthenticatedUser, conversationId: number) {
+    await this.assertConversationAccess(user, conversationId);
+    const [row] = await this.messageRepository.query(`
+      SELECT c.id, c.campaign_source, c.campaign_at, c.ad_source_id, c.ad_source_type, c.ad_headline, c.ad_body, c.ad_source_url, c.ad_media_url, c.ad_media_type,
+             c.ad_platform, c.ad_referred_at, c.lead_stage,
+             (SELECT l.name FROM marketing_link l WHERE l.id = c.link_id) AS link_name,
+             mc.name AS campaign_name, mc.offer_text,
+             ac.ad_name, ac.campaign_name AS meta_campaign_name, ac.campaign_id AS meta_campaign_id
+        FROM bot_conversation c
+        LEFT JOIN marketing_campaign mc ON mc.id = c.campaign_id
+        LEFT JOIN marketing_ad_cache ac ON ac.ad_id = c.ad_source_id
+       WHERE c.id = $1`, [conversationId]);
+    if (!row) throw new NotFoundException('Conversation not found.');
+    // every ad click of this customer (all their chats), newest first – each one is shown on the message it came with
+    const clicks = await this.messageRepository.query(`
+      SELECT k.id, k.ad_id, k.source_type, k.headline, k.body, k.url, k.media_url, k.media_type, k.platform, k.clicked_at, k.conversation_id,
+             ac.ad_name, ac.campaign_name,
+             COALESCE(
+               (SELECT m.id FROM bot_message m WHERE m.conversation_id = k.conversation_id AND k.provider_message_id IS NOT NULL
+                  AND (m.provider_message_id = k.provider_message_id OR m.provider_message_id LIKE k.provider_message_id || ':%') ORDER BY m.id LIMIT 1),
+               (SELECT m.id FROM bot_message m WHERE m.conversation_id = k.conversation_id AND m.direction::text = 'inbound'
+                  AND m.created_at >= k.clicked_at - INTERVAL '2 minutes' ORDER BY m.created_at, m.id LIMIT 1)
+             ) AS message_id
+        FROM marketing_ad_click k LEFT JOIN marketing_ad_cache ac ON ac.ad_id = k.ad_id
+       WHERE k.bot_channel_user_id = (SELECT bot_channel_user_id FROM bot_conversation WHERE id = $1)
+          OR k.conversation_id = $1
+       ORDER BY k.clicked_at DESC LIMIT 50`, [conversationId]).catch(() => []);
+    const origin = chatOrigin(row);
+    return {
+      origin,
+      ad: row.ad_source_id ? {
+        id: row.ad_source_id, type: row.ad_source_type === 'post' ? 'post' : 'ad', headline: row.ad_headline || null, body: row.ad_body || null,
+        url: row.ad_source_url || null, media_url: row.ad_media_url || null, media_type: row.ad_media_type || null, platform: row.ad_platform || null,
+        clicked_at: row.ad_referred_at, ad_name: row.ad_name || null, meta_campaign_name: row.meta_campaign_name || null, meta_campaign_id: row.meta_campaign_id || null,
+      } : null,
+      campaign: row.campaign_name ? { name: row.campaign_name, offer: row.offer_text || null } : null,
+      link_name: row.link_name || null,
+      clicks,
+    };
   }
 
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {

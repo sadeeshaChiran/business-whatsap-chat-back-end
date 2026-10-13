@@ -120,6 +120,9 @@ export type BotCampaign = {
   name: string;
   ad_headline: string;
   ad_body: string;
+  /** 'ad' or 'post' (a shared / boosted post) */
+  ad_type?: string;
+  ad_url?: string;
   offer: string;
   instructions: string;
   product_ids: number[];
@@ -129,7 +132,7 @@ export type BotCampaign = {
 /** What the AI should know about where this customer came from (null = nothing recent). */
 export async function campaignForBot(ds: DataSource, conversationId: number): Promise<BotCampaign | null> {
   const [row] = await ds.query(`
-    SELECT c.campaign_source, c.campaign_at, c.ad_headline, c.ad_body, c.ad_referred_at,
+    SELECT c.campaign_source, c.campaign_at, c.ad_headline, c.ad_body, c.ad_referred_at, c.ad_source_type, c.ad_source_url,
            mc.name, mc.offer_text, mc.bot_instructions, mc.product_ids, mc.ends_at::text AS ends_at, mc.status,
            l.name AS link_name, ac.campaign_name AS meta_campaign_name
       FROM bot_conversation c
@@ -152,6 +155,7 @@ export async function campaignForBot(ds: DataSource, conversationId: number): Pr
     name: active ? String(row.name) : String(row.meta_campaign_name ?? ''),
     ad_headline: fromAd ? String(row.ad_headline ?? '').slice(0, 300) : '',
     ad_body: fromAd ? String(row.ad_body ?? '').slice(0, 600) : '',
+    ...(fromAd ? { ad_type: String(row.ad_source_type ?? 'ad'), ad_url: String(row.ad_source_url ?? '').slice(0, 300) } : {}),
     offer: active ? String(row.offer_text ?? '').slice(0, 1000) : '',
     instructions: active ? String(row.bot_instructions ?? '').slice(0, 1500) : '',
     product_ids: active && Array.isArray(row.product_ids) ? row.product_ids.map(Number).filter(Number.isFinite).slice(0, 20) : [],
@@ -161,7 +165,7 @@ export async function campaignForBot(ds: DataSource, conversationId: number): Pr
 
 /* ───── Messenger / Instagram: a ref or ad that arrives before the chat exists ───── */
 
-export type PendingRef = { kind: 'ad' | 'ref'; value: string; headline?: string; body?: string; url?: string };
+export type PendingRef = { kind: 'ad' | 'ref'; value: string; headline?: string; body?: string; url?: string; media_url?: string; media_type?: string };
 
 /** Kept for 30 minutes and used when the customer's first message creates the chat. */
 export async function savePendingRef(ds: DataSource, platform: string, externalUserId: string, ref: PendingRef) {
@@ -172,8 +176,8 @@ export async function savePendingRef(ds: DataSource, platform: string, externalU
 
 /** Applies (and removes) waiting refs for the customer of this chat. */
 export async function applyPendingRefs(ds: DataSource, conversationId: number): Promise<boolean> {
-  const rows: Array<{ id: number; data: PendingRef; company_id: number }> = await ds.query(`
-    SELECT p.id, p.data, cu.company_id FROM bot_conversation c
+  const rows: Array<{ id: number; data: PendingRef; company_id: number; platform: string; channel_user_id: number }> = await ds.query(`
+    SELECT p.id, p.data, cu.company_id, cu.platform, cu.id AS channel_user_id FROM bot_conversation c
       JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
       JOIN marketing_pending_ref p ON p.platform = cu.platform AND p.external_user_id = cu.external_user_id
      WHERE c.id = $1 AND p.created_at > NOW() - INTERVAL '30 minutes' ORDER BY p.id`, [conversationId]);
@@ -184,11 +188,36 @@ export async function applyPendingRefs(ds: DataSource, conversationId: number): 
     const ref = row.data;
     if (ref.kind === 'ref') linked = (await attributeRef(ds, conversationId, Number(row.company_id), ref.value)) || linked;
     else {
-      await ds.query(`UPDATE bot_conversation SET ad_source_id = $2, ad_source_type = 'ad', ad_headline = $3, ad_body = $4, ad_source_url = $5, ad_referred_at = NOW() WHERE id = $1`,
-        [conversationId, ref.value, String(ref.headline ?? '').slice(0, 1000), String(ref.body ?? '').slice(0, 2000), String(ref.url ?? '').slice(0, 1000)]);
+      await ds.query(`UPDATE bot_conversation SET ad_source_id = $2, ad_source_type = 'ad', ad_headline = $3, ad_body = $4, ad_source_url = $5, ad_referred_at = NOW(),
+                       ad_media_url = $6, ad_media_type = $7 WHERE id = $1`,
+        [conversationId, ref.value, String(ref.headline ?? '').slice(0, 1000), String(ref.body ?? '').slice(0, 2000), String(ref.url ?? '').slice(0, 1000), ref.media_url ?? null, ref.media_type ?? null]);
+      await ds.query(`UPDATE bot_conversation SET ad_platform = $2 WHERE id = $1`, [conversationId, row.platform]);
+      await recordAdClick(ds, { companyId: Number(row.company_id), conversationId, channelUserId: Number(row.channel_user_id) || null,
+        platform: String(row.platform), adId: ref.value, sourceType: 'ad', headline: ref.headline ?? '', body: ref.body ?? '', url: ref.url ?? '',
+        mediaUrl: ref.media_url ?? null, mediaType: ref.media_type ?? null, providerMessageId: null });
       await attributeAd(ds, conversationId, Number(row.company_id), ref.value);
       linked = true;
     }
   }
   return linked;
+}
+
+/** One ad click that opened (or re-opened) a chat. false = this webhook message was recorded before (no double counting). */
+export async function recordAdClick(ds: DataSource, click: {
+  companyId: number; conversationId: number; channelUserId: number | null; platform: string; adId: string; sourceType: string;
+  headline: string; body: string; url: string; mediaUrl: string | null; mediaType: string | null; providerMessageId: string | null;
+}): Promise<boolean> {
+  if (!click.providerMessageId) {
+    // Messenger "opened the chat from the ad" events have no message id: one per chat and ad within 10 minutes
+    const [recent] = await ds.query(`SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND ad_id = $2 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`,
+      [click.conversationId, click.adId]);
+    if (recent) return false;
+  }
+  const rows = await ds.query(`
+    INSERT INTO marketing_ad_click (company_id, conversation_id, bot_channel_user_id, platform, ad_id, source_type, headline, body, url, media_url, media_type, provider_message_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    ON CONFLICT (provider_message_id) WHERE provider_message_id IS NOT NULL DO NOTHING RETURNING id`,
+    [click.companyId, click.conversationId, click.channelUserId, click.platform, String(click.adId).slice(0, 64), String(click.sourceType || 'ad').slice(0, 20),
+      click.headline.slice(0, 1000) || null, click.body.slice(0, 2000) || null, click.url.slice(0, 1000) || null, click.mediaUrl, click.mediaType, click.providerMessageId]);
+  return Array.isArray(rows) && rows.length > 0;
 }
