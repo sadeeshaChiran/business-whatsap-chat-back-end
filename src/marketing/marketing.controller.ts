@@ -177,6 +177,10 @@ export class MarketingController {
   @RequiresFeature('marketing_pro')
   campaigns(@CurrentUser() user: AuthenticatedUser, @Query() query: DaysDto) { return this.marketing.campaigns(user, query.days); }
 
+  @Get('campaigns/:id')
+  @RequiresFeature('marketing_pro')
+  campaignDetail(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Query() query: DaysDto) { return this.marketing.campaignDetail(user, id, query.days); }
+
   @Post('campaigns/:id/status')
   @RequiresFeature('marketing_pro')
   campaignStatus(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: CampaignStatusDto) { return this.marketing.setCampaignStatus(user, id, dto.status); }

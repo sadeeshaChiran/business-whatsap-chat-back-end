@@ -1,3 +1,4 @@
+import { SignupHook } from '../common/signup-hook';
 import { BrandingService } from '../platform/branding.service';
 import {
   BadRequestException,
@@ -139,7 +140,10 @@ export class AuthService {
 
     savedCompany.admin_user_id = user.id;
     await this.companyRepository.save(savedCompany);
-    return this.buildAuthResponse(user, savedCompany);
+    // start on Free (+ welcome trial when switched on) – no "choose a package" wall after sign-up
+    await SignupHook.run(Number(savedCompany.id));
+    const started = await this.companyRepository.findOne({ where: { id: savedCompany.id } });
+    return this.buildAuthResponse(user, started ?? savedCompany);
   }
 
   /* ───────────────────────── Login ───────────────────────── */

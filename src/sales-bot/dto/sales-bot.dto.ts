@@ -317,6 +317,12 @@ export class SalesBotTestDto {
 /* ───────── Customer simulator (multipart form) ───────── */
 
 export class SimulateCustomerMessageDto {
+  /** pretend the chat came from this Click-to-WhatsApp ad (tests "came from an ad" flows) */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  ad_id?: string;
+
   @IsString()
   @MinLength(9)
   @MaxLength(20)

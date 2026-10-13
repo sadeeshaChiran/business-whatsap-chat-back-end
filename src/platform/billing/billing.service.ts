@@ -48,7 +48,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     // renewal reminders once an hour
-    this.timer = setInterval(() => void this.sendRenewalReminders(), 60 * 60 * 1000);
+    this.timer = setInterval(() => { void this.sendRenewalReminders(); void this.quota.sweepTrials(); }, 60 * 60 * 1000);
   }
 
   onModuleDestroy() {
@@ -82,7 +82,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const [usage, sub, packages, packs, bank, payments] = await Promise.all([
       this.quota.usage(companyId),
       this.quota.ensure(companyId),
-      this.packageRepository.find({ where: { is_active: true, is_public: true }, order: { sort_order: 'ASC', id: 'ASC' } }),
+      // public packages + a custom package made for this company
+      this.packageRepository.createQueryBuilder('p')
+        .where('p.is_active = TRUE AND ((p.is_public = TRUE AND p.company_id IS NULL) OR p.company_id = :companyId)', { companyId })
+        .orderBy('p.company_id IS NULL', 'ASC').addOrderBy('p.sort_order', 'ASC').addOrderBy('p.id', 'ASC').getMany(),
       this.packRepository.find({ where: { is_active: true }, order: { sort_order: 'ASC', id: 'ASC' } }),
       this.bankDetails(),
       this.paymentRepository.find({ where: { company_id: companyId }, order: { id: 'DESC' }, take: 50 }),
@@ -91,11 +94,11 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const credits = (tokens: number) => Math.round((num(tokens) / tpc) * 10) / 10;
     return {
       usage,
-      subscription: { auto_renew: sub.auto_renew, period_end: sub.period_end, billing_cycle: sub.billing_cycle, status: sub.status },
+      subscription: { auto_renew: sub.auto_renew, period_end: sub.period_end, billing_cycle: sub.billing_cycle, status: sub.status, is_trial: sub.is_trial },
       packages: packages.map((pkg) => ({
         id: pkg.id, code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: num(pkg.price_monthly),
         price_yearly: num(pkg.price_yearly), tokens_per_month: num(pkg.tokens_per_month), max_agents: pkg.max_agents, features: pkg.features ?? [],
-        credits_per_month: credits(num(pkg.tokens_per_month)),
+        credits_per_month: credits(num(pkg.tokens_per_month)), custom: pkg.company_id != null, bot_days: pkg.bot_days ?? null,
         max_products: pkg.max_products, max_services: pkg.max_services ?? null, limits: resolveLimits(pkg), ...offerFields(pkg, perReply, num(pkg.tokens_per_month)),
       })),
       token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
@@ -116,6 +119,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const cycle = dto.billing_cycle ?? 'monthly';
     if (dto.kind === 'subscription') {
       pkg = dto.package_id ? await this.packageRepository.findOne({ where: { id: dto.package_id, is_active: true } }) : null;
+      if (pkg && pkg.company_id != null && Number(pkg.company_id) !== companyId) pkg = null; // someone else's custom package
       if (!pkg) throw new BadRequestException('Choose a package.');
       const price = priceFor(pkg, cycle);
       amount = price.amount;
@@ -287,6 +291,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
             sub.warned_100_at = null;
           }
         }
+        if (sub.is_trial) {
+          // paying during a free trial: the trial becomes a normal package (same package → paid time starts after the trial)
+          await this.dataSource.query(`UPDATE company_trial SET converted = TRUE, ended_at = COALESCE(ended_at, NOW()) WHERE company_id = $1 AND ended_at IS NULL`, [companyId]);
+          sub.is_trial = false;
+          sub.fallback_package_id = null;
+          sub.trial_note = null;
+        }
         sub.package_id = pkg.id;
         sub.billing_cycle = (payment.billing_cycle ?? 'monthly') as 'monthly' | 'yearly';
         sub.status = 'active';
@@ -354,7 +365,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     try {
       const subs = await this.subscriptionRepository
         .createQueryBuilder('s')
-        .where("s.status = 'active' AND s.auto_renew = FALSE AND s.period_end IS NOT NULL")
+        .where("s.status = 'active' AND s.auto_renew = FALSE AND s.is_trial = FALSE AND s.period_end IS NOT NULL")
         .andWhere("s.period_end > NOW() AND s.period_end < NOW() + INTERVAL '7 days'")
         .getMany();
       for (const sub of subs) {

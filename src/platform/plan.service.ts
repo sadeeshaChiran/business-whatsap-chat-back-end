@@ -28,6 +28,7 @@ export class PlanService {
     this.cache = null;
     this.creditCache = null;
     this.companyPlans.clear();
+    this.creditHolders.clear();
   }
 
   private creditCache: { at: number; value: number; perReply: number } | null = null;
@@ -96,16 +97,39 @@ export class PlanService {
   /** Called when a company's package changes (so the new limits apply at once). */
   forgetCompany(companyId: number) {
     this.companyPlans.delete(companyId);
+    this.creditHolders.delete(companyId);
   }
 
-  async limitsForCompany(companyId: number): Promise<ResolvedLimits & { package: PlatformPackage | null }> {
+  private creditHolders = new Map<number, { at: number; active: boolean }>();
+
+  /** The company has bought / been given credits that are still valid. */
+  async hasActiveCredits(companyId: number): Promise<boolean> {
+    const hit = this.creditHolders.get(companyId);
+    if (hit && Date.now() - hit.at < 30_000) return hit.active;
+    const rows: Array<{ active: boolean }> = await this.packageRepository.manager.query(
+      `SELECT EXISTS (SELECT 1 FROM token_adjustment WHERE company_id = $1 AND tokens > 0 AND expires_at > NOW()) AS active`, [companyId]).catch(() => []);
+    const active = Boolean(rows[0]?.active);
+    this.creditHolders.set(companyId, { at: Date.now(), active });
+    return active;
+  }
+
+  /** Features the company gets only because it has valid bought credits (Free + top-up). */
+  static readonly CREDIT_FEATURES = ['messenger', 'instagram', 'social'];
+
+  async limitsForCompany(companyId: number): Promise<ResolvedLimits & { package: PlatformPackage | null; unlocked_by_credits: string[] }> {
     const pkg = await this.byCode(await this.companyPlan(companyId));
-    return { ...resolveLimits(pkg), package: pkg };
+    const limits = resolveLimits(pkg);
+    const unlocked: string[] = [];
+    const locked = PlanService.CREDIT_FEATURES.filter((key) => !limits.features[key]);
+    if (pkg && limits.features.credits_unlock && locked.length && (await this.hasActiveCredits(companyId))) {
+      for (const key of locked) { limits.features[key] = true; unlocked.push(key); }
+    }
+    return { ...limits, package: pkg, unlocked_by_credits: unlocked };
   }
 
   /** Cheapest active public package that has this feature (for "available from the X package"). */
   async upgradeFor(key: string, currentPrice = 0): Promise<string | null> {
-    const packages = (await this.packages()).filter((p) => p.is_active && p.is_public && Number(p.price_monthly) >= currentPrice);
+    const packages = (await this.packages()).filter((p) => p.is_active && p.is_public && !p.company_id && Number(p.price_monthly) >= currentPrice);
     const found = packages
       .sort((a, b) => Number(a.price_monthly) - Number(b.price_monthly))
       .find((p) => resolveLimits(p).features[key]);
@@ -128,7 +152,8 @@ export class PlanService {
     throw new ForbiddenException({
       statusCode: 403, error: 'Forbidden', code: 'FEATURE_LOCKED', feature: missing, upgrade_to: upgrade,
       message: `${names} ${list.length > 1 ? 'are' : 'is'} not included in your ${limits.package?.name ?? 'current'} package.` +
-        (upgrade ? ` It is available from the ${upgrade} package – upgrade in Billing.` : ' Contact Agent Metra to upgrade.'),
+        (upgrade ? ` It is available from the ${upgrade} package – upgrade in Billing.` : ' Contact Agent Metra to upgrade.') +
+        (PlanService.CREDIT_FEATURES.includes(missing) && limits.features.credits_unlock ? ' Or buy AI credits in Billing – they switch it on.' : ''),
     });
   }
 
@@ -139,6 +164,6 @@ export class PlanService {
     for (const item of LIMIT_CATALOG) {
       if (item.kind === 'feature' && !limits.features[item.key]) upgrade_for[item.key] = await this.upgradeFor(item.key, Number(limits.package?.price_monthly ?? 0));
     }
-    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, max_services: limits.max_services, upgrade_for };
+    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, max_services: limits.max_services, upgrade_for, unlocked_by_credits: limits.unlocked_by_credits };
   }
 }
