@@ -33,9 +33,10 @@ export class MetaSocialSenderService {
       order: { updated_at: 'DESC' },
     });
     if (!connection?.page_access_token) throw new Error('no connected Meta Page for this conversation');
-    const sendAccountId = platform === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
-    if (!sendAccountId) throw new Error('the Meta channel is not fully connected');
-    return { token: connection.page_access_token, sendAccountId };
+    if (platform === 'instagram' && !connection.instagram_business_account_id) throw new Error('the Meta channel is not fully connected');
+    // Instagram with Facebook Login is sent through the Messenger Send API of the linked Page (POST /{page-id}/messages).
+    // /{ig-user-id}/messages belongs to the "Instagram login" API and fails with "(#3) does not have the capability".
+    return { token: connection.page_access_token, sendAccountId: connection.page_id };
   }
 
   private version(): string {

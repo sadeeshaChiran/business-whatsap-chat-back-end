@@ -28,12 +28,12 @@ describe('MetaSocialSenderService', () => {
     expect(init.headers.Authorization).toBe('Bearer tok');
   });
 
-  it('sends Instagram text from the Instagram account id', async () => {
+  it('sends Instagram text through the linked Page (Facebook Login Send API)', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm.2' }) });
     global.fetch = fetchMock as never;
     const svc = new MetaSocialSenderService(repo(connection) as never);
     await svc.sendText(7, 'instagram', 'IG1', 'USER9', 'hi');
-    expect(fetchMock.mock.calls[0][0]).toContain('/IG1/messages');
+    expect(fetchMock.mock.calls[0][0]).toContain('/PAGE1/messages');
   });
 
   it('cuts text over the 2000-character limit', async () => {

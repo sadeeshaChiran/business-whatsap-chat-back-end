@@ -346,8 +346,9 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const c = await this.comment(companyId, id);
     if (c.private_replied_at) throw new BadRequestException('A private reply was already sent for this comment (Meta allows one).');
     const page = await this.page(companyId);
-    const sender = c.platform === 'instagram' ? page.instagram_business_account_id : page.page_id;
-    if (!sender) throw new BadRequestException('Instagram is not linked to this Page.');
+    if (c.platform === 'instagram' && !page.instagram_business_account_id) throw new BadRequestException('Instagram is not linked to this Page.');
+    // Instagram (Facebook Login) private replies also go through the Page's Send API
+    const sender = page.page_id;
     try {
       const sent = await graphRequest<{ recipient_id?: string; message_id?: string }>('POST', `/${sender}/messages`, page.page_access_token,
         { recipient: { comment_id: c.comment_id }, message: { text } });

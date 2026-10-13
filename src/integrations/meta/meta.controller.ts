@@ -417,7 +417,7 @@ export class MetaController {
         posts.push(...instagramPosts);
         if (!instagramPosts.length) {
           warnings.push(
-            'No Instagram posts returned. Post on Instagram or check instagram_business_basic permission in your Meta app configuration.',
+            'No Instagram posts returned. Post on Instagram or check that the instagram_basic permission was granted (reconnect the Page).',
           );
         }
       } catch (error) {

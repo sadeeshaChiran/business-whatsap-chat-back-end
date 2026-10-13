@@ -2631,7 +2631,8 @@ export class BotAdminService {
     });
     if (!connection?.page_access_token) throw new BadRequestException('Connect a Meta Page before replying to this conversation.');
     if (platform === 'instagram' && !connection.instagram_business_account_id) throw new BadRequestException('Link an Instagram Business account before replying.');
-    const sendAccountId = platform === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
+    // Instagram (Facebook Login) replies go through the linked Page's Send API
+    const sendAccountId = connection.page_id;
     const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
     const response = await fetch(`https://graph.facebook.com/${version}/${sendAccountId}/messages`, {
       method: 'POST',
@@ -2661,8 +2662,9 @@ export class BotAdminService {
         ? `This customer wrote to your previous ${normalized === 'instagram' ? 'Instagram account' : 'Facebook Page'}${old.page_name ? ` (${old.page_name})` : ''}, which is no longer connected. Reconnect it to reply here.`
         : 'Connect a Meta Page before replying.');
     }
-    const sendAccountId = normalized === 'instagram' ? connection.instagram_business_account_id : connection.page_id;
-    if (!sendAccountId) throw new BadRequestException('The selected Meta channel is not connected.');
+    if (normalized === 'instagram' && !connection.instagram_business_account_id) throw new BadRequestException('The selected Meta channel is not connected.');
+    // Instagram (Facebook Login) replies go through the linked Page's Send API
+    const sendAccountId = connection.page_id;
     return { connection, sendAccountId, platform: normalized };
   }
 
