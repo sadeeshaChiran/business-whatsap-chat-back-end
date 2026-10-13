@@ -29,6 +29,44 @@ import { buildMetaOAuthState } from './meta-oauth-state.util';
 import { webhookCheck } from './webhook-stats';
 import { tokenScopes } from '../../marketing/graph';
 
+type HealthCheck = { key: string; label: string; ok: boolean | null; detail: string; fix?: string; tech?: boolean; tech_detail?: string };
+
+/** Platform-side checks: shown under "Technical details", not in the shop owner's list. */
+const TECH_KEYS = new Set(['public_url', 'provider', 'token_app', 'delivery', 'app_webhook']);
+const QUALITY: Record<string, string> = {
+  GREEN: 'Good',
+  YELLOW: 'Medium – avoid sending too many marketing messages',
+  RED: 'Low – Meta may limit this number. Send fewer marketing messages.',
+};
+
+/** Plain words for the shop owner; the original wording stays for the technical list. */
+export function presentChecks(checks: HealthCheck[], channel: 'whatsapp' | 'messenger' | 'instagram'): HealthCheck[] {
+  return checks.map((raw) => {
+    if (TECH_KEYS.has(raw.key)) return { ...raw, tech: true };
+    const check = { ...raw, tech_detail: raw.detail };
+    switch (check.key) {
+      case 'token':
+        return { ...check, label: channel === 'whatsapp' ? 'WhatsApp number connected' : 'Facebook Page connected',
+          detail: check.ok ? check.detail : `Please connect again. Meta says: ${check.detail}` };
+      case 'quality':
+        return { ...check, label: 'Number health', detail: QUALITY[check.detail] ?? check.detail };
+      case 'registered':
+        return { ...check, label: 'Number can send and receive messages',
+          detail: check.ok ? 'Ready' : 'Not ready yet. Press “Fix it” and enter your 6-digit WhatsApp PIN (or choose a new one).' };
+      case 'webhook':
+        return { ...check, label: 'New messages come to your Inbox',
+          detail: check.ok ? 'On' : check.fix ? 'Off – press “Fix it”.' : `Off – ${check.detail}` };
+      case 'linked':
+        return { ...check, label: 'Instagram account linked', detail: check.ok ? 'Linked to your Facebook Page' : check.detail };
+      case 'dm_access':
+        return { ...check, label: 'Instagram setting “Allow access to messages”',
+          detail: 'Make sure it is on: Instagram app → Settings → Messages and story replies → Connected tools.' };
+      default:
+        return check;
+    }
+  });
+}
+
 @Controller('integrations/meta')
 @ApiTags('Integrations - Meta')
 @ApiBearerAuth()
@@ -142,7 +180,7 @@ export class MetaController {
   @Get('health')
   async health(@CurrentUser() user: AuthenticatedUser) {
     await this.assertAdmin(user);
-    type Check = { key: string; label: string; ok: boolean | null; detail: string; fix?: string };
+    type Check = HealthCheck;
     const publicBase = process.env.PUBLIC_API_BASE_URL?.trim() || '';
     const whatsapp: Check[] = [];
     const channel = await this.whatsappChannelService.getForCompany(user.company_id);
@@ -213,7 +251,7 @@ export class MetaController {
       instagram.push({ key: 'dm_access', label: 'Instagram → Settings → Messages → "Allow access to messages" is on', ok: null, detail: 'Check this in the Instagram app (it cannot be read by Agent Metra).' });
       instagram.push({ key: 'app_webhook', label: 'Meta app: Instagram webhook "messages" is subscribed', ok: null, detail: 'Meta Developers → your app → Webhooks → Instagram → subscribe to "messages".' });
     }
-    return { whatsapp, messenger, instagram };
+    return { whatsapp: presentChecks(whatsapp, 'whatsapp'), messenger: presentChecks(messenger, 'messenger'), instagram: presentChecks(instagram, 'instagram') };
   }
 
   /** Who made this access token, and does it expire? (debug_token with the app token) */

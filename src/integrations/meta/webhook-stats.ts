@@ -34,7 +34,10 @@ export function webhookCheck(kind: WebhookKind): { ok: boolean | null; detail: s
   if (!s.received_at) {
     return { ok: null, detail: `Meta has not called the webhook since the server started (${startedAt.slice(0, 16).replace('T', ' ')} UTC). Send a test message, then press “Check again”.` };
   }
+  // messages keep arriving → fine, even if another (old) Meta app's calls are refused now and then
+  const recentAccept = s.accepted_at && Date.now() - new Date(s.accepted_at).getTime() < 24 * 3600_000;
   const lastRejected = s.rejected_at && (!s.accepted_at || s.rejected_at > s.accepted_at);
-  if (lastRejected) return { ok: false, detail: `Last call was refused: ${s.reason}` };
-  return { ok: true, detail: `Last message from Meta: ${s.accepted_at?.slice(0, 19).replace('T', ' ')} UTC (${s.count} since start)` };
+  if (lastRejected && !recentAccept) return { ok: false, detail: `Last call was refused: ${s.reason}` };
+  const note = lastRejected ? ` Some calls were refused (${s.reason})` : '';
+  return { ok: true, detail: `Last message from Meta: ${s.accepted_at?.slice(0, 19).replace('T', ' ')} UTC (${s.count} since start).${note}` };
 }

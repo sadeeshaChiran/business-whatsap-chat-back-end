@@ -81,11 +81,13 @@ test('connection check finds the old app, a temporary token and an unregistered 
   const hook = check(wa, 'webhook');
   assert.equal(hook.ok, false);
   assert.equal(hook.fix, 'whatsapp_subscribe');
-  assert.match(hook.detail, /Old app \(old-app\) – not this platform's Meta app/);
+  assert.match(hook.tech_detail, /Old app \(old-app\) – not this platform's Meta app/);
+  assert.equal(hook.label, 'New messages come to your Inbox', 'plain words for the shop owner');
+  assert.equal(check(wa, 'token_app').tech, true, 'platform checks are marked technical');
   const messenger = res.data.messenger;
   assert.equal(check(messenger, 'webhook').ok, false);
   assert.equal(check(messenger, 'webhook').fix, 'messenger_subscribe', 'another app subscribed does not count');
-  assert.match(check(messenger, 'webhook').detail, /Old app \(old-app\)/);
+  assert.match(check(messenger, 'webhook').tech_detail, /Old app \(old-app\)/);
 });
 
 test('"Fix it": subscribe WhatsApp + Page, register the number with the PIN', async () => {
