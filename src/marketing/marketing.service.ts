@@ -8,7 +8,9 @@ import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../bot-admin/entities/bot-message.entity';
 import { MarketingHook } from '../common/marketing-hook';
 import { buildTemplateComponents, type TemplateInput } from './templates';
-import { applyPendingRefs, attributeAd, attributeBroadcastReply, attributeRef, attributeText, linkTags, savePendingRef } from './attribution';
+import { SAMPLE_TEMPLATES, explainWhatsAppError } from './whatsapp-errors';
+import { adAccountsSummary, adReport, adsReport } from './ads-report';
+import { applyPendingRefs, attributeAd, attributeBroadcastReply, attributeRef, attributeText, linkTags, recordAdClick, savePendingRef } from './attribution';
 import {
   GraphError, adsLoginUrl, exchangeAdsCode, fromMinorUnits, graphRequest, normalisePhone, readAdsState, sha256, toMinorUnits,
 } from './graph';
@@ -107,64 +109,156 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
    */
   async captureReferrals(body: unknown, platform: 'whatsapp' | 'messenger' | 'instagram') {
     const root = (body as { body?: unknown })?.body && !(body as { entry?: unknown }).entry ? (body as { body: unknown }).body : body;
-    const payload = root as { entry?: Array<{ changes?: Array<{ value?: { messages?: Array<Record<string, any>> } }>; messaging?: Array<Record<string, any>> }> };
-    type Found = { mid?: string; senderId?: string; kind: 'ad' | 'ref' | 'text'; value: string; type?: string; headline?: string; body?: string; url?: string; clid?: string | null };
+    const payload = root as { entry?: Array<{ changes?: Array<{ value?: { messages?: Array<Record<string, any>> } }>; messaging?: Array<Record<string, any>> }>; data?: unknown };
+    type Found = {
+      mid?: string; senderId?: string; companyId?: number | null; kind: 'ad' | 'ref' | 'text'; value: string; type?: string; headline?: string; body?: string; url?: string;
+      clid?: string | null; mediaUrl?: string | null; mediaType?: string | null;
+    };
     const found: Found[] = [];
+    const str = (value: unknown) => (value == null ? '' : String(value));
     for (const entry of payload?.entry ?? []) {
       for (const change of entry.changes ?? []) {
         for (const message of change.value?.messages ?? []) {
           const r = message.referral;
           if (r?.source_id) {
-            found.push({ mid: message.id, kind: 'ad', value: String(r.source_id), type: String(r.source_type ?? 'ad'), headline: String(r.headline ?? ''),
-              body: String(r.body ?? ''), url: String(r.source_url ?? ''), clid: r.ctwa_clid ? String(r.ctwa_clid) : null });
+            // Click-to-WhatsApp: ad (source_type ad) or a boosted / shared post (source_type post)
+            found.push({ mid: message.id, kind: 'ad', value: str(r.source_id), type: str(r.source_type || 'ad'), headline: str(r.headline),
+              body: str(r.body), url: str(r.source_url), clid: r.ctwa_clid ? str(r.ctwa_clid) : null,
+              mediaUrl: str(r.image_url || r.thumbnail_url || r.video_url) || null, mediaType: r.media_type ? str(r.media_type) : null });
           }
-          const text = String(message.text?.body ?? '');
+          const text = str(message.text?.body);
           if (text && linkTags(text).length) found.push({ mid: message.id, kind: 'text', value: text });
         }
       }
+      // Messenger / Instagram: the Page (entry.id) tells which shop the customer wrote to (a person's id is only unique per Page)
+      const pageCompany = entry.messaging?.length ? await this.pageCompany(String((entry as { id?: string }).id ?? '')) : null;
       for (const event of entry.messaging ?? []) {
         const r = event.referral ?? event.message?.referral ?? event.postback?.referral;
-        const senderId = event.sender?.id ? String(event.sender.id) : undefined;
+        const senderId = event.sender?.id ? str(event.sender.id) : undefined;
         if (r && (r.ad_id || r.source === 'ADS')) {
-          found.push({ mid: event.message?.mid, senderId, kind: 'ad', value: String(r.ad_id ?? r.ref ?? 'unknown'), type: 'ad',
-            headline: String(r.ads_context_data?.ad_title ?? ''), body: '', url: String(r.ads_context_data?.photo_url ?? ''), clid: null });
+          const ctx = r.ads_context_data ?? {};
+          found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'ad', value: str(r.ad_id ?? r.ref ?? 'unknown'), type: 'ad',
+            headline: str(ctx.ad_title), body: '', url: str(ctx.post_id ? `https://www.facebook.com/${ctx.post_id}` : ''), clid: null,
+            mediaUrl: str(ctx.photo_url || ctx.video_url) || null, mediaType: ctx.video_url ? 'video' : ctx.photo_url ? 'image' : null });
         } else if (r?.ref) {
-          found.push({ mid: event.message?.mid, senderId, kind: 'ref', value: String(r.ref) });
+          found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'ref', value: str(r.ref) });
         }
-        const text = String(event.message?.text ?? '');
-        if (text && linkTags(text).length) found.push({ mid: event.message?.mid, senderId, kind: 'text', value: text });
+        const text = str(event.message?.text);
+        if (text && linkTags(text).length) found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'text', value: text });
+      }
+    }
+    // QR WhatsApp (Evolution): the ad comes as contextInfo.externalAdReply on the message
+    if (platform === 'whatsapp' && payload?.data) {
+      const items = (Array.isArray(payload.data) ? payload.data : [payload.data]) as Array<Record<string, any>>;
+      for (const item of items) {
+        if (item?.key?.fromMe) continue;
+        const message = (item?.message ?? {}) as Record<string, any>;
+        let ad: Record<string, any> | undefined = item?.contextInfo?.externalAdReply;
+        for (const part of Object.values(message)) {
+          if (!ad && part && typeof part === 'object') ad = (part as { contextInfo?: { externalAdReply?: Record<string, any> } }).contextInfo?.externalAdReply;
+        }
+        if (ad && (ad.sourceId || ad.sourceUrl || ad.title)) {
+          found.push({ mid: item?.key?.id ? str(item.key.id) : undefined, kind: 'ad', value: str(ad.sourceId || ad.sourceUrl || ad.title).slice(0, 64),
+            type: str(ad.sourceType || 'ad'), headline: str(ad.title), body: str(ad.body), url: str(ad.sourceUrl), clid: ad.ctwaClid ? str(ad.ctwaClid) : null,
+            mediaUrl: str(ad.thumbnailUrl || ad.mediaUrl || ad.originalImageUrl) || null, mediaType: Number(ad.mediaType) === 2 ? 'video' : 'image' });
+        }
+        const text = str(message.conversation ?? message.extendedTextMessage?.text);
+        if (text && linkTags(text).length && item?.key?.id) found.push({ mid: str(item.key.id), kind: 'text', value: text });
       }
     }
     for (const ref of found) {
-      let conversation: { id: number; company_id: number } | null = null;
+      let conversation: { id: number; company_id: number; channel_user_id: number | null } | null = null;
       if (ref.mid) {
         const [row] = await this.dataSource.query(`
-          SELECT m.conversation_id AS id, cu.company_id FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+          SELECT m.conversation_id AS id, cu.company_id, cu.id AS channel_user_id FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
             JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
            WHERE m.provider_message_id = $1 OR m.provider_message_id LIKE $1 || ':%' ORDER BY m.id LIMIT 1`, [ref.mid]);
-        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id) } : null;
+        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id), channel_user_id: row.channel_user_id ? Number(row.channel_user_id) : null } : null;
       }
       if (!conversation && ref.senderId) {
         const [row] = await this.dataSource.query(`
-          SELECT c.id, cu.company_id FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
-           WHERE cu.platform = $1 AND cu.external_user_id = $2 ORDER BY c.id DESC LIMIT 1`, [platform, ref.senderId]);
-        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id) } : null;
+          SELECT c.id, cu.company_id, cu.id AS channel_user_id FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE cu.platform = $1 AND cu.external_user_id = $2 AND ($3::bigint IS NULL OR cu.company_id = $3) ORDER BY c.id DESC LIMIT 1`, [platform, ref.senderId, ref.companyId ?? null]);
+        conversation = row ? { id: Number(row.id), company_id: Number(row.company_id), channel_user_id: row.channel_user_id ? Number(row.channel_user_id) : null } : null;
       }
       if (!conversation) {
         // a referral before the first message (new customer): keep it until the chat exists
-        if (ref.senderId && ref.kind !== 'text') await savePendingRef(this.dataSource, platform, ref.senderId, { kind: ref.kind, value: ref.value, headline: ref.headline, body: ref.body, url: ref.url });
+        if (ref.senderId && ref.kind !== 'text') await savePendingRef(this.dataSource, platform, ref.senderId, { kind: ref.kind, value: ref.value, headline: ref.headline, body: ref.body, url: ref.url, media_url: ref.mediaUrl ?? undefined, media_type: ref.mediaType ?? undefined });
         continue;
       }
       if (ref.kind === 'text') { await attributeText(this.dataSource, conversation.id, conversation.company_id, ref.value); continue; }
       if (ref.kind === 'ref') { await attributeRef(this.dataSource, conversation.id, conversation.company_id, ref.value); continue; }
+      // every ad click is kept once (the same webhook message is never counted twice)
+      const recorded = await recordAdClick(this.dataSource, {
+        companyId: conversation.company_id, conversationId: conversation.id, channelUserId: conversation.channel_user_id, platform, adId: ref.value,
+        sourceType: ref.type ?? 'ad', headline: ref.headline ?? '', body: ref.body ?? '', url: ref.url ?? '', mediaUrl: ref.mediaUrl ?? null, mediaType: ref.mediaType ?? null,
+        providerMessageId: ref.mid ?? null,
+      });
+      if (!recorded) continue;
       // latest ad click wins for this chat
       await this.dataSource.query(`
         UPDATE bot_conversation SET ad_source_id = $2, ad_source_type = $3, ad_headline = $4, ad_source_url = $5,
-               ad_ctwa_clid = COALESCE($6, ad_ctwa_clid), ad_platform = $7, ad_referred_at = NOW(), ad_body = $8
-         WHERE id = $1`, [conversation.id, ref.value, ref.type ?? 'ad', String(ref.headline || ref.body || '').slice(0, 1000), String(ref.url ?? '').slice(0, 1000), ref.clid ?? null, platform, String(ref.body ?? '').slice(0, 2000)]);
+               ad_ctwa_clid = COALESCE($6, ad_ctwa_clid), ad_platform = $7, ad_referred_at = NOW(), ad_body = $8, ad_media_url = $9, ad_media_type = $10
+         WHERE id = $1`, [conversation.id, ref.value, ref.type ?? 'ad', String(ref.headline || ref.body || '').slice(0, 1000), String(ref.url ?? '').slice(0, 1000), ref.clid ?? null, platform,
+        String(ref.body ?? '').slice(0, 2000), ref.mediaUrl ?? null, ref.mediaType ?? null]);
       await this.resolveAdCampaign(conversation.company_id, ref.value).catch(() => undefined);
       await attributeAd(this.dataSource, conversation.id, conversation.company_id, ref.value);
     }
+    // Messenger / Instagram: an ad opened the chat before the first message ("get started") → link it now that the chat exists
+    for (const entry of payload?.entry ?? []) {
+      if (!entry.messaging?.length) continue;
+      const pageCompany = await this.pageCompany(String((entry as { id?: string }).id ?? ''));
+      for (const event of entry.messaging ?? []) {
+        if (!event.message || event.message.is_echo || !event.sender?.id) continue;
+        const [row] = await this.dataSource.query(`
+          SELECT c.id FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           WHERE cu.platform = $1 AND cu.external_user_id = $2 AND ($3::bigint IS NULL OR cu.company_id = $3) ORDER BY c.id DESC LIMIT 1`, [platform, String(event.sender.id), pageCompany]);
+        if (row) await applyPendingRefs(this.dataSource, Number(row.id)).catch(() => undefined);
+      }
+    }
+  }
+
+  /* ═══════════════ Ads & leads: ad by ad ═══════════════ */
+
+  /** The Meta login when connected (no error when it is not: our own chats still show). */
+  private async optionalMeta(companyId: number) {
+    const s = await this.settings(companyId);
+    return s.meta_user_token && (!s.token_expires_at || new Date(s.token_expires_at) > new Date()) ? { token: s.meta_user_token } : null;
+  }
+
+  async adsReport(user: AuthenticatedUser, daysRaw?: number) {
+    const companyId = await this.adminCompany(user);
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365);
+    const meta = await this.optionalMeta(companyId);
+    const report = await adsReport(this.dataSource, companyId, days, meta);
+    // ad / campaign names for ads Meta could name (cached for next time)
+    const unnamed = report.ads.filter((a) => !a.campaign_id).map((a) => a.ad_id);
+    if (unnamed.length && (await this.fillAdNames(companyId, unnamed))) return adsReport(this.dataSource, companyId, days, meta);
+    return report;
+  }
+
+  async adReport(user: AuthenticatedUser, adId: string, daysRaw?: number) {
+    const companyId = await this.adminCompany(user);
+    const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365);
+    const report = await adReport(this.dataSource, companyId, String(adId).slice(0, 64), days, await this.optionalMeta(companyId));
+    if (!report) throw new NotFoundException('No chats from this ad yet.');
+    return report;
+  }
+
+  async adAccountsSummary(user: AuthenticatedUser) {
+    const companyId = await this.adminCompany(user);
+    const settings = await this.settings(companyId);
+    if (!settings.meta_user_token) throw new BadRequestException('Connect with Meta first (Marketing → Settings).');
+    try { return await adAccountsSummary(settings.meta_user_token, settings.ad_account_id); } catch (error) { this.graphError(error); }
+  }
+
+  /** The shop of a Facebook Page / Instagram account id (null when unknown). */
+  private async pageCompany(accountId: string): Promise<number | null> {
+    if (!accountId) return null;
+    const [row] = await this.dataSource.query(`
+      SELECT company_id FROM meta_page_connections WHERE (page_id = $1 OR instagram_business_account_id = $1) AND status = 'CONNECTED'
+       ORDER BY updated_at DESC LIMIT 1`, [accountId]).catch(() => []);
+    return row ? Number(row.company_id) : null;
   }
 
   /** Fills the ad → Meta campaign cache when the ad account is connected (so campaigns can match by Meta campaign). */
@@ -637,6 +731,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           name: t.name, language: t.language, category: t.category, body,
           variables: (body.match(/\{\{\d+\}\}/g) ?? []).length,
           has_media_header: Boolean(header && header.format && header.format !== 'TEXT'),
+          /** Meta's sample (hello_world): only works from Meta's test number */
+          sample: SAMPLE_TEMPLATES.has(t.name),
         };
       });
     } catch (error) { this.graphError(error); }
@@ -667,6 +763,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           body, footer: part('FOOTER')?.text ?? '',
           buttons: (part('BUTTONS')?.buttons ?? []).map((b) => ({ type: b.type, text: b.text, url: b.url ?? null, phone_number: b.phone_number ?? null })),
           variables: (body.match(/\{\{\d+\}\}/g) ?? []).length,
+          sample: SAMPLE_TEMPLATES.has(t.name),
         };
       });
     } catch (error) { this.graphError(error); }
@@ -734,7 +831,46 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
                WHERE b.company_id = $1 AND r.status = 'sent' AND (r.sent_at AT TIME ZONE 'Asia/Colombo')::date = d.day)::int AS broadcast_messages
         FROM d ORDER BY d.day`, [companyId, Math.min(days, 90)]);
     const sent = sum('sent');
+    // where customers came from and what each source brought (orders / bookings within 28 days of the click or reply)
+    const ads = await adsReport(this.dataSource, companyId, days, await this.optionalMeta(companyId)).catch(() => null);
+    const sourceRows: Array<Record<string, unknown>> = await this.dataSource.query(`
+      WITH conv AS (
+        SELECT c.id, c.bot_channel_user_id AS cu, c.lead_stage,
+               CASE WHEN c.campaign_source = 'link' AND c.campaign_at > NOW() - make_interval(days => $2::int) THEN 'links'
+                    WHEN c.campaign_source = 'broadcast' AND c.campaign_at > NOW() - make_interval(days => $2::int) THEN 'broadcasts'
+                    WHEN c.ad_source_id IS NULL AND c.campaign_source IS NULL AND c.created_at > NOW() - make_interval(days => $2::int) THEN 'organic'
+               END AS source,
+               COALESCE(CASE WHEN c.campaign_source IN ('link', 'broadcast') THEN c.campaign_at END, c.created_at) AS since
+          FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+         WHERE cu.company_id = $1
+      )
+      SELECT source, COUNT(DISTINCT cu)::int AS people,
+             COUNT(DISTINCT cu) FILTER (WHERE lead_stage = 'lost')::int AS lost,
+             (SELECT COUNT(*) FROM bot_order o JOIN conv x ON x.cu = o.bot_channel_user_id AND x.source = conv.source
+               WHERE o.status::text <> 'Cancelled' AND o.created_at >= x.since AND o.created_at < x.since + make_interval(days => $3::int))::int AS orders,
+             (SELECT COALESCE(SUM(o.total_amount), 0) FROM bot_order o JOIN conv x ON x.cu = o.bot_channel_user_id AND x.source = conv.source
+               WHERE o.status::text <> 'Cancelled' AND o.created_at >= x.since AND o.created_at < x.since + make_interval(days => $3::int)) AS revenue,
+             (SELECT COUNT(*) FROM bot_booking b JOIN conv x ON x.cu = b.bot_channel_user_id AND x.source = conv.source
+               WHERE LOWER(b.status) NOT IN ('cancelled', 'rejected') AND b.created_at >= x.since AND b.created_at < x.since + make_interval(days => $3::int))::int AS bookings
+        FROM conv WHERE source IS NOT NULL GROUP BY source`, [companyId, days, ATTRIBUTION_DAYS]).catch(() => []);
+    const src = (key: string) => {
+      const row = sourceRows.find((r) => r.source === key) ?? {};
+      return { people: num(row.people), orders: num(row.orders), bookings: num(row.bookings), revenue: num(row.revenue), lost: num(row.lost), spend: null as number | null };
+    };
+    const sources = {
+      ads: ads ? { people: ads.totals.people, orders: ads.totals.orders, bookings: ads.totals.bookings, revenue: ads.totals.revenue, lost: ads.totals.lost, spend: ads.totals.spend } : src('ads'),
+      links: src('links'), broadcasts: src('broadcasts'), organic: src('organic'),
+    };
+    const settings = await this.settings(companyId);
     return {
+      sources,
+      top_ads: (ads?.ads ?? []).slice(0, 5).map((a) => ({ ad_id: a.ad_id, headline: a.headline || a.ad_name, media_url: a.media_url, type: a.type, people: a.people, won: a.won, lost: a.lost, revenue: a.revenue, spend: a.spend })),
+      ad_leads: ads ? { replied: ads.totals.replied, no_answer: ads.totals.no_answer, interested: ads.totals.interested, won: ads.totals.won, lost: ads.totals.lost, new_contacts: ads.totals.new_contacts } : null,
+      setup: {
+        whatsapp_cloud: channel?.provider_type === 'meta' && Boolean(channel?.meta_phone_number_id),
+        ads_connected: Boolean(settings.meta_user_token), ad_account_name: settings.ad_account_name, capi_enabled: Boolean(settings.capi_enabled),
+        active_links: num(links?.active), active_campaigns: num(campaigns?.active),
+      },
       days,
       whatsapp_cloud: channel?.provider_type === 'meta' && Boolean(channel?.meta_phone_number_id),
       broadcasts: {
@@ -788,6 +924,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const templates = await this.templates(user);
     const template = templates.find((t) => t.name === dto.template_name && t.language === dto.template_language);
     if (!template) throw new BadRequestException('Choose an approved template.');
+    if (template.sample) {
+      throw new BadRequestException(`“${template.name}” is Meta's sample template – it only works from Meta's test number, so every message would fail. Create your own template in Marketing → Message templates (usually approved in minutes) and use that.`);
+    }
     if (template.has_media_header) throw new BadRequestException('Templates with a photo / video header are not supported yet – use a text template.');
     const params = (dto.body_params ?? []).map((p) => String(p ?? '').trim());
     if (params.length !== template.variables || params.some((p) => !p)) throw new BadRequestException(`This template needs ${template.variables} value(s).`);
@@ -880,10 +1019,16 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const [row] = await this.dataSource.query(`SELECT * FROM marketing_broadcast WHERE id = $1 AND company_id = $2`, [id, companyId]);
     if (!row) throw new NotFoundException('Broadcast not found.');
     const stats = (await this.statsFor([id])).get(id) ?? MarketingService.EMPTY_STATS;
-    const failures = await this.dataSource.query(`
+    const failed: Array<{ phone: string; name: string; error: string }> = await this.dataSource.query(`
       SELECT r.phone, r.name, COALESCE(r.error, 'failed') AS error FROM marketing_broadcast_recipient r LEFT JOIN bot_message m ON m.id = r.message_id
        WHERE r.broadcast_id = $1 AND (r.status = 'failed' OR (r.status = 'sent' AND m.delivery_status = 'failed')) ORDER BY r.id LIMIT 50`, [id]);
-    return { ...row, stats, failures };
+    const failures = failed.map((f) => { const why = explainWhatsAppError(f.error); return { ...f, error: why.text, fix: why.fix, code: why.code, raw_error: f.error }; });
+    // the same reason for (almost) everyone → one clear headline with the fix
+    const reasons = new Map<string, number>();
+    for (const f of failures) reasons.set(f.error, (reasons.get(f.error) ?? 0) + 1);
+    const top = [...reasons.entries()].sort((a, b) => b[1] - a[1])[0];
+    const main = top && top[1] >= Math.max(2, failures.length * 0.6) ? failures.find((f) => f.error === top[0]) : null;
+    return { ...row, stats, failures, main_problem: main ? { text: main.error, fix: main.fix, count: top[1] } : null };
   }
 
   /** Sends queued recipients of due broadcasts, 25 per broadcast every 15 s. */

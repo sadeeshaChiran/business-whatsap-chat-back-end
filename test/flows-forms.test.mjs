@@ -71,19 +71,19 @@ test('flow: keyword → text, buttons with a jump, chat form, tag, final message
   assert.match(out.at(-1), /Please choose one of these/);
   await say(phone, '1');                            // number picks the first button
   out = await outbound(conv);
-  assert.ok(out.includes('A few quick questions:'), out.join(' | '));
-  assert.equal(out.at(-1), 'Your name?');
+  // one clean message: intro, what is coming, question 1 with the known name as a tap button
+  assert.match(out.at(-1), /^A few quick questions:\n\n📝 \*[^*]+\* – 4 quick questions\. Send \*stop\* any time to cancel\.\n\n\*1\/4\* Your name\?\n_Tap your name or type it_\n▸ Nimal$/, out.at(-1));
   await say(phone, 'Nimal Perera');
   await say(phone, '12345');                         // bad phone → error, same question
   out = await outbound(conv);
-  assert.match(out.at(-1), /valid phone number/);
+  assert.match(out.at(-1), /^⚠️ Please send a valid phone number[\s\S]*\*2\/4\* Phone number\?/);
   await say(phone, '077 123 4567');
   out = await outbound(conv);
-  assert.match(out.at(-1), /Which size\?/);
+  assert.match(out.at(-1), /\*3\/4\* Which size\?[\s\S]*▸ Small\n▸ Medium/);
   await say(phone, 'medium');
   await say(phone, 'skip');
   out = await outbound(conv);
-  assert.ok(out.includes('Thank you! We received your details.'), out.join(' | '));
+  assert.ok(out.some((o) => /^✅ Thank you! We received your details\.\n\n\*Your details\*\n• Your name: Nimal Perera\n• Phone number: \+94771234567\n• Which size: Medium$/.test(o)), out.join(' | '));
   assert.equal(out.at(-1), 'Great Nimal Perera, size Medium noted. We will call +94771234567.');
 
   const [sub] = await sql(`SELECT answers, source, conversation_id FROM chat_form_submission WHERE form_id = $1`, [formId]);

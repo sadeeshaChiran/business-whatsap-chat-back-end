@@ -172,6 +172,19 @@ export class MarketingController {
   @RequiresFeature('marketing_ads')
   attribution(@CurrentUser() user: AuthenticatedUser, @Query() query: DaysDto) { return this.marketing.attribution(user, query.days); }
 
+  /** Ads & leads: every ad / shared post that opened chats, with people, leads, orders, bookings, lost and Meta spend. */
+  @Get('ad-report')
+  @RequiresFeature('marketing_ads')
+  adReportList(@CurrentUser() user: AuthenticatedUser, @Query() query: DaysDto) { return this.marketing.adsReport(user, query.days); }
+
+  @Get('ad-report/:adId')
+  @RequiresFeature('marketing_ads')
+  adReportOne(@CurrentUser() user: AuthenticatedUser, @Param('adId') adId: string, @Query() query: DaysDto) { return this.marketing.adReport(user, adId, query.days); }
+
+  @Get('meta/ad-accounts/summary')
+  @RequiresFeature('marketing_pro')
+  adAccountsSummary(@CurrentUser() user: AuthenticatedUser) { return this.marketing.adAccountsSummary(user); }
+
   /* 2) + 3) campaigns */
   @Get('campaigns')
   @RequiresFeature('marketing_pro')

@@ -138,8 +138,6 @@ export class MetaMessagesController {
         saved += await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-webhook');
       }
     }
-    // ad tracking: Click-to-Messenger / Instagram ad referrals on the saved messages
-    MarketingHook.capture(body, platform);
     return { ok: true, saved };
   }
 
@@ -160,7 +158,11 @@ export class MetaMessagesController {
     if (message?.is_deleted) return saved;
     // sent through this app (agent reply, bot, private reply) → already saved when it was sent
     if (isEcho && String(message?.app_id ?? '') === String(process.env.META_APP_ID ?? '').trim()) return saved;
-    if (!message && !postback) return saved;
+    if (!message && !postback) {
+      // "opened the chat from an ad" (before the first message): kept until the chat exists
+      if ((event as { referral?: unknown }).referral) await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform);
+      return saved;
+    }
 
     const providerId = String(message?.mid ?? postback?.mid ?? '').trim() || null;
     if (providerId) {
@@ -215,6 +217,9 @@ export class MetaMessagesController {
     if (quoted && providerId) {
       await linkQuotedReply(this.messageRepository.manager, conversation.id, providerId, quoted).catch(() => undefined);
     }
+
+    // ad tracking before flows and the AI, so they know which ad the customer clicked
+    await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform);
 
     // Automation flows first (first message / keyword / ad / a waiting answer); a handled message gets no AI reply
     const referral = (event as { referral?: { ad_id?: string; source?: string } }).referral
