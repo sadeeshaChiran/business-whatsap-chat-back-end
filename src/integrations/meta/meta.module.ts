@@ -14,6 +14,7 @@ import { BotChannelUser } from '../../bot-admin/entities/bot-channel-user.entity
 import { BotConversation } from '../../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappModule } from '../../whatsapp/whatsapp.module';
+import { PageSubscriptionsRefresh } from './page-subscriptions.refresh';
 
 @Module({
   imports: [
@@ -30,7 +31,7 @@ import { WhatsappModule } from '../../whatsapp/whatsapp.module';
     WhatsappModule,
   ],
   controllers: [MetaController, MetaOAuthController, MetaMessagesController],
-  providers: [MetaGraphService, MetaPageConnectionService],
+  providers: [MetaGraphService, MetaPageConnectionService, PageSubscriptionsRefresh],
   exports: [MetaPageConnectionService, MetaGraphService],
 })
 export class MetaModule {}

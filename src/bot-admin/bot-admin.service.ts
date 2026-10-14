@@ -109,7 +109,8 @@ export function chatOrigin(row: { campaign_source?: string | null; ad_source_id?
   ad_referred_at?: Date | string | null; campaign_at?: Date | string | null; link_name?: string | null; campaign_name?: string | null }): ChatOrigin | null {
   if (row.ad_source_id) {
     const post = row.ad_source_type === 'post';
-    return { source: post ? 'post' : 'ad', label: String(row.ad_headline || row.campaign_name || (post ? 'Shared post' : 'Facebook / Instagram ad')).slice(0, 80), at: row.ad_referred_at ?? null };
+    const card = row.ad_source_type === 'card'; // replied to the ad / post card (Meta sent no ad id)
+    return { source: post ? 'post' : 'ad', label: String(row.ad_headline || row.campaign_name || (post ? 'Shared post' : card ? 'Your ad / post' : 'Facebook / Instagram ad')).slice(0, 80), at: row.ad_referred_at ?? null };
   }
   if (row.campaign_source === 'link') return { source: 'link', label: String(row.link_name || row.campaign_name || 'Short link / QR').slice(0, 80), at: row.campaign_at ?? null };
   if (row.campaign_source === 'broadcast') return { source: 'broadcast', label: String(row.campaign_name || 'Broadcast reply').slice(0, 80), at: row.campaign_at ?? null };
@@ -1907,11 +1908,14 @@ export class BotAdminService {
           OR k.conversation_id = $1
        ORDER BY k.clicked_at DESC LIMIT 50`, [conversationId]).catch(() => []);
     const origin = chatOrigin(row);
+    // pictures we keep ourselves (Meta links expire) → a signed link the browser can open
+    const media = (value: string | null) => (value && isChatMediaKey(value) ? publicChatMediaUrl(value, 24 * 3600) : value) || null;
+    for (const click of clicks as Array<{ media_url: string | null }>) click.media_url = media(click.media_url);
     return {
       origin,
       ad: row.ad_source_id ? {
-        id: row.ad_source_id, type: row.ad_source_type === 'post' ? 'post' : 'ad', headline: row.ad_headline || null, body: row.ad_body || null,
-        url: row.ad_source_url || null, media_url: row.ad_media_url || null, media_type: row.ad_media_type || null, platform: row.ad_platform || null,
+        id: row.ad_source_id, type: row.ad_source_type === 'post' ? 'post' : row.ad_source_type === 'card' ? 'card' : 'ad', headline: row.ad_headline || null, body: row.ad_body || null,
+        url: row.ad_source_url || null, media_url: media(row.ad_media_url), media_type: row.ad_media_type || null, platform: row.ad_platform || null,
         clicked_at: row.ad_referred_at, ad_name: row.ad_name || null, meta_campaign_name: row.meta_campaign_name || null, meta_campaign_id: row.meta_campaign_id || null,
       } : null,
       campaign: row.campaign_name ? { name: row.campaign_name, offer: row.offer_text || null } : null,

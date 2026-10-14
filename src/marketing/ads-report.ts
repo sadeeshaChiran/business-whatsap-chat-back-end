@@ -1,5 +1,10 @@
 import type { DataSource } from 'typeorm';
 import { graphRequest } from './graph';
+import { isChatMediaKey, publicChatMediaUrl } from '../bot-admin/chat-media.store';
+
+/** Card pictures we keep ourselves → a signed link; Meta links stay as they are. */
+const mediaLink = (value: string | null | undefined) => (value && isChatMediaKey(value) ? publicChatMediaUrl(value, 24 * 3600) : value) || null;
+const adType = (sourceType: string | null | undefined): 'ad' | 'post' | 'card' => (sourceType === 'post' ? 'post' : sourceType === 'card' ? 'card' : 'ad');
 
 /**
  * Ad-by-ad results from our own chats: every ad / shared post that opened a chat (marketing_ad_click), the people it brought,
@@ -11,7 +16,7 @@ const num = (value: unknown) => Number(value ?? 0) || 0;
 type Meta = { token: string } | null;
 
 export type AdRow = {
-  ad_id: string; type: 'ad' | 'post'; headline: string | null; body: string | null; url: string | null; media_url: string | null; platforms: string[];
+  ad_id: string; type: 'ad' | 'post' | 'card'; headline: string | null; body: string | null; url: string | null; media_url: string | null; platforms: string[];
   ad_name: string | null; campaign_id: string | null; campaign_name: string | null;
   clicks: number; people: number; new_contacts: number; replied: number; interested: number; won: number; lost: number; no_answer: number;
   orders: number; bookings: number; revenue: number; first_click: string; last_click: string;
@@ -19,7 +24,11 @@ export type AdRow = {
   cost_per_person: number | null; cost_per_win: number | null; roas: number | null; conversion_rate: number;
 };
 
-/** People per ad with their outcome (shared by the list and the ad page). */
+/**
+ * People per ad with their outcome FOR THIS AD: only what happened after they clicked it counts (an old order or an old
+ * "won" does not make a new ad click a win). The window ends 28 days after the last click on this ad, or earlier when
+ * the person clicks another ad (the latest click gets the sale).
+ */
 function peopleSql(filterAd: boolean) {
   return `
     WITH k AS (
@@ -30,31 +39,51 @@ function peopleSql(filterAd: boolean) {
       SELECT ad_id, bot_channel_user_id, MIN(clicked_at) AS first_click, MAX(clicked_at) AS last_click, COUNT(*)::int AS clicks,
              (ARRAY_AGG(conversation_id ORDER BY clicked_at DESC))[1] AS conversation_id, (ARRAY_AGG(platform ORDER BY clicked_at DESC))[1] AS platform
         FROM k GROUP BY ad_id, bot_channel_user_id
+    ),
+    w AS (
+      SELECT p.*, p.first_click - INTERVAL '1 minute' AS win_start,
+             LEAST(p.last_click + make_interval(days => $3::int),
+                   COALESCE((SELECT MIN(x.clicked_at) FROM marketing_ad_click x WHERE x.bot_channel_user_id = p.bot_channel_user_id
+                              AND x.ad_id <> p.ad_id AND x.clicked_at > p.last_click), 'infinity'::timestamptz)) AS win_end
+        FROM people p
     )
-    SELECT p.*, cu.display_name, cu.external_user_id, COALESCE(c.lead_stage, 'new') AS lead_stage,
+    SELECT p.*, cu.display_name, cu.external_user_id, COALESCE(c.lead_stage, 'new') AS lead_stage, p.win_end > NOW() AS current_window,
            cu.created_at >= p.first_click - INTERVAL '10 minutes' AS new_contact,
            EXISTS (SELECT 1 FROM bot_message m WHERE m.conversation_id = p.conversation_id AND m.direction::text = 'outbound' AND m.created_at >= p.first_click) AS replied,
            (SELECT MAX(m.created_at) FROM bot_message m WHERE m.conversation_id = p.conversation_id) AS last_message_at,
            (SELECT COUNT(*) FROM bot_order o WHERE o.bot_channel_user_id = p.bot_channel_user_id AND o.status::text <> 'Cancelled'
-              AND o.created_at >= p.first_click AND o.created_at < p.last_click + make_interval(days => $3::int))::int AS orders,
+              AND o.created_at >= p.win_start AND o.created_at < p.win_end)::int AS orders,
            (SELECT COALESCE(SUM(o.total_amount), 0) FROM bot_order o WHERE o.bot_channel_user_id = p.bot_channel_user_id AND o.status::text <> 'Cancelled'
-              AND o.created_at >= p.first_click AND o.created_at < p.last_click + make_interval(days => $3::int)) AS revenue,
+              AND o.created_at >= p.win_start AND o.created_at < p.win_end) AS revenue,
            (SELECT COUNT(*) FROM bot_order o WHERE o.bot_channel_user_id = p.bot_channel_user_id AND o.status::text = 'Cancelled'
-              AND o.created_at >= p.first_click AND o.created_at < p.last_click + make_interval(days => $3::int))::int AS cancelled_orders,
+              AND o.created_at >= p.win_start AND o.created_at < p.win_end)::int AS cancelled_orders,
            (SELECT COUNT(*) FROM bot_booking b WHERE b.bot_channel_user_id = p.bot_channel_user_id AND LOWER(b.status) NOT IN ('cancelled', 'rejected')
-              AND b.created_at >= p.first_click AND b.created_at < p.last_click + make_interval(days => $3::int))::int AS bookings
-      FROM people p
+              AND b.created_at >= p.win_start AND b.created_at < p.win_end)::int AS bookings,
+           (SELECT COUNT(*) FROM lead_stage_event e WHERE e.bot_channel_user_id = p.bot_channel_user_id AND e.to_stage = 'won'
+              AND e.changed_at >= p.win_start AND e.changed_at < p.win_end)::int AS won_events,
+           (SELECT COUNT(*) FROM lead_stage_event e WHERE e.bot_channel_user_id = p.bot_channel_user_id AND e.to_stage = 'lost'
+              AND e.changed_at >= p.win_start AND e.changed_at < p.win_end)::int AS lost_events,
+           (SELECT COUNT(*) FROM lead_stage_event e WHERE e.bot_channel_user_id = p.bot_channel_user_id AND e.to_stage IN ('qualified', 'proposal')
+              AND e.changed_at >= p.win_start AND e.changed_at < p.win_end)::int AS interested_events,
+           (SELECT COUNT(*) FROM bot_order o WHERE o.bot_channel_user_id = p.bot_channel_user_id AND o.status::text <> 'Cancelled'
+              AND o.created_at < p.win_start)::int AS prior_orders,
+           (SELECT COUNT(*) FROM bot_booking b WHERE b.bot_channel_user_id = p.bot_channel_user_id AND LOWER(b.status) NOT IN ('cancelled', 'rejected')
+              AND b.created_at < p.win_start)::int AS prior_bookings
+      FROM w p
       LEFT JOIN bot_channel_user cu ON cu.id = p.bot_channel_user_id
       LEFT JOIN bot_conversation c ON c.id = p.conversation_id`;
 }
 
 export type Outcome = 'ordered' | 'booked' | 'won' | 'lost' | 'interested' | 'talking' | 'no_answer';
+/** What happened after THIS click (events in the window; today's stage only counts for the click that is still running). */
 export function outcomeOf(row: Record<string, any>): Outcome {
+  const now = Boolean(row.current_window);
   if (num(row.orders) > 0) return 'ordered';
   if (num(row.bookings) > 0) return 'booked';
-  if (row.lead_stage === 'won') return 'won';
-  if (row.lead_stage === 'lost' || num(row.cancelled_orders) > 0) return 'lost';
-  if (row.lead_stage === 'qualified' || row.lead_stage === 'proposal') return 'interested';
+  // won / lost only from changes made after the click (a customer who bought last month is not "won" again by clicking)
+  if (num(row.won_events) > 0) return 'won';
+  if (num(row.lost_events) > 0 || num(row.cancelled_orders) > 0) return 'lost';
+  if (num(row.interested_events) > 0 || (now && (row.lead_stage === 'qualified' || row.lead_stage === 'proposal'))) return 'interested';
   return row.replied ? 'talking' : 'no_answer';
 }
 const isWin = (o: Outcome) => o === 'ordered' || o === 'booked' || o === 'won';
@@ -99,8 +128,8 @@ export async function adsReport(ds: DataSource, companyId: number, days: number,
     const won = outcomes.filter(isWin).length;
     const spend = m ? m.spend : null;
     return {
-      ad_id: String(ad.ad_id), type: (ad.source_type === 'post' ? 'post' : 'ad') as AdRow['type'], headline: ad.headline || null, body: ad.body || null, url: ad.url || null,
-      media_url: ad.media_url || m?.thumbnail || null, platforms: (ad.platforms ?? []).filter(Boolean),
+      ad_id: String(ad.ad_id), type: adType(ad.source_type), headline: ad.headline || null, body: ad.body || null, url: ad.url || null,
+      media_url: mediaLink(ad.media_url) || m?.thumbnail || null, platforms: (ad.platforms ?? []).filter(Boolean),
       ad_name: ad.ad_name || m?.name || null, campaign_id: ad.campaign_id || null, campaign_name: ad.campaign_name || null,
       clicks: num(ad.clicks), people: mine.length, new_contacts: mine.filter((p) => p.new_contact).length, replied: mine.filter((p) => p.replied).length,
       interested: outcomes.filter((o) => o === 'interested').length, won, lost: outcomes.filter((o) => o === 'lost').length,
@@ -149,6 +178,7 @@ export async function adReport(ds: DataSource, companyId: number, adId: string, 
     contact_user_id: Number(p.bot_channel_user_id), conversation_id: Number(p.conversation_id), name: p.display_name || null, external_user_id: p.external_user_id,
     platform: p.platform, first_click: p.first_click, last_click: p.last_click, clicks: num(p.clicks), new_contact: Boolean(p.new_contact), replied: Boolean(p.replied),
     lead_stage: p.lead_stage, orders: num(p.orders), bookings: num(p.bookings), revenue: num(p.revenue), last_message_at: p.last_message_at, outcome: outcomeOf(p),
+    bought_before: num(p.prior_orders) + num(p.prior_bookings) > 0, prior_orders: num(p.prior_orders), prior_bookings: num(p.prior_bookings),
   })).sort((a, b) => new Date(b.last_click).getTime() - new Date(a.last_click).getTime());
   const count = (o: Outcome) => list.filter((p) => p.outcome === o).length;
   const won = list.filter((p) => isWin(p.outcome)).length;
@@ -156,14 +186,14 @@ export async function adReport(ds: DataSource, companyId: number, adId: string, 
   return {
     days, attribution_window_days: ATTRIBUTION_DAYS, meta_connected: Boolean(meta?.token),
     ad: {
-      id: adId, type: ad.source_type === 'post' ? 'post' : 'ad', headline: ad.headline || null, body: ad.body || null, url: ad.url || null,
-      media_url: ad.media_url || m?.thumbnail || null, media_type: ad.media_type || null, ad_name: ad.ad_name || m?.name || null,
+      id: adId, type: adType(ad.source_type), headline: ad.headline || null, body: ad.body || null, url: ad.url || null,
+      media_url: mediaLink(ad.media_url) || m?.thumbnail || null, media_type: ad.media_type || null, ad_name: ad.ad_name || m?.name || null,
       campaign_id: ad.campaign_id || null, campaign_name: ad.campaign_name || null,
     },
     totals: {
       clicks: list.reduce((s, p) => s + p.clicks, 0), people: list.length, new_contacts: list.filter((p) => p.new_contact).length,
       replied: list.filter((p) => p.replied).length, no_answer: count('no_answer'), talking: count('talking'), interested: count('interested'),
-      ordered: count('ordered'), booked: count('booked'), won, lost: count('lost'),
+      ordered: count('ordered'), booked: count('booked'), won, lost: count('lost'), returning_buyers: list.filter((p) => p.bought_before).length,
       orders: list.reduce((s, p) => s + p.orders, 0), bookings: list.reduce((s, p) => s + p.bookings, 0), revenue,
       spend: m ? m.spend : null, impressions: m ? m.impressions : null, link_clicks: m ? m.link_clicks : null, conversations_started: m ? m.conversations_started : null,
       cost_per_person: m && list.length ? m.spend / list.length : null, cost_per_win: m && won ? m.spend / won : null, roas: m?.spend ? revenue / m.spend : null,

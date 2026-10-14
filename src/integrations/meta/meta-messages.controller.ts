@@ -21,6 +21,16 @@ import { FlowHook } from '../../common/flow-hook';
 import { MetaGraphService } from './meta-graph.service';
 import { metaAppSecrets } from '../whatsapp/webhook-auth';
 import { webhookAccepted, webhookReceived, webhookRejected } from './webhook-stats';
+import { recordMetaEvent } from './webhook-events';
+import { createHash } from 'crypto';
+
+/** A message of the Page that the customer replied to, read from Meta (we did not have it – e.g. the ad card Meta shows). */
+type RepliedCard = { mid: string; title: string; mediaUrl: string | null; mediaType: 'image' | 'video' | null; createdAt: Date; link: string | null };
+type GraphMessage = {
+  id?: string; created_time?: string; from?: { id?: string }; message?: string;
+  attachments?: { data?: Array<{ mime_type?: string; name?: string; image_data?: { url?: string; preview_url?: string }; video_data?: { url?: string; preview_url?: string }; file_url?: string }> };
+  shares?: { data?: Array<{ link?: string; name?: string; description?: string }> };
+};
 
 type Attachment = {
   type?: string; // image | video | audio | file | location | fallback | template | share | story_mention | ig_reel | reel
@@ -45,7 +55,10 @@ type MessagingEvent = {
     is_deleted?: boolean;
     attachments?: Attachment[];
     quick_reply?: { payload?: string };
+    reply_to?: { mid?: string; story?: { url?: string; id?: string } };
+    referral?: Record<string, unknown>;
   };
+  referral?: Record<string, unknown>;
   postback?: { mid?: string; title?: string; payload?: string };
 };
 type WebhookEntry = { id?: string; messaging?: MessagingEvent[] };
@@ -147,6 +160,8 @@ export class MetaMessagesController {
     let saved = 0;
     const message = event.message;
     const postback = event.postback;
+    recordMetaEvent(companyId, platform, event as Record<string, any>);
+    if (process.env.META_WEBHOOK_LOG === '1') this.logger.log(`meta event (${platform}): ${JSON.stringify(event).slice(0, 4000)}`);
     // echo = a message the Page itself sent (Messenger app, Business Suite, another tool) → customer is the recipient
     const isEcho = Boolean(message?.is_echo);
     const senderId = String((isEcho ? event.recipient?.id : event.sender?.id) ?? '').trim();
@@ -188,6 +203,26 @@ export class MetaMessagesController {
       if (same) return saved;
     }
 
+    // the customer replied to a Page message we never saw (the ad card Meta shows, a post, a story, an old message):
+    // read it from Meta so the chat, the AI and the ads report know what "this" is
+    const referralInEvent = Boolean(event.referral ?? message?.referral ?? (postback as { referral?: unknown } | undefined)?.referral);
+    let card: RepliedCard | null = null;
+    let cardIsLead = false;
+    if (!isEcho && message?.reply_to?.mid) {
+      card = await this.loadRepliedMessage(connection, platform, accountId, conversation.id, String(message.reply_to.mid)).catch(() => null);
+      if (card) {
+        const recentClick = await this.messageRepository.query(
+          `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [conversation.id]).catch(() => []);
+        // an ad / post card: has a photo, video or link and was shown to the customer in the last 3 days
+        cardIsLead = !referralInEvent && !recentClick.length && Boolean(card.mediaUrl || card.link) && Date.now() - card.createdAt.getTime() < 3 * 86_400_000;
+        if (!cardIsLead) await this.saveContextMessage(companyId, conversation.id, platform, card.mid, card.title, card.mediaUrl, card.createdAt);
+      }
+    }
+    if (!isEcho && message?.reply_to?.story?.url) {
+      const storyId = `story:${message.reply_to.story.id ?? createHash('sha1').update(message.reply_to.story.url).digest('hex').slice(0, 16)}`;
+      await this.saveContextMessage(companyId, conversation.id, platform, storyId, '📖 Your story', message.reply_to.story.url, new Date()).catch(() => undefined);
+    }
+
     for (const [index, row] of rows.entries()) {
       await this.messageRepository.save(this.messageRepository.create({
         conversation_id: conversation.id,
@@ -215,11 +250,27 @@ export class MetaMessagesController {
     // the customer replied to (quoted) an earlier message
     const quoted = quotedFromMessengerMessage(message as { reply_to?: { mid?: string } } | undefined);
     if (quoted && providerId) {
+      if (card && !quoted.text) quoted.text = card.title || (card.mediaType === 'video' ? '[your video]' : '[your photo]');
       await linkQuotedReply(this.messageRepository.manager, conversation.id, providerId, quoted).catch(() => undefined);
+    }
+    if (message?.reply_to?.story?.url && providerId) {
+      const storyId = `story:${message.reply_to.story.id ?? createHash('sha1').update(message.reply_to.story.url).digest('hex').slice(0, 16)}`;
+      await linkQuotedReply(this.messageRepository.manager, conversation.id, providerId, { providerId: storyId, text: 'your story' }).catch(() => undefined);
     }
 
     // ad tracking before flows and the AI, so they know which ad the customer clicked
     await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform);
+    if (card && cardIsLead && providerId) {
+      // Meta sent no ad details, but the customer answered the ad / post card → count it as a lead from that card
+      const key = createHash('sha1').update(`${platform}:${card.title}:${card.link ?? ''}`).digest('hex').slice(0, 14);
+      // Meta's picture links expire – keep our own copy of the card picture
+      const stored = card.mediaUrl ? await this.downloadAndStore(companyId, card.mediaUrl) : null;
+      if (stored) card.mediaUrl = stored.key;
+      await MarketingHook.run({ entry: [{ id: accountId, messaging: [{
+        sender: { id: senderId }, recipient: { id: accountId }, message: { mid: providerId },
+        referral: { source: 'REPLY_CARD', card: { key: `card-${key}`, title: card.title, media_url: card.mediaUrl, media_type: card.mediaType, link: card.link } },
+      }] }] }, platform);
+    }
 
     // Automation flows first (first message / keyword / ad / a waiting answer); a handled message gets no AI reply
     const referral = (event as { referral?: { ad_id?: string; source?: string } }).referral
@@ -238,6 +289,49 @@ export class MetaMessagesController {
       await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
     }
     return saved;
+  }
+
+  /** Reads a Page message the customer replied to, when it is not in the chat yet (null: ours already, the customer's own, or Meta refuses). */
+  private async loadRepliedMessage(connection: MetaPageConnection, platform: 'messenger' | 'instagram', accountId: string, conversationId: number, mid: string): Promise<RepliedCard | null> {
+    const known = await this.messageRepository.query(
+      `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND (provider_message_id = $2 OR provider_message_id LIKE $2 || ':%') LIMIT 1`, [conversationId, mid]);
+    if (known.length || !connection.page_access_token) return null;
+    const res = await this.graphService.healthGet<GraphMessage>(`/${encodeURIComponent(mid)}`, connection.page_access_token, {
+      fields: 'id,created_time,from,message,attachments{mime_type,name,image_data,video_data,file_url},shares{link,name,description}',
+    });
+    if (!res.ok || !res.data) {
+      this.logger.log(`replied-to message ${mid} (${platform}) could not be read from Meta: ${res.error ?? 'empty'}`);
+      return null;
+    }
+    const from = String(res.data.from?.id ?? '');
+    const ours = [accountId, connection.page_id, connection.instagram_business_account_id].filter(Boolean).map(String);
+    if (from && !ours.includes(from)) return null; // the customer quoted their own message
+    const attachment = res.data.attachments?.data?.[0];
+    const share = res.data.shares?.data?.[0];
+    const image = attachment?.image_data?.url ?? attachment?.image_data?.preview_url ?? null;
+    const video = attachment?.video_data?.url ?? null;
+    const title = (res.data.message ?? share?.name ?? share?.description ?? '').trim().slice(0, 1000);
+    const mediaUrl = image ?? attachment?.video_data?.preview_url ?? null;
+    if (!title && !mediaUrl && !share?.link) return null;
+    const created = res.data.created_time ? new Date(res.data.created_time) : new Date();
+    return {
+      mid, title, mediaUrl, mediaType: video ? 'video' : image ? 'image' : null,
+      createdAt: Number.isNaN(created.getTime()) ? new Date() : created, link: share?.link ?? null,
+    };
+  }
+
+  /** Puts a Page message we did not have (ad card, story, old message) into the chat, before the customer's reply. */
+  private async saveContextMessage(companyId: number, conversationId: number, platform: 'messenger' | 'instagram', providerId: string,
+    text: string, mediaUrl: string | null, createdAt: Date) {
+    const exists = await this.messageRepository.query(`SELECT 1 FROM bot_message WHERE conversation_id = $1 AND provider_message_id = $2 LIMIT 1`, [conversationId, providerId]);
+    if (exists.length) return;
+    const stored = mediaUrl ? await this.downloadAndStore(companyId, mediaUrl) : null;
+    const row = await this.messageRepository.save(this.messageRepository.create({
+      conversation_id: conversationId, direction: 'outbound', delivery_status: 'sent', platform,
+      message_type: mediaUrl ? 'image' : 'text', content: text || (mediaUrl ? '[image]' : '[message]'),
+      media_url: mediaUrl ? stored?.key ?? mediaUrl : null, provider_message_id: providerId, source: 'meta-context',
+    }));
+    await this.messageRepository.query(`UPDATE bot_message SET created_at = LEAST($2::timestamp, created_at) WHERE id = $1`, [row.id, createdAt.toISOString()]).catch(() => undefined);
   }
 
   /* ───────── message → rows in the formats the inbox understands ───────── */

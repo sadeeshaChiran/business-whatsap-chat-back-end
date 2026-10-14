@@ -83,6 +83,16 @@ This chapter goes feature by feature: what the customer sees, the rules behind i
 - Tasks: types, priorities, due dates, reminder 1 hour before due.
 - Labels (organization labels on chats) are separate from tags.
 
+## Customer insights (visits and groups)
+
+- Page **CRM → Customer insights** (`/crm/insights`, owner only, package feature `crm`). API `GET /crm/insights?days=&platform=` and `POST /crm/insights/tag` (code: `backend/src/crm/insights.ts`).
+- **Visit** = first inbound message, an ad click (`marketing_ad_click`), or an inbound message after **72 h** of silence (`RETURN_GAP_HOURS`). Starts within 30 minutes are merged (ad click + its first message = one visit). A visit ends at the next visit (max 28 days).
+- **Visit result** from what happened inside the visit: orders (not cancelled), bookings (not cancelled/rejected), `lead_stage_event` changes to won / lost / qualified-proposal, cancelled orders (= lost), any reply (= talking), else no answer.
+- **Groups** (first match wins): in talks now (last visit open, last message < 7 days) → loyal (2+ won visits, last won) → repeat buyers no order last time → bought once (last visit) → bought before not this time → lost again and again → lost once → came many times never bought → went quiet.
+- **Save as tag** adds a lowercase tag to `crm_contact.tags` of everyone in the group (for broadcasts / audiences / filters).
+- One person on two channels = two customers (WhatsApp and Messenger ids are different).
+- **Stage history**: table `lead_stage_event` is filled by a database trigger on every `bot_conversation.lead_stage` change (from any code path). Older chats were back-filled once with their stage at their last customer message.
+
 ## Automation flows and forms
 
 - Triggers: first message (also when a customer comes back after N days), keyword (contains / exactly / starts with), came from an ad (campaign ids), comment on a post (FB / IG, optional keywords, optional public reply; Meta allows one private message per comment within 7 days). Ad flows run before keyword and first-message flows.
@@ -96,7 +106,11 @@ This chapter goes feature by feature: what the customer sees, the rules behind i
 - **Broadcasts**: Cloud API only, text templates only, audience by tags / except tags / stage, schedule, 25 per batch every 15 s, monthly limit `broadcasts_per_month`. Customers who reply STOP (also Sinhala/Tamil words) never get broadcasts again. Failures are explained in plain words with a fix, and the most common problem is shown on top.
 - **Campaigns**: an offer + instructions for the AI, linked to ad ids / Meta campaign ids and products. The bot uses it for customers from those ads for 7 days.
 - **Links & QR**: short links (`/l/:slug`, `SHORT_LINK_BASE_URL`) that open WhatsApp / m.me / ig.me with a ready message; counts clicks, chats, orders.
-- **Ads & leads**: every chat that came from an ad, grouped by ad: people, orders, bookings, won, lost, value, spend, ROAS, cost per win, click-to-sale time. One ad → every person and their outcome (ordered, booked, won, lost, interested, talking, no answer). Attribution: 28 days after the last ad click.
+- **Ads & leads**: every chat that came from an ad, grouped by ad: people, orders, bookings, won, lost, value, spend, ROAS, cost per win, click-to-sale time. One ad → every person and their outcome (ordered, booked, won, lost, interested, talking, no answer).
+  - **Result per click**: only orders, bookings and stage changes **after** the click count (window: first click → 28 days after the last click on this ad, or the person's next click on another ad). An old buyer clicking again is not a win; they get `bought_before` + `prior_orders` ("Bought before" badge).
+  - A new ad click resets a **won / lost** chat to **new** (`captureReferrals`), recorded in `lead_stage_event`.
+- **Messenger / Instagram ad detection** (in order): `referral` on the event / message / postback (`messaging_referrals` must be subscribed on the Page **and** in the app); if missing and the customer **replied to a Page message we don't have** (`message.reply_to.mid`), the API reads it from Graph (`GET /{mid}?fields=message,attachments,shares,from,created_time` with the Page token). A Page card with a picture/link from the last 3 days = **ad / post card** → saved as an ad click with `source_type = 'card'`, `ad_id = card-<hash of text>` (same card text = same row), picture copied to our media store. Other unknown Page messages are just inserted into the chat (source `meta-context`) so the quote shows. Instagram story replies insert "📖 Your story" with the picture.
+- **What Meta sent lately**: the last 30 Messenger/Instagram events per company are kept in memory (types only, no text) and shown in the connection check → Technical details. `META_WEBHOOK_LOG=1` writes the full raw events to the API log (contains customer text – only switch on while debugging).
 - **Meta ads**: campaigns from the connected ad account (spend, clicks, orders, sales, cost per order, ROAS), pause and change budget. If the selected ad account has no ads, an **account switcher** suggests the account that actually runs the Page's ads.
 - **Audiences**: send a CRM group (hashed) to Meta as a Custom Audience.
 - **Marketing settings**: connect the Meta ad account; **Conversions API** (dataset/pixel id, optional test code) sends Lead and Purchase events back to Meta.

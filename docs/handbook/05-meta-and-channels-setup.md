@@ -21,8 +21,10 @@ The platform uses **one Meta app** for all companies (WhatsApp Cloud API, Messen
 | Product | Object | Callback URL | Verify token (env name) | Fields |
 | --- | --- | --- | --- | --- |
 | WhatsApp | WhatsApp Business Account | `{API}/v1/api/integrations/whatsapp/webhook/meta` | `META_WEBHOOK_VERIFY_TOKEN` | `messages` (+ `account_update`, `message_template_status_update`) |
-| Messenger | Page | `{API}/v1/api/integrations/meta/messages/webhook` | `META_MESSAGING_VERIFY_TOKEN` | `messages`, `messaging_postbacks`, `message_echoes`, `message_deliveries`, `message_reads`, `feed` |
-| Instagram | Instagram | same as Messenger | `META_MESSAGING_VERIFY_TOKEN` | `messages`, `comments` |
+| Messenger | Page | `{API}/v1/api/integrations/meta/messages/webhook` | `META_MESSAGING_VERIFY_TOKEN` | `messages`, `messaging_postbacks`, `messaging_referrals` (ad clicks), `message_echoes`, `message_deliveries`, `message_reads`, `feed` |
+| Instagram | Instagram | same as Messenger | `META_MESSAGING_VERIFY_TOKEN` | `messages`, `messaging_postbacks`, `messaging_referral` (ad clicks), `messaging_seen`, `comments` |
+
+> **Warning:** Without `messaging_referrals` (Page) / `messaging_referral` (Instagram) – in the app **and** on each Page subscription – Click-to-Messenger / Instagram ads look like normal chats. The connection check shows both, and **Fix it** adds them.
 
 `{API}` is the public API address (for example `https://api.agentmetra.lk`). Every webhook call is signed by Meta; the API checks it with `META_APP_SECRET`.
 

@@ -24,6 +24,14 @@ type GraphErrorBody = {
   error?: { message?: string; type?: string; code?: number };
 };
 
+/** Page fields our app subscribes to: messages, our own echoes, buttons, ad clicks (messaging_referrals), delivery / read ticks, comments. */
+export const PAGE_FIELDS = ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_referrals', 'message_deliveries', 'message_reads', 'feed'];
+/** App-level webhook fields we need (Meta Developers → Webhooks). */
+export const APP_WEBHOOK_FIELDS: Record<'page' | 'instagram', string[]> = {
+  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed'],
+  instagram: ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments'],
+};
+
 @Injectable()
 export class MetaGraphService {
   async fetchMessagingProfile(senderId: string, pageAccessToken: string, platform: 'messenger' | 'instagram'): Promise<{ name?: string; username?: string }> {
@@ -209,13 +217,68 @@ export class MetaGraphService {
    */
   async subscribePageMessaging(pageId: string, pageAccessToken: string): Promise<void> {
     const cfg = this.getConfig();
-    const params = new URLSearchParams({ subscribed_fields: 'messages,message_echoes,messaging_postbacks,message_deliveries,message_reads,feed' });
+    const params = new URLSearchParams({ subscribed_fields: PAGE_FIELDS.join(',') });
     const url = `${this.graphUrl(`/${encodeURIComponent(pageId)}/subscribed_apps`, cfg)}?${params.toString()}`;
     const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${pageAccessToken}` } });
     const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
     if (!response.ok || payload.success !== true) {
       throw new BadRequestException(payload.error?.message ?? 'Meta could not subscribe this Page to the messaging webhook.');
     }
+  }
+
+  /** The fields our app gets for this Page (null when Meta cannot be asked). */
+  async pageSubscribedFields(pageId: string, pageAccessToken: string): Promise<string[] | null> {
+    const appId = this.getConfig().appId;
+    const res = await this.healthGet<{ data?: Array<{ id?: string; subscribed_fields?: string[] }> }>(`/${pageId}/subscribed_apps`, pageAccessToken);
+    if (!res.ok) return null;
+    return (res.data?.data ?? []).find((row) => String(row.id ?? '') === String(appId))?.subscribed_fields ?? [];
+  }
+
+  /**
+   * App-level webhook fields (Meta Developers → Webhooks) for Pages and Instagram. Ad clicks only reach us when
+   * "messaging_referrals" (Page) and "messaging_referral" (Instagram) are on. Read with the app token.
+   */
+  async appWebhookFields(): Promise<{ ok: boolean; error?: string; objects: Record<string, { callback_url: string | null; fields: string[] }> }> {
+    const cfg = this.getConfig();
+    const secret = process.env.META_APP_SECRET?.trim();
+    if (!cfg.appId || !secret) return { ok: false, error: 'META_APP_ID / META_APP_SECRET are not set on the server.', objects: {} };
+    const res = await this.healthGet<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean; fields?: Array<{ name?: string } | string> }> }>(`/${cfg.appId}/subscriptions`, `${cfg.appId}|${secret}`);
+    if (!res.ok) return { ok: false, error: res.error ?? undefined, objects: {} };
+    const objects: Record<string, { callback_url: string | null; fields: string[] }> = {};
+    for (const row of res.data?.data ?? []) {
+      if (!row.object) continue;
+      objects[row.object] = { callback_url: row.callback_url ?? null, fields: (row.fields ?? []).map((f) => (typeof f === 'string' ? f : String(f?.name ?? ''))).filter(Boolean) };
+    }
+    return { ok: true, objects };
+  }
+
+  /** Adds the missing Page / Instagram webhook fields to the app (keeps every field and the callback URL that are already there). */
+  async fixAppWebhookFields(): Promise<{ changed: string[] }> {
+    const cfg = this.getConfig();
+    const secret = process.env.META_APP_SECRET?.trim();
+    const verify = process.env.META_MESSAGING_VERIFY_TOKEN?.trim();
+    if (!cfg.appId || !secret) throw new BadRequestException('META_APP_ID / META_APP_SECRET are not set on the server.');
+    if (!verify) throw new BadRequestException('META_MESSAGING_VERIFY_TOKEN is not set on the server.');
+    const current = await this.appWebhookFields();
+    if (!current.ok) throw new BadRequestException(`Meta: ${current.error ?? 'could not read the app webhooks'}`);
+    const base = (process.env.PUBLIC_API_BASE_URL?.trim() || '').replace(/\/+$/, '');
+    const changed: string[] = [];
+    for (const [object, wanted] of Object.entries(APP_WEBHOOK_FIELDS)) {
+      const have = current.objects[object];
+      const missing = wanted.filter((f) => !(have?.fields ?? []).includes(f));
+      if (!missing.length) continue;
+      const callback = have?.callback_url || (base ? `${base}/integrations/meta/messages/webhook` : '');
+      if (!callback) throw new BadRequestException('PUBLIC_API_BASE_URL is not set, so the webhook address is unknown.');
+      const params = new URLSearchParams({
+        object, callback_url: callback, verify_token: verify, fields: [...new Set([...(have?.fields ?? []), ...wanted])].join(','),
+        access_token: `${cfg.appId}|${secret}`,
+      });
+      const response = await fetch(`${this.graphUrl(`/${cfg.appId}/subscriptions`, cfg)}?${params.toString()}`, { method: 'POST' });
+      const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
+      if (!response.ok || payload.success !== true) throw new BadRequestException(`Meta (${object}): ${payload.error?.message ?? 'could not update the webhook fields'}`);
+      changed.push(`${object}: ${missing.join(', ')}`);
+    }
+    return { changed };
   }
 
   async subscribeWhatsappApp(wabaId: string, accessToken: string): Promise<void> {
