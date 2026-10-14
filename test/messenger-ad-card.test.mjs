@@ -28,7 +28,7 @@ const meta = createServer((req, res) => {
   }
   if (path === `/${PAGE}/conversations`) {
     const user = new URL(req.url, 'http://x').searchParams.get('user_id');
-    if (user !== `psid-greet-${R}`) return res.end(JSON.stringify({ data: [] }));
+    if (user !== `psid-greet-${R}` && user !== `psid-open-${R}`) return res.end(JSON.stringify({ data: [] }));
     const at = (min) => new Date(Date.now() - min * 60_000).toISOString();
     return res.end(JSON.stringify({ data: [{ messages: { data: [
       { id: `m_greet_${R}`, created_time: at(1), from: { id: PAGE }, message: 'Hi Sadeesha! Please let us know how we can help you.' },
@@ -109,6 +109,26 @@ test('Messenger ad with a welcome message: the customer just writes "Hi" – the
   await hook('page', PAGE, { sender: { id: psid }, message: { mid: `m_hi2_${R}`, text: 'price kiyada?' } });
   const clicks = await sql(`SELECT COUNT(*)::int AS n FROM marketing_ad_click WHERE conversation_id = $1`, [conv.id]);
   assert.equal(clicks[0].n, 1);
+});
+
+test('Messenger: tapping the ad / post button is a lead at once – chat, card, greeting and a notification before the customer types', async () => {
+  const psid = `psid-open-${R}`;
+  await hook('page', PAGE, { sender: { id: psid }, referral: { source: 'ADS', type: 'OPEN_THREAD', ad_id: `${R}888`, ads_context_data: { ad_title: 'new one', photo_url: 'http://127.0.0.1:4599/card.png' } } });
+  const conv = await convOf(psid);
+  assert.ok(conv, 'the lead is in the inbox right away');
+  assert.equal(conv.ad_source_id, `${R}888`);
+  const rows = await sql(`SELECT direction::text, source, content FROM bot_message WHERE conversation_id = $1 ORDER BY id`, [conv.id]);
+  assert.deepEqual(rows.map((r) => r.content), ['new one', 'Hi Sadeesha! Please let us know how we can help you.']);
+  assert.ok(rows.every((r) => r.source === 'meta-context'));
+  const [note] = await sql(`SELECT kind, title, message FROM bot_notification WHERE conversation_id = $1`, [conv.id]);
+  assert.equal(note.kind, 'ad_lead');
+  assert.match(note.message, /opened a chat from your ad “new one”/);
+  // the customer writes later: no second click, no duplicate card
+  await hook('page', PAGE, { sender: { id: psid }, message: { mid: `m_open_hi_${R}`, text: 'Hi' } });
+  const clicks = await sql(`SELECT COUNT(*)::int AS n FROM marketing_ad_click WHERE conversation_id = $1`, [conv.id]);
+  assert.equal(clicks[0].n, 1);
+  const count = await sql(`SELECT COUNT(*)::int AS n FROM bot_message WHERE conversation_id = $1`, [conv.id]);
+  assert.equal(count[0].n, 3);
 });
 
 test('Messenger: replying to the customer\'s own old message is just a quote, not a lead', async () => {

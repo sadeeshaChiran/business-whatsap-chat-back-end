@@ -44,7 +44,7 @@ How the production server is set up, how to release a new version safely, and ho
 | Platform | `SUPER_ADMIN_EMAILS` |
 | Payments | `PAYHERE_MERCHANT_ID`, `PAYHERE_MERCHANT_SECRET`, `PAYHERE_SANDBOX`, `PAYHERE_APP_ID`, `PAYHERE_APP_SECRET` |
 | Codes (sign-up, reset) | `REGISTRATION_VERIFICATION`, `OTP_DEV_MODE` (false in production), `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `OTP_WHATSAPP_PHONE_NUMBER_ID`, `OTP_WHATSAPP_TOKEN`, `OTP_WHATSAPP_TEMPLATE`, `OTP_WHATSAPP_LANG`, `NOTIFYLK_USER_ID`, `NOTIFYLK_API_KEY`, `NOTIFYLK_SENDER_ID` |
-| Mobile push | `FCM_SERVICE_ACCOUNT_JSON` |
+| Mobile push | `FCM_SERVICE_ACCOUNT_JSON` (native app), `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (browser / phone notifications – optional, created automatically if empty; never change once set), `PUSH_TICK_MS` |
 | Tests only | `META_GRAPH_BASE_URL` (fake Meta server – never set in production) |
 
 ### Web app (`frontend/.env.production.local`, used at build time)

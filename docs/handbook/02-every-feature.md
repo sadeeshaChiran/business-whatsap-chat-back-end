@@ -83,6 +83,15 @@ This chapter goes feature by feature: what the customer sees, the rules behind i
 - Tasks: types, priorities, due dates, reminder 1 hour before due.
 - Labels (organization labels on chats) are separate from tags.
 
+## Phone notifications (Web Push)
+
+- No native app needed: the web app is installable (`manifest.webmanifest`, icons) and `public/sw.js` shows push notifications and opens the chat on tap.
+- Backend `src/mobile/web-push.ts`: `GET /push/web` (public key + devices), `POST /push/web/subscribe`, `PATCH /push/web/mode`, `DELETE /push/web/subscribe`, `POST /push/web/test`. Table `web_push_subscription` (one row per browser).
+- VAPID keys: `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT`, or generated once and stored in `platform_setting.web_push_vapid`. **Never change the keys** – every device would have to turn notifications on again.
+- The push timer (`PUSH_TICK_MS`, 10 s) sends: new inbound messages → assigned agent (always) and owner (mode `all`, or `attention` = only when the bot is off / manual / unassigned); MEDIUM / HIGH `bot_notification` alerts → owner (orders, handovers, credits, **ad_lead** …). Dead browsers (404/410) are removed; other errors are kept in `last_error`.
+- iPhone: only iOS 16.4+ from the home-screen app (Safari tab cannot subscribe). The UI shows the steps.
+- The native app (Firebase, `FCM_SERVICE_ACCOUNT_JSON`) still works in parallel when configured.
+
 ## Customer insights (visits and groups)
 
 - Page **CRM → Customer insights** (`/crm/insights`, owner only, package feature `crm`). API `GET /crm/insights?days=&platform=` and `POST /crm/insights/tag` (code: `backend/src/crm/insights.ts`).
@@ -110,6 +119,7 @@ This chapter goes feature by feature: what the customer sees, the rules behind i
   - **Result per click**: only orders, bookings and stage changes **after** the click count (window: first click → 28 days after the last click on this ad, or the person's next click on another ad). An old buyer clicking again is not a win; they get `bought_before` + `prior_orders` ("Bought before" badge).
   - A new ad click resets a **won / lost** chat to **new** (`captureReferrals`), recorded in `lead_stage_event`.
 - **Messenger / Instagram ad detection** (in order): `referral` on the event / message / postback (`messaging_referrals` must be subscribed on the Page **and** in the app); if missing and the customer **replied to a Page message we don't have** (`message.reply_to.mid`), the API reads it from Graph (`GET /{mid}?fields=message,attachments,shares,from,created_time` with the Page token). A Page card with a picture/link from the last 3 days = **ad / post card** → saved as an ad click with `source_type = 'card'`, `ad_id = card-<hash of text>` (same card text = same row), picture copied to our media store. The card is always inserted into the chat as its own Page bubble (source `meta-context`) so the chat looks like the customer's app. **No reply_to and no referral** (ads with a welcome message): when an inbound message comes after 30+ quiet minutes, the API reads the Page conversation (`GET /{page-id}/conversations?platform=&user_id=` → last 10 messages) and inserts every Page message of the last 24 h we don't have (ad card, greeting); the newest one with a picture/link becomes the ad lead. Instagram story replies insert "📖 Your story" with the picture.
+- **Opened from an ad before typing** (`messaging_referrals` event without a message): the contact and chat are created at once, the Page messages of the last 24 h (ad card, greeting) are read from the conversation and inserted, the click is recorded and an `ad_lead` notification is created (→ push to the owner).
 - **What Meta sent lately**: the last 30 Messenger/Instagram events per company are kept in memory (types only, no text) and shown in the connection check → Technical details. `META_WEBHOOK_LOG=1` writes the full raw events to the API log (contains customer text – only switch on while debugging).
 - **Meta ads**: campaigns from the connected ad account (spend, clicks, orders, sales, cost per order, ROAS), pause and change budget. If the selected ad account has no ads, an **account switcher** suggests the account that actually runs the Page's ads.
 - **Audiences**: send a CRM group (hashed) to Meta as a Custom Audience.

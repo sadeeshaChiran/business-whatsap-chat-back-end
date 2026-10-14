@@ -12,6 +12,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { WebPushController, WebPushService } from './web-push';
 
 /* ───────── DTOs ───────── */
 
@@ -48,7 +49,7 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
   private token: { value: string; expires: number } | null = null;
   private account: { project_id: string; client_email: string; private_key: string } | null = null;
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource, private readonly web: WebPushService) {}
 
   onModuleInit() {
     try {
@@ -57,10 +58,9 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
     } catch {
       this.logger.error('FCM_SERVICE_ACCOUNT_JSON is not valid JSON – push notifications are off.');
     }
-    if (this.account) {
-      this.timer = setInterval(() => void this.tick(), 10_000);
-      this.logger.log(`Push notifications on (Firebase project ${this.account.project_id}).`);
-    }
+    // browser notifications (Web Push) always work; the native app (Firebase) only when FCM_SERVICE_ACCOUNT_JSON is set
+    this.timer = setInterval(() => void this.tick(), Number(process.env.PUSH_TICK_MS) || 10_000);
+    if (this.account) this.logger.log(`App push notifications on (Firebase project ${this.account.project_id}).`);
   }
 
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
@@ -126,14 +126,23 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
       const lastMessage = await this.cursor('messages', `SELECT COALESCE(MAX(id), 0) AS id FROM bot_message`);
       const messages = await this.dataSource.query(`
         SELECT m.id, m.conversation_id, m.content, m.message_type::text AS type, c.assigned_agent_id, cu.company_id,
-               COALESCE(NULLIF(cu.display_name, ''), cu.external_user_id) AS name, cu.platform, co.admin_user_id
+               COALESCE(NULLIF(cu.display_name, ''), cu.external_user_id) AS name, cu.platform, co.admin_user_id,
+               (cu.manual_mode OR NOT COALESCE(co.bot_enabled, TRUE)) AS needs_person
           FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
           LEFT JOIN companies co ON co.id = cu.company_id
          WHERE m.id > $1 AND m.direction::text = 'inbound' ORDER BY m.id LIMIT 200`, [lastMessage]);
+      const CHANNEL: Record<string, string> = { whatsapp: 'WhatsApp', messenger: 'Messenger', instagram: 'Instagram' };
       for (const m of messages) {
         const to = [m.assigned_agent_id ?? m.admin_user_id].filter(Boolean).map(Number);
-        const text = m.type === 'image' ? '📷 Photo' : m.type === 'voice' ? '🎤 Voice note' : String(m.content ?? '');
+        const text = m.type === 'image' ? '📷 Photo' : m.type === 'voice' ? '🎤 Voice note' : m.type === 'video' ? '🎥 Video' : String(m.content ?? '');
         await this.sendToUsers(to, `${m.name} · ${m.platform}`, text, { type: 'message', conversation_id: String(m.conversation_id) });
+        // browser / phone notifications: the agent who has the chat, and the owner (the owner can choose "only chats that need a person")
+        const title = `${m.name} · ${CHANNEL[m.platform] ?? m.platform}`;
+        const payload = { title, body: text || 'New message', tag: `chat-${m.conversation_id}`, kind: 'message' as const, needsPerson: Boolean(m.needs_person) || !m.assigned_agent_id };
+        if (m.assigned_agent_id) await this.web.sendToUsers([Number(m.assigned_agent_id)], { ...payload, url: `/my-chats/${m.conversation_id}`, needsPerson: true });
+        if (m.admin_user_id && Number(m.admin_user_id) !== Number(m.assigned_agent_id)) {
+          await this.web.sendToUsers([Number(m.admin_user_id)], { ...payload, url: `/inbox/${m.conversation_id}`, needsPerson: Boolean(m.needs_person) });
+        }
       }
       if (messages.length) await this.dataSource.query(`UPDATE push_cursor SET last_id = $2 WHERE name = $1`, ['messages', messages[messages.length - 1].id]);
 
@@ -147,6 +156,10 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
         if (!alert.admin_user_id) continue;
         await this.sendToUsers([Number(alert.admin_user_id)], alert.title, alert.message, {
           type: alert.kind, conversation_id: String(alert.conversation_id ?? ''), order_id: String(alert.order_id ?? ''),
+        });
+        await this.web.sendToUsers([Number(alert.admin_user_id)], {
+          title: String(alert.title ?? 'Notification'), body: String(alert.message ?? ''), kind: 'alert', tag: `alert-${alert.id}`,
+          url: alert.order_id ? '/orders' : alert.conversation_id ? `/inbox/${alert.conversation_id}` : '/dashboard',
         });
       }
       if (alerts.length) await this.dataSource.query(`UPDATE push_cursor SET last_id = $2 WHERE name = $1`, ['alerts', alerts[alerts.length - 1].id]);
@@ -277,5 +290,5 @@ export class MobileController {
   remove(@CurrentUser() user: AuthenticatedUser, @Param('token') token: string) { return this.mobile.removeDevice(user, token); }
 }
 
-@Module({ imports: [AuthModule], controllers: [MobileController], providers: [MobileService, PushService] })
+@Module({ imports: [AuthModule], controllers: [MobileController, WebPushController], providers: [MobileService, PushService, WebPushService] })
 export class MobileModule {}

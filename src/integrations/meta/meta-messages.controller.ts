@@ -174,8 +174,8 @@ export class MetaMessagesController {
     // sent through this app (agent reply, bot, private reply) → already saved when it was sent
     if (isEcho && String(message?.app_id ?? '') === String(process.env.META_APP_ID ?? '').trim()) return saved;
     if (!message && !postback) {
-      // "opened the chat from an ad" (before the first message): kept until the chat exists
-      if ((event as { referral?: unknown }).referral) await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform);
+      // "opened the chat from an ad / post / m.me link" (before the customer writes anything) = a new lead right away
+      if (event.referral) saved += await this.handleOpenedFromAd(connection, companyId, platform, accountId, senderId, event);
       return saved;
     }
 
@@ -209,8 +209,8 @@ export class MetaMessagesController {
     let card: RepliedCard | null = null;
     let cardIsLead = false;
     const safe = async <T>(run: () => Promise<T>, fallback: T) => { try { return await run(); } catch { return fallback; } };
-    const recentClick = async () => (await safe(() => this.messageRepository.query(
-      `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [conversation.id]), [] as unknown[])).length > 0;
+    const recentClick = async (minutes = 10) => (await safe(() => this.messageRepository.query(
+      `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - make_interval(mins => $2::int) LIMIT 1`, [conversation.id, minutes]), [] as unknown[])).length > 0;
     if (!isEcho && message?.reply_to?.mid) {
       card = await this.loadRepliedMessage(connection, platform, accountId, conversation.id, String(message.reply_to.mid)).catch(() => null);
       if (card) {
@@ -231,7 +231,8 @@ export class MetaMessagesController {
           const stored = await this.saveContextMessage(companyId, conversation.id, platform, item.mid, item.title, item.mediaUrl, item.createdAt).catch(() => null);
           if (item.mediaUrl || item.link) card = { ...item, mediaUrl: stored ?? item.mediaUrl };
         }
-        if (card) cardIsLead = !(await recentClick());
+        // the click itself was already counted (Meta sent it when the chat was opened) → only the card is shown
+        if (card) cardIsLead = !(await recentClick(24 * 60));
       }
     }
     if (!isEcho && message?.reply_to?.story?.url) {
@@ -301,6 +302,50 @@ export class MetaMessagesController {
     if (SalesBotHook.isActive()) {
       await SalesBotHook.notify({ companyId, conversationId: conversation.id, phone: senderId, provider: platform });
     }
+    return saved;
+  }
+
+  /**
+   * The customer tapped an ad / a post's "Send message" button / an m.me link. Meta shows them the card and the Page's
+   * greeting; we create the contact and the chat now, bring in those Page messages, record the ad click and tell the team
+   * – so the lead is in the inbox before the customer types anything.
+   */
+  private async handleOpenedFromAd(connection: MetaPageConnection, companyId: number, platform: 'messenger' | 'instagram', accountId: string,
+    senderId: string, event: MessagingEvent): Promise<number> {
+    const referral = (event.referral ?? {}) as { ad_id?: string; source?: string; ref?: string; ads_context_data?: { ad_title?: string } };
+    const fromAd = Boolean(referral.ad_id || referral.source === 'ADS' || referral.ads_context_data);
+    let conversationId: number | null = null;
+    let name = '';
+    try {
+      const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
+      const conversation = await this.ensureConversation(user.id);
+      conversationId = conversation.id;
+      name = String(user.display_name || '').trim();
+    } catch (error) {
+      this.logger.warn(`ad click: could not create the chat (${error instanceof Error ? error.message : String(error)})`);
+    }
+    if (!conversationId) {
+      await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform); // kept until the first message
+      return 0;
+    }
+    const before = await this.messageRepository.query(
+      `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [conversationId]).catch(() => []);
+    let saved = 0;
+    const found = await this.loadRecentPageMessages(connection, platform, accountId, senderId, conversationId).catch(() => [] as RepliedCard[]);
+    for (const item of found) {
+      await this.saveContextMessage(companyId, conversationId, platform, item.mid, item.title, item.mediaUrl, item.createdAt).catch(() => null);
+      saved++;
+    }
+    await MarketingHook.run({ entry: [{ id: accountId, messaging: [event] }] }, platform);
+    if (fromAd && !before.length) {
+      const [row] = await this.messageRepository.query(`SELECT ad_headline FROM bot_conversation WHERE id = $1`, [conversationId]).catch(() => [{}]);
+      const headline = String(row?.ad_headline || referral.ads_context_data?.ad_title || '').trim();
+      await this.messageRepository.query(
+        `INSERT INTO bot_notification (company_id, kind, priority, title, message, conversation_id) VALUES ($1, 'ad_lead', 'MEDIUM', $2, $3, $4)`,
+        [companyId, `New lead from your ${platform === 'instagram' ? 'Instagram' : 'Facebook'} ad`,
+          `${name || 'A customer'} opened a chat from your ad${headline ? ` “${headline.slice(0, 80)}”` : ''}. Say hello before they leave.`, conversationId]).catch(() => undefined);
+    }
+    this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversationId, platform, direction: 'inbound' });
     return saved;
   }
 

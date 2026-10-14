@@ -60,6 +60,7 @@ const MIGRATION_FILES = [
   'supabase_trials_custom_packages.sql',
   'supabase_ad_clicks.sql',
   'supabase_customer_journeys.sql',
+  'supabase_web_push.sql',
 ] as const;
 
 function migrationDir(): string | null {
