@@ -124,6 +124,17 @@ Also: broadcasts need the **Cloud API** (not QR), only text templates (no photo/
 | "Add agent" disabled | All seats used – remove an agent or upgrade (or custom package). |
 | Agent can't see a page | Agents only see their own chats and agent pages; owner-only pages say "Only the company admin can do this." |
 
+## Phone notifications
+
+| Problem | Fix |
+| --- | --- |
+| "Turn on" does nothing / blocked | Browser blocked notifications for the site: lock icon → Notifications → Allow, reload. |
+| iPhone: no button / not working | Must be iOS 16.4+, added to the home screen and opened from there. |
+| Test says it could not be sent | Device list shows "last send failed" – turn off and on again on that device. Check the API can reach the internet (push services are Google / Apple / Mozilla). |
+| Owner gets too many | Settings → Phone notifications → **Only chats that need a person**. |
+| Agent gets nothing | Agent must be assigned the chat (or have it waiting to accept) and have turned notifications on in their own Settings. |
+| All devices stopped after a server move | VAPID keys changed – keep `VAPID_*` (or the `platform_setting` row) when moving servers. |
+
 ## Login and account
 
 | Problem | Fix |
