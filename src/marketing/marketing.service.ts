@@ -135,9 +135,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       for (const event of entry.messaging ?? []) {
         const r = event.referral ?? event.message?.referral ?? event.postback?.referral;
         const senderId = event.sender?.id ? str(event.sender.id) : undefined;
-        if (r && (r.ad_id || r.source === 'ADS')) {
+        if (r?.card) {
+          // the customer answered the ad / post card Meta showed them, but Meta sent no ad id (read from the replied-to message)
+          found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'ad', value: str(r.card.key).slice(0, 64), type: 'card',
+            headline: str(r.card.title), body: '', url: str(r.card.link), clid: null, mediaUrl: str(r.card.media_url) || null, mediaType: r.card.media_type ? str(r.card.media_type) : null });
+        } else if (r && (r.ad_id || r.source === 'ADS' || r.ads_context_data)) {
           const ctx = r.ads_context_data ?? {};
-          found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'ad', value: str(r.ad_id ?? r.ref ?? 'unknown'), type: 'ad',
+          found.push({ mid: event.message?.mid, senderId, companyId: pageCompany, kind: 'ad', value: str(r.ad_id ?? (ctx.post_id ? `post-${ctx.post_id}` : r.ref) ?? 'unknown'), type: r.ad_id ? 'ad' : ctx.post_id ? 'post' : 'ad',
             headline: str(ctx.ad_title), body: '', url: str(ctx.post_id ? `https://www.facebook.com/${ctx.post_id}` : ''), clid: null,
             mediaUrl: str(ctx.photo_url || ctx.video_url) || null, mediaType: ctx.video_url ? 'video' : ctx.photo_url ? 'image' : null });
         } else if (r?.ref) {
@@ -201,6 +205,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
                ad_ctwa_clid = COALESCE($6, ad_ctwa_clid), ad_platform = $7, ad_referred_at = NOW(), ad_body = $8, ad_media_url = $9, ad_media_type = $10
          WHERE id = $1`, [conversation.id, ref.value, ref.type ?? 'ad', String(ref.headline || ref.body || '').slice(0, 1000), String(ref.url ?? '').slice(0, 1000), ref.clid ?? null, platform,
         String(ref.body ?? '').slice(0, 2000), ref.mediaUrl ?? null, ref.mediaType ?? null]);
+      // a new ad click is a new deal: a customer who already bought (won) or said no (lost) starts again as a new lead,
+      // so this visit gets its own result (the history keeps the old one – lead_stage_event)
+      await this.dataSource.query(`UPDATE bot_conversation SET lead_stage = 'new' WHERE id = $1 AND lead_stage IN ('won', 'lost')`, [conversation.id]).catch(() => undefined);
       await this.resolveAdCampaign(conversation.company_id, ref.value).catch(() => undefined);
       await attributeAd(this.dataSource, conversation.id, conversation.company_id, ref.value);
     }

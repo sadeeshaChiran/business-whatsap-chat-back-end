@@ -15,8 +15,8 @@ Every change is tested before it reaches customers. Tests run against a **test d
 | `npm test` | Unit tests (jest, `src/**/*.spec.ts`): delivery fee, booking slots, referral capture, WhatsApp error texts, document reading, guards … |
 | `npm run test:security` | Security and business rules against a running API: tenant isolation, agent vs admin rights, super admin only, packages and offers, quoted replies, feedback, follow-ups, free delivery, service limits, simulator, trials and the team handbook access |
 | `npm run test:flows` | Automation flows and forms |
-| `npm run test:crm` | CRM, marketing, social |
-| `npm run test:meta` | Meta connection check, flows from comments/ads, **Ads & leads** report, ad capture |
+| `npm run test:crm` | CRM, marketing, social, customer insights (visits, groups, tags, per-click ad results) |
+| `npm run test:meta` | Meta connection check, flows from comments/ads, **Ads & leads** report, ad capture, Messenger ad-card replies, Instagram story replies |
 | `npm run test:marketing` | Campaigns |
 | `npm run test:trials` | Free trials, Free bot month, credits unlock, custom packages |
 | `npm run test:perf` | Speed of the main API routes (compare with `test/performance-result.json`) |

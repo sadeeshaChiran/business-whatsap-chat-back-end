@@ -24,15 +24,16 @@ import { ConnectMetaPageDto } from './dto/connect-meta-page.dto';
 import { ConnectWhatsappEmbeddedDto } from './dto/connect-whatsapp-embedded.dto';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import { randomBytes } from 'crypto';
-import { MetaGraphService, type MetaSocialPost } from './meta-graph.service';
+import { APP_WEBHOOK_FIELDS, MetaGraphService, type MetaSocialPost } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
+import { recentMetaEvents } from './webhook-events';
 import { webhookCheck } from './webhook-stats';
 import { tokenScopes } from '../../marketing/graph';
 
 type HealthCheck = { key: string; label: string; ok: boolean | null; detail: string; fix?: string; tech?: boolean; tech_detail?: string };
 
 /** Platform-side checks: shown under "Technical details", not in the shop owner's list. */
-const TECH_KEYS = new Set(['public_url', 'provider', 'token_app', 'delivery', 'app_webhook']);
+const TECH_KEYS = new Set(['public_url', 'provider', 'token_app', 'delivery', 'app_webhook', 'meta_events']);
 const QUALITY: Record<string, string> = {
   GREEN: 'Good',
   YELLOW: 'Medium – avoid sending too many marketing messages',
@@ -40,6 +41,20 @@ const QUALITY: Record<string, string> = {
 };
 
 /** Plain words for the shop owner; the original wording stays for the technical list. */
+/** What Meta actually sent lately (no message text) – shows whether ad clicks arrive at all. */
+function eventsCheck(companyId: number | null | undefined, platform: 'messenger' | 'instagram') {
+  const list = recentMetaEvents(Number(companyId ?? 0), platform);
+  const ads = list.filter((e) => e.details.some((d) => d.startsWith('referral')));
+  const replies = list.filter((e) => e.details.includes('reply to an earlier message'));
+  const lines = list.slice(0, 12).map((e) => `${e.at.slice(11, 19)} UTC · ${e.kind}${e.details.length ? ` – ${e.details.join('; ')}` : ''}`);
+  return {
+    key: 'meta_events', label: 'What Meta sent lately (since the server started)', ok: null,
+    detail: list.length
+      ? `${list.length} events, ${ads.length} with ad / link details, ${replies.length} replies to a Page message.\n${lines.join('\n')}`
+      : 'Nothing yet since the server started. Send a message to the Page (or click your ad), then press “Check again”.',
+  };
+}
+
 export function presentChecks(checks: HealthCheck[], channel: 'whatsapp' | 'messenger' | 'instagram'): HealthCheck[] {
   return checks.map((raw) => {
     if (TECH_KEYS.has(raw.key)) return { ...raw, tech: true };
@@ -243,13 +258,35 @@ export class MetaController {
         detail: !subs.ok ? subs.error ?? '' : subscribed ? `${fields.join(', ')}${otherText}` : `This platform's Meta app (${appId}) is not subscribed to the Page – press “Fix it”.${otherText}`,
         fix: subs.ok && !subscribed ? 'messenger_subscribe' : undefined,
       });
+      if (subscribed) {
+        const referrals = fields.includes('messaging_referrals');
+        messenger.push({
+          key: 'ad_clicks', label: 'Ad clicks are sent to Agent Metra (who came from which ad)', ok: referrals,
+          detail: referrals ? 'Click-to-Messenger ads and "Send message" buttons are linked to the chat.' : 'The Page is not sending ad clicks ("messaging_referrals"), so chats from ads look like normal chats – press “Fix it”.',
+          fix: referrals ? undefined : 'messenger_subscribe',
+        });
+      }
       messenger.push({ key: 'delivery', label: 'Meta is calling the webhook', ...webhookCheck('messenger') });
-      messenger.push({ key: 'app_webhook', label: 'Meta app: Messenger webhook verified, fields “messages”, “messaging_postbacks”, “feed” subscribed', ok: null, detail: 'Meta Developers → your app → Messenger → Settings → Webhooks. While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
+      const app = await this.metaGraphService.appWebhookFields();
+      const missing = (object: 'page' | 'instagram') => APP_WEBHOOK_FIELDS[object].filter((f) => !(app.objects[object]?.fields ?? []).includes(f));
+      const appCheck = (object: 'page' | 'instagram', label: string) => {
+        if (!app.ok) return { key: 'app_webhook', label, ok: null, detail: `Could not read the Meta app webhooks (${app.error ?? 'unknown'}). Check Meta Developers → your app → Webhooks.` };
+        const gone = missing(object);
+        return {
+          key: 'app_webhook', label, ok: gone.length === 0,
+          detail: gone.length ? `Missing: ${gone.join(', ')} – press “Fix it” (adds them to the platform's Meta app).` : `Fields: ${APP_WEBHOOK_FIELDS[object].join(', ')}.`,
+          fix: gone.length ? 'meta_app_webhooks' : undefined,
+        };
+      };
+      messenger.push(appCheck('page', 'Meta app: Messenger webhook fields (messages, buttons, ad clicks, comments)'));
+      messenger.push(eventsCheck(user.company_id, 'messenger'));
+      messenger.push({ key: 'dev_mode', label: 'Meta app is Live', ok: null, detail: 'While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
       instagram.push({ key: 'page', label: 'Facebook Page connected', ok: true, detail: page.page_name ?? page.page_id });
       instagram.push({ key: 'linked', label: 'Instagram professional account linked to the Page', ok: Boolean(page.instagram_business_account_id),
         detail: page.instagram_business_account_id ? `Instagram account ${page.instagram_business_account_id}` : 'Link the Instagram account to this Facebook Page (Instagram → Settings → Linked accounts / Meta Business Suite).' });
       instagram.push({ key: 'dm_access', label: 'Instagram → Settings → Messages → "Allow access to messages" is on', ok: null, detail: 'Check this in the Instagram app (it cannot be read by Agent Metra).' });
-      instagram.push({ key: 'app_webhook', label: 'Meta app: Instagram webhook "messages" is subscribed', ok: null, detail: 'Meta Developers → your app → Webhooks → Instagram → subscribe to "messages".' });
+      instagram.push(appCheck('instagram', 'Meta app: Instagram webhook fields (messages, buttons, ad clicks, comments)'));
+      instagram.push(eventsCheck(user.company_id, 'instagram'));
     }
     return { whatsapp: presentChecks(whatsapp, 'whatsapp'), messenger: presentChecks(messenger, 'messenger'), instagram: presentChecks(instagram, 'instagram') };
   }
@@ -292,11 +329,15 @@ export class MetaController {
       if (!result.registered) throw new BadRequestException(`Meta: ${result.message}`);
       return { ok: true, message: result.message };
     }
+    if (action === 'meta_app_webhooks') {
+      const result = await this.metaGraphService.fixAppWebhookFields();
+      return { ok: true, message: result.changed.length ? `Added to the Meta app: ${result.changed.join('; ')}.` : 'The Meta app already has every webhook field.' };
+    }
     if (action === 'messenger_subscribe') {
       const page = await this.metaPageConnectionRepository.findOne({ where: { company_id: user.company_id, status: 'CONNECTED' }, order: { id: 'DESC' } });
       if (!page?.page_access_token) throw new BadRequestException('Connect a Facebook Page first.');
       await this.metaGraphService.subscribePageMessaging(page.page_id, page.page_access_token);
-      return { ok: true, message: 'Page messages now go to Agent Metra.' };
+      return { ok: true, message: 'Page messages and ad clicks now go to Agent Metra.' };
     }
     throw new BadRequestException('Unknown fix.');
   }

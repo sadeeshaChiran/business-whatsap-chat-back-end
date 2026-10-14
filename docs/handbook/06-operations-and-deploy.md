@@ -39,6 +39,7 @@ How the production server is set up, how to release a new version safely, and ho
 | Sales bot | `SALES_BOT_URL`, `SALES_BOT_API_KEY`, `SALES_BOT_TEST_MODE` (never in production), `SALES_BOT_DEBOUNCE_MS`, `SALES_BOT_DEBOUNCE_MAX_MS`, `SALES_BOT_PART_DELAY_MS`, `SALES_BOT_TIMEOUT_MS`, `SALES_BOT_FOLLOWUP_TICK_MS` |
 | Routing | `AGENT_PENDING_TIMEOUT_HOURS`, `AGENT_ROUTING_CHECK_MINUTES` |
 | Flows | `FLOW_TICK_MS`, `IG_MEDIA_WAIT_MS` |
+| Debugging | `META_WEBHOOK_LOG` (1 = log raw Messenger / Instagram events – contains customer text, keep off) |
 | Realtime | `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET`, `PUSHER_CLUSTER`, `PUSHER_HOST`, `PUSHER_PORT` |
 | Platform | `SUPER_ADMIN_EMAILS` |
 | Payments | `PAYHERE_MERCHANT_ID`, `PAYHERE_MERCHANT_SECRET`, `PAYHERE_SANDBOX`, `PAYHERE_APP_ID`, `PAYHERE_APP_SECRET` |

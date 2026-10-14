@@ -16,6 +16,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { CustomerInsightsController, CustomerInsightsService } from './insights';
 
 const LEAD_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'] as const;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
@@ -683,5 +684,5 @@ export class CrmController {
   team(@CurrentUser() user: AuthenticatedUser) { return this.crm.team(user); }
 }
 
-@Module({ imports: [AuthModule], controllers: [CrmController], providers: [CrmService] })
+@Module({ imports: [AuthModule], controllers: [CrmController, CustomerInsightsController], providers: [CrmService, CustomerInsightsService] })
 export class CrmModule {}
