@@ -26,6 +26,17 @@ const meta = createServer((req, res) => {
     return res.end(JSON.stringify({ id: CARD, created_time: new Date(Date.now() - 3600_000).toISOString(), from: { id: PAGE, name: 'MetroCoding' },
       message: 'new one – AI future tech course', attachments: { data: [{ mime_type: 'image/png', image_data: { url: 'http://127.0.0.1:4599/card.png' } }] } }));
   }
+  if (path === `/${PAGE}/conversations`) {
+    const user = new URL(req.url, 'http://x').searchParams.get('user_id');
+    if (user !== `psid-greet-${R}`) return res.end(JSON.stringify({ data: [] }));
+    const at = (min) => new Date(Date.now() - min * 60_000).toISOString();
+    return res.end(JSON.stringify({ data: [{ messages: { data: [
+      { id: `m_greet_${R}`, created_time: at(1), from: { id: PAGE }, message: 'Hi Sadeesha! Please let us know how we can help you.' },
+      { id: `m_card2_${R}`, created_time: at(2), from: { id: PAGE }, message: 'new one', attachments: { data: [{ image_data: { url: 'http://127.0.0.1:4599/card.png' } }] } },
+      { id: `m_old_${R}`, created_time: at(60 * 30), from: { id: PAGE }, message: 'old message from yesterday' },
+      { id: `m_cust_${R}`, created_time: at(3), from: { id: user }, message: 'something the customer wrote' },
+    ] } }] }));
+  }
   if (path === `/${OWN}`) return res.end(JSON.stringify({ id: OWN, from: { id: 'psid-someone' }, message: 'my own text' }));
   if (req.method === 'POST') return res.end(JSON.stringify({ recipient_id: 'x', message_id: `m.out.${Date.now()}` }));
   if (req.method === 'GET') return res.end(JSON.stringify({ id: 'x', name: 'Sadeesha Chiran', first_name: 'Sadeesha' }));
@@ -77,6 +88,27 @@ test('Messenger: a reply to the ad card (no ad details from Meta) becomes a lead
   const row = report.data.ads.find((a) => a.headline === 'new one – AI future tech course');
   assert.equal(row.people, 2);
   assert.equal(row.type, 'card');
+});
+
+test('Messenger ad with a welcome message: the customer just writes "Hi" – the ad card and greeting are brought in from Meta and it is an ad lead', async () => {
+  const psid = `psid-greet-${R}`;
+  await hook('page', PAGE, { sender: { id: psid }, message: { mid: `m_hi_${R}`, text: 'Hi' } });
+  const conv = await convOf(psid);
+  const rows = await sql(`SELECT direction::text, source, content, provider_message_id FROM bot_message WHERE conversation_id = $1 ORDER BY id`, [conv.id]);
+  assert.deepEqual(rows.map((r) => [r.direction, r.source, r.content]), [
+    ['outbound', 'meta-context', 'new one'],
+    ['outbound', 'meta-context', 'Hi Sadeesha! Please let us know how we can help you.'],
+    ['inbound', 'meta-webhook', 'Hi'],
+  ]);
+  const [click] = await sql(`SELECT source_type, headline, media_url, provider_message_id FROM marketing_ad_click WHERE conversation_id = $1`, [conv.id]);
+  assert.equal(click.source_type, 'card');
+  assert.equal(click.headline, 'new one');
+  assert.equal(click.provider_message_id, `m_hi_${R}`);
+  assert.match(click.media_url, /^local-media:/);
+  // the next message a minute later does not read Meta again or count a second click
+  await hook('page', PAGE, { sender: { id: psid }, message: { mid: `m_hi2_${R}`, text: 'price kiyada?' } });
+  const clicks = await sql(`SELECT COUNT(*)::int AS n FROM marketing_ad_click WHERE conversation_id = $1`, [conv.id]);
+  assert.equal(clicks[0].n, 1);
 });
 
 test('Messenger: replying to the customer\'s own old message is just a quote, not a lead', async () => {

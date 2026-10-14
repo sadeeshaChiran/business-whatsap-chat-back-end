@@ -51,6 +51,7 @@ How to handle customer tickets. Each problem has **what the customer says**, **c
 2. Ask the customer (or test yourself from an account with a role on the app) to click the ad and send a message. Then open **Technical details → What Meta sent lately**:
    - "ad / link click – referral: ADS, OPEN_THREAD, ad …" or a customer message with "referral: …" → Meta sends the ad; the chat should be marked. If not, escalate with the time.
    - "customer message – reply to an earlier message" only → the customer replied to the ad card. We read the card from Meta; if it still isn't marked, Meta refused to share the card (see the API log line "replied-to message … could not be read") – escalate.
+   - Only "customer message" (no referral, no reply) → normal for ads with a welcome message. The API reads the Page conversation from Meta and brings in the card + greeting. If they don't appear, look for "recent messenger messages could not be read from Meta" in the API log (usually a Page token without `pages_messaging` / `pages_read_engagement` – reconnect the Page).
    - Neither → Meta is not sending ad information for this ad type. Check the ad's destination is Messenger / Instagram Direct (not a website).
 3. For deep debugging only: set `META_WEBHOOK_LOG=1`, restart the API, reproduce, read `pm2 logs`, then remove it again (the log then contains customer messages).
 

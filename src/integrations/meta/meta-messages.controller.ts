@@ -208,14 +208,30 @@ export class MetaMessagesController {
     const referralInEvent = Boolean(event.referral ?? message?.referral ?? (postback as { referral?: unknown } | undefined)?.referral);
     let card: RepliedCard | null = null;
     let cardIsLead = false;
+    const safe = async <T>(run: () => Promise<T>, fallback: T) => { try { return await run(); } catch { return fallback; } };
+    const recentClick = async () => (await safe(() => this.messageRepository.query(
+      `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [conversation.id]), [] as unknown[])).length > 0;
     if (!isEcho && message?.reply_to?.mid) {
       card = await this.loadRepliedMessage(connection, platform, accountId, conversation.id, String(message.reply_to.mid)).catch(() => null);
       if (card) {
-        const recentClick = await this.messageRepository.query(
-          `SELECT 1 FROM marketing_ad_click WHERE conversation_id = $1 AND clicked_at > NOW() - INTERVAL '10 minutes' LIMIT 1`, [conversation.id]).catch(() => []);
         // an ad / post card: has a photo, video or link and was shown to the customer in the last 3 days
-        cardIsLead = !referralInEvent && !recentClick.length && Boolean(card.mediaUrl || card.link) && Date.now() - card.createdAt.getTime() < 3 * 86_400_000;
-        if (!cardIsLead) await this.saveContextMessage(companyId, conversation.id, platform, card.mid, card.title, card.mediaUrl, card.createdAt);
+        cardIsLead = !referralInEvent && Boolean(card.mediaUrl || card.link) && Date.now() - card.createdAt.getTime() < 3 * 86_400_000 && !(await recentClick());
+        const stored = await this.saveContextMessage(companyId, conversation.id, platform, card.mid, card.title, card.mediaUrl, card.createdAt);
+        if (stored) card.mediaUrl = stored;
+      }
+    } else if (!isEcho && message && !referralInEvent && !message.reply_to) {
+      // Click-to-Messenger / Instagram ad with a welcome message: Meta shows the ad card + greeting in the chat but often
+      // sends us neither. When a customer writes after a quiet time, read the last messages of the chat from Meta and
+      // bring in the Page messages we never got (the ad card, the greeting) – the newest card = the ad they came from.
+      const quiet = await safe(() => this.messageRepository.query(
+        `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' AND created_at > NOW() - INTERVAL '30 minutes' LIMIT 1`, [conversation.id]), [{}] as unknown[]);
+      if (!quiet.length) {
+        const found = await safe(() => this.loadRecentPageMessages(connection, platform, accountId, senderId, conversation.id), [] as RepliedCard[]);
+        for (const item of found) {
+          const stored = await this.saveContextMessage(companyId, conversation.id, platform, item.mid, item.title, item.mediaUrl, item.createdAt).catch(() => null);
+          if (item.mediaUrl || item.link) card = { ...item, mediaUrl: stored ?? item.mediaUrl };
+        }
+        if (card) cardIsLead = !(await recentClick());
       }
     }
     if (!isEcho && message?.reply_to?.story?.url) {
@@ -263,9 +279,6 @@ export class MetaMessagesController {
     if (card && cardIsLead && providerId) {
       // Meta sent no ad details, but the customer answered the ad / post card → count it as a lead from that card
       const key = createHash('sha1').update(`${platform}:${card.title}:${card.link ?? ''}`).digest('hex').slice(0, 14);
-      // Meta's picture links expire – keep our own copy of the card picture
-      const stored = card.mediaUrl ? await this.downloadAndStore(companyId, card.mediaUrl) : null;
-      if (stored) card.mediaUrl = stored.key;
       await MarketingHook.run({ entry: [{ id: accountId, messaging: [{
         sender: { id: senderId }, recipient: { id: accountId }, message: { mid: providerId },
         referral: { source: 'REPLY_CARD', card: { key: `card-${key}`, title: card.title, media_url: card.mediaUrl, media_type: card.mediaType, link: card.link } },
@@ -322,16 +335,56 @@ export class MetaMessagesController {
 
   /** Puts a Page message we did not have (ad card, story, old message) into the chat, before the customer's reply. */
   private async saveContextMessage(companyId: number, conversationId: number, platform: 'messenger' | 'instagram', providerId: string,
-    text: string, mediaUrl: string | null, createdAt: Date) {
-    const exists = await this.messageRepository.query(`SELECT 1 FROM bot_message WHERE conversation_id = $1 AND provider_message_id = $2 LIMIT 1`, [conversationId, providerId]);
-    if (exists.length) return;
+    text: string, mediaUrl: string | null, createdAt: Date): Promise<string | null> {
+    const exists = await this.messageRepository.query(`SELECT media_url FROM bot_message WHERE conversation_id = $1 AND provider_message_id = $2 LIMIT 1`, [conversationId, providerId]);
+    if (exists.length) return exists[0].media_url ?? null;
     const stored = mediaUrl ? await this.downloadAndStore(companyId, mediaUrl) : null;
     const row = await this.messageRepository.save(this.messageRepository.create({
       conversation_id: conversationId, direction: 'outbound', delivery_status: 'sent', platform,
       message_type: mediaUrl ? 'image' : 'text', content: text || (mediaUrl ? '[image]' : '[message]'),
       media_url: mediaUrl ? stored?.key ?? mediaUrl : null, provider_message_id: providerId, source: 'meta-context',
     }));
-    await this.messageRepository.query(`UPDATE bot_message SET created_at = LEAST($2::timestamp, created_at) WHERE id = $1`, [row.id, createdAt.toISOString()]).catch(() => undefined);
+    await this.messageRepository.query(`UPDATE bot_message SET created_at = LEAST(($2::timestamptz)::timestamp, created_at) WHERE id = $1`, [row.id, createdAt.toISOString()]).catch(() => undefined);
+    return row.media_url ?? null;
+  }
+
+  /**
+   * Page messages of the last 24 hours in this chat that we never received (the ad card and greeting Meta shows after
+   * an ad click, messages sent from a phone before the app was connected), oldest first. Read from Meta's conversation.
+   */
+  private async loadRecentPageMessages(connection: MetaPageConnection, platform: 'messenger' | 'instagram', accountId: string, senderId: string,
+    conversationId: number): Promise<RepliedCard[]> {
+    if (!connection.page_access_token || !connection.page_id) return [];
+    const res = await this.graphService.healthGet<{ data?: Array<{ messages?: { data?: GraphMessage[] } }> }>(`/${connection.page_id}/conversations`, connection.page_access_token, {
+      platform, user_id: senderId,
+      fields: 'messages.limit(10){id,created_time,from,message,attachments{mime_type,name,image_data,video_data},shares{link,name,description}}',
+    });
+    if (!res.ok) {
+      this.logger.log(`recent ${platform} messages could not be read from Meta: ${res.error ?? 'empty'}`);
+      return [];
+    }
+    const ours = [accountId, connection.page_id, connection.instagram_business_account_id].filter(Boolean).map(String);
+    const list = (res.data?.data?.[0]?.messages?.data ?? [])
+      .filter((m) => m.id && ours.includes(String(m.from?.id ?? '')))
+      .filter((m) => m.created_time && Date.now() - new Date(m.created_time).getTime() < 24 * 3600_000);
+    if (!list.length) return [];
+    const known: Array<{ provider_message_id: string; content: string }> = await this.messageRepository.query(
+      `SELECT provider_message_id, content FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' AND created_at > NOW() - INTERVAL '2 days'`, [conversationId]);
+    const ids = new Set(known.map((k) => String(k.provider_message_id ?? '').split(':')[0]));
+    const texts = new Set(known.map((k) => String(k.content ?? '').trim()));
+    const out: RepliedCard[] = [];
+    for (const m of list) {
+      const attachment = m.attachments?.data?.[0];
+      const share = m.shares?.data?.[0];
+      const image = attachment?.image_data?.url ?? attachment?.image_data?.preview_url ?? null;
+      const video = attachment?.video_data?.url ?? null;
+      const mediaUrl = image ?? attachment?.video_data?.preview_url ?? null;
+      const title = (m.message ?? share?.name ?? share?.description ?? '').trim().slice(0, 1000);
+      if (ids.has(String(m.id)) || (!mediaUrl && texts.has(title))) continue; // we have it (our own reply / echo)
+      if (!title && !mediaUrl && !share?.link) continue;
+      out.push({ mid: String(m.id), title, mediaUrl, mediaType: video ? 'video' : image ? 'image' : null, createdAt: new Date(String(m.created_time)), link: share?.link ?? null });
+    }
+    return out.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   /* ───────── message → rows in the formats the inbox understands ───────── */
