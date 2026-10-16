@@ -40,6 +40,8 @@ export async function sendWhatsappCode(phone: string, code: string): Promise<boo
   const phoneNumberId = env('OTP_WHATSAPP_PHONE_NUMBER_ID');
   const token = env('OTP_WHATSAPP_TOKEN');
   if (!phoneNumberId || !token) return false;
+  console.log(`Sending WhatsApp code to ${phone} using phone number ID ${phoneNumberId} code ${code}`);
+  
   try {
     const version = env('META_GRAPH_API_VERSION') || 'v22.0';
     const response = await fetch(`https://graph.facebook.com/${version}/${phoneNumberId}/messages`, {
