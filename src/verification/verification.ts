@@ -35,6 +35,7 @@ export function normalizeWhatsapp(value: string): string {
 }
 
 /* ───────── DTOs ───────── */
+/* Field names that say "whatsapp" are kept so the database and the app keep working; they now hold the mobile number and the SMS code. */
 
 class RegisterCompanyInput {
   @IsString() @MinLength(2) @MaxLength(255) name: string;
@@ -47,7 +48,7 @@ export class RegisterStartDto {
   @IsString() @MinLength(8) @MaxLength(255)
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, { message: 'Password must have at least 8 characters with letters and numbers.' })
   password: string;
-  /** the admin's WhatsApp number – a code is sent to it */
+  /** the admin's mobile number – a code is sent to it by SMS (not in test mode) */
   @IsString() @MinLength(9) @MaxLength(20) whatsapp: string;
   @ValidateNested() @Type(() => RegisterCompanyInput) company: RegisterCompanyInput;
 }
@@ -55,11 +56,13 @@ export class RegisterStartDto {
 export class RegisterVerifyDto {
   @IsString() @Length(10, 40) registration_id: string;
   @IsString() @Matches(/^\d{6}$/) email_code: string;
-  @IsString() @Matches(/^\d{6}$/) whatsapp_code: string;
+  /** SMS code. Required in production, ignored in test mode. */
+  @IsOptional() @IsString() @MaxLength(10) whatsapp_code?: string;
 }
 
 export class RegisterResendDto {
   @IsString() @Length(10, 40) registration_id: string;
+  /** "whatsapp" means the mobile (SMS) code */
   @IsIn(['email', 'whatsapp']) channel: 'email' | 'whatsapp';
 }
 
@@ -112,7 +115,7 @@ export class VerificationService {
   }
 
   /** Creates and sends a code. Limits: one per minute and a few per hour for the same target. */
-  private async issue(purpose: string, reference: string, target: string, channel: 'email' | 'whatsapp', intro: string) {
+  private async issue(purpose: string, reference: string, target: string, channel: 'email' | 'sms', intro: string) {
     const [recent] = await this.dataSource.query(
       `SELECT MAX(created_at) AS last, COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '1 hour')::int AS hour
          FROM verification_code WHERE target = $1 AND purpose = $2`, [target, purpose]);
@@ -133,7 +136,7 @@ export class VerificationService {
     if (!sentVia) {
       throw new BadRequestException(channel === 'email'
         ? 'We could not send the email. Check the address and try again.'
-        : 'We could not send the WhatsApp code. Check the number (with country code) and try again.');
+        : 'We could not send the SMS code. Check the mobile number (with country code) and try again.');
     }
     await this.dataSource.query(
       `INSERT INTO verification_code (purpose, reference, target, code_hash, expires_at)
@@ -146,7 +149,7 @@ export class VerificationService {
   private async check(purpose: string, reference: string, code: string): Promise<string> {
     const [row] = await this.dataSource.query(
       `SELECT * FROM verification_code WHERE reference = $1 AND purpose = $2 ORDER BY id DESC LIMIT 1`, [reference, purpose]);
-    const label = purpose.includes('email') ? 'email' : 'WhatsApp';
+    const label = purpose.includes('email') ? 'email' : 'SMS';
     if (!row || row.verified_at) throw new BadRequestException(`Ask for a new ${label} code.`);
     if (new Date(row.expires_at) < new Date()) throw new BadRequestException(`The ${label} code has expired. Ask for a new one.`);
     if (row.attempts >= MAX_ATTEMPTS) throw new BadRequestException(`Too many wrong ${label} codes. Ask for a new one.`);
@@ -165,7 +168,7 @@ export class VerificationService {
   async registerStart(dto: RegisterStartDto) {
     const email = dto.email.trim().toLowerCase();
     const whatsapp = normalizeWhatsapp(dto.whatsapp);
-    if (whatsapp.length < 10 || whatsapp.length > 15) throw new BadRequestException('Enter your WhatsApp number with the country code, e.g. 94771234567.');
+    if (whatsapp.length < 10 || whatsapp.length > 15) throw new BadRequestException('Enter your mobile number with the country code, e.g. 94771234567.');
     const [taken] = await this.dataSource.query(`SELECT 1 FROM app_user WHERE LOWER(email) = $1`, [email]);
     if (taken) throw new ConflictException('An account with this email already exists. Log in instead.');
     await this.dataSource.query(`DELETE FROM pending_registration WHERE expires_at < NOW() OR email = $1`, [email]);
@@ -176,11 +179,18 @@ export class VerificationService {
       `INSERT INTO pending_registration (id, email, whatsapp, payload, expires_at) VALUES ($1, $2, $3, $4, NOW() + make_interval(mins => $5::int))`,
       [id, email, whatsapp, payload, REGISTRATION_TTL_MIN]);
     const emailResult = await this.issue('register_email', id, email, 'email', `Welcome to ${BrandingService.current().name}! Use this code to confirm your email address.`);
-    const phoneResult = await this.issue('register_whatsapp', id, whatsapp, 'whatsapp', '').catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
+    // Test mode: the mobile number is not verified. Production: an SMS code is sent through Notify.lk.
+    const mobileRequired = !otpDevMode();
+    const phoneResult = mobileRequired
+      ? await this.issue('register_whatsapp', id, whatsapp, 'sms', '').catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+      : null;
     return {
       registration_id: id, email, whatsapp,
-      email_sent: true, whatsapp_sent: !('error' in phoneResult), whatsapp_error: 'error' in phoneResult ? phoneResult.error : null,
-      ...(otpDevMode() ? { dev_codes: { email: (emailResult as { dev_code?: string }).dev_code, whatsapp: (phoneResult as { dev_code?: string }).dev_code } } : {}),
+      mobile_required: mobileRequired,
+      email_sent: true,
+      whatsapp_sent: !!phoneResult && !('error' in phoneResult),
+      whatsapp_error: phoneResult && 'error' in phoneResult ? phoneResult.error : null,
+      ...(otpDevMode() ? { dev_codes: { email: (emailResult as { dev_code?: string }).dev_code } } : {}),
     };
   }
 
@@ -189,18 +199,24 @@ export class VerificationService {
     if (!pending) throw new NotFoundException('This sign-up has expired. Please start again.');
     return dto.channel === 'email'
       ? this.issue('register_email', pending.id, pending.email, 'email', 'Use this code to confirm your email address.')
-      : this.issue('register_whatsapp', pending.id, pending.whatsapp, 'whatsapp', '');
+      : this.issue('register_whatsapp', pending.id, pending.whatsapp, 'sms', '');
   }
 
   async registerVerify(dto: RegisterVerifyDto) {
     const [pending] = await this.dataSource.query(`SELECT * FROM pending_registration WHERE id = $1 AND expires_at > NOW()`, [dto.registration_id]);
     if (!pending) throw new NotFoundException('This sign-up has expired. Please start again.');
     await this.check('register_email', pending.id, dto.email_code);
-    await this.check('register_whatsapp', pending.id, dto.whatsapp_code);
+    const mobileVerified = !otpDevMode();
+    if (mobileVerified) {
+      if (!/^\d{6}$/.test(dto.whatsapp_code ?? '')) throw new BadRequestException('Enter the 6-digit code sent to your mobile number.');
+      await this.check('register_whatsapp', pending.id, dto.whatsapp_code as string);
+    }
     const { register, category } = JSON.parse(this.decrypt(pending.payload)) as { register: RegisterDto; category: string };
     await this.authService.register(register); // same account + company creation as before
     const [user] = await this.dataSource.query(`SELECT id, company_id FROM app_user WHERE LOWER(email) = $1`, [pending.email]);
-    await this.dataSource.query(`UPDATE app_user SET email_verified_at = NOW(), whatsapp_number = $2, whatsapp_verified_at = NOW() WHERE id = $1`, [user.id, pending.whatsapp]);
+    await this.dataSource.query(
+      `UPDATE app_user SET email_verified_at = NOW(), whatsapp_number = $2, whatsapp_verified_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END WHERE id = $1`,
+      [user.id, pending.whatsapp, mobileVerified]);
     await this.dataSource.query(
       `UPDATE companies SET phone = COALESCE(NULLIF(phone, ''), $2), business_category = $3 WHERE id = $1`,
       [user.company_id, pending.whatsapp, category === 'service' || category === 'both' ? category : 'product']);
@@ -208,7 +224,7 @@ export class VerificationService {
     return this.authService.issueAuthResponse(Number(user.id));
   }
 
-  /* ───── Change email / WhatsApp (signed in) ───── */
+  /* ───── Change email / mobile number (signed in) ───── */
 
   async changeEmailStart(user: AuthenticatedUser, dto: ChangeEmailStartDto) {
     const email = dto.new_email.trim().toLowerCase();
@@ -235,10 +251,11 @@ export class VerificationService {
     return this.authService.issueAuthResponse(Number(user.id));
   }
 
+  /** Test mode: no SMS is sent, the code is only in the server log and in `dev_code`. */
   async changeWhatsappStart(user: AuthenticatedUser, dto: ChangeWhatsappStartDto) {
     const whatsapp = normalizeWhatsapp(dto.whatsapp);
-    if (whatsapp.length < 10 || whatsapp.length > 15) throw new BadRequestException('Enter the WhatsApp number with the country code.');
-    return this.issue('change_whatsapp', `user-${user.id}`, whatsapp, 'whatsapp', '');
+    if (whatsapp.length < 10 || whatsapp.length > 15) throw new BadRequestException('Enter the mobile number with the country code.');
+    return this.issue('change_whatsapp', `user-${user.id}`, whatsapp, 'sms', '');
   }
 
   async changeWhatsappVerify(user: AuthenticatedUser, dto: CodeDto) {
@@ -282,7 +299,7 @@ export class VerificationService {
 export class VerificationController {
   constructor(private readonly service: VerificationService) {}
 
-  /** 1) Sign-up details → codes sent to email and WhatsApp */
+  /** 1) Sign-up details → email code (+ SMS code to the mobile number, except in test mode) */
   @Post('register/start')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   start(@Body() dto: RegisterStartDto) { return this.service.registerStart(dto); }
@@ -291,7 +308,7 @@ export class VerificationController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   resend(@Body() dto: RegisterResendDto) { return this.service.registerResend(dto); }
 
-  /** 2) Both codes → account created, logged in */
+  /** 2) Codes → account created, logged in */
   @Post('register/verify')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   verify(@Body() dto: RegisterVerifyDto) { return this.service.registerVerify(dto); }
