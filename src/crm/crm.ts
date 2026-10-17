@@ -13,7 +13,7 @@ import { memoryStorage } from 'multer';
 import { DataSource } from 'typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly } from '../auth/decorators/roles.decorator';
+import { ManagerOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CustomerInsightsController, CustomerInsightsService } from './insights';
@@ -138,6 +138,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
 
   /** null for the company admin; the agent's own id for an agent (agents only see their own customers) */
   private async agentOf(user: AuthenticatedUser): Promise<number | null> {
+    if (user.role === 'supervisor') return null; // team lead sees every customer
     const [company] = await this.dataSource.query(`SELECT admin_user_id FROM companies WHERE id = $1`, [Number(user.company_id)]);
     return company && Number(company.admin_user_id) === Number(user.id) ? null : Number(user.id);
   }
@@ -265,7 +266,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     if (dto.lead_stage !== undefined) {
       await this.dataSource.query(`UPDATE crm_contact SET stage = $2, updated_at = NOW() WHERE bot_channel_user_id = $1`, [id, dto.lead_stage]);
       await this.dataSource.query(`
-        UPDATE bot_conversation SET lead_stage = $2 WHERE id = (SELECT id FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1)`, [id, dto.lead_stage]);
+        UPDATE bot_conversation SET lead_stage = $2, lead_stage_manual = TRUE WHERE id = (SELECT id FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1)`, [id, dto.lead_stage]);
     }
     return this.contact(user, id);
   }
@@ -329,7 +330,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     if (dto.lead_stage) {
       await this.dataSource.query(`UPDATE crm_contact SET stage = $2, updated_at = NOW() WHERE bot_channel_user_id = ANY($1::int[])`, [ids, dto.lead_stage]);
       await this.dataSource.query(`
-        UPDATE bot_conversation c SET lead_stage = $2 FROM (
+        UPDATE bot_conversation c SET lead_stage = $2, lead_stage_manual = TRUE FROM (
           SELECT DISTINCT ON (bot_channel_user_id) id FROM bot_conversation WHERE bot_channel_user_id = ANY($1::int[]) ORDER BY bot_channel_user_id, id DESC
         ) last WHERE c.id = last.id`, [ids, dto.lead_stage]);
     }
@@ -634,7 +635,7 @@ export class CrmController {
   contacts(@CurrentUser() user: AuthenticatedUser, @Query() query: ContactsQueryDto) { return this.crm.contacts(user, query); }
 
   @Get('contacts/export')
-  @AdminOnly()
+  @ManagerOnly()
   async export(@CurrentUser() user: AuthenticatedUser, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="contacts-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -642,7 +643,7 @@ export class CrmController {
   }
 
   @Post('contacts/import')
-  @AdminOnly()
+  @ManagerOnly()
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
   import(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { buffer: Buffer }) { return this.crm.importCsv(user, file); }

@@ -48,7 +48,7 @@ export class ManualOrdersService {
     if (!conversation?.channelUser || Number(conversation.channelUser.company_id) !== companyId) throw new NotFoundException('Conversation not found.');
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     const isAdmin = Number(company?.admin_user_id) === Number(user.id);
-    if (!isAdmin && Number(conversation.assigned_agent_id) !== Number(user.id)) {
+    if (!isAdmin && user.role !== 'supervisor' && Number(conversation.assigned_agent_id) !== Number(user.id)) {
       throw new ForbiddenException('You can only add orders for your own customers.');
     }
     return { companyId, conversation, channelUser: conversation.channelUser, isAdmin };

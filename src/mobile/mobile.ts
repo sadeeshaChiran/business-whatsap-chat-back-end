@@ -179,7 +179,8 @@ export class MobileService {
 
   private async role(user: AuthenticatedUser) {
     const [row] = await this.dataSource.query(`SELECT admin_user_id FROM companies WHERE id = $1`, [user.company_id]);
-    return Number(row?.admin_user_id) === Number(user.id) ? 'admin' : 'agent';
+    // supervisors (team leads) see every chat like the owner
+    return Number(row?.admin_user_id) === Number(user.id) || user.role === 'supervisor' ? 'admin' : 'agent';
   }
 
   /** Chat list: admins see every chat, agents see the chats assigned to them. */

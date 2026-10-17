@@ -65,6 +65,10 @@ export class Company {
   @Column({ type: 'int', default: 0 })
   agent_offline_shift_minutes: number;
 
+  /** New chats given to an agent are accepted automatically (the agent can still pass them on). */
+  @Column({ type: 'boolean', default: true })
+  agent_auto_accept: boolean;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   created_at: Date;
 

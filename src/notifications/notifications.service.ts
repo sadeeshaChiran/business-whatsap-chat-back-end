@@ -88,7 +88,7 @@ export class NotificationsService {
 
     const [botAlerts, workload] = await Promise.all([
       this.salesBotNotifications(user),
-      user.role === 'admin' ? this.queueNotification(user) : this.agentPendingNotification(user),
+      user.role === 'admin' || user.role === 'supervisor' ? this.queueNotification(user) : this.agentPendingNotification(user),
     ]);
     const items = [...workload, ...botAlerts]
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
@@ -104,7 +104,7 @@ export class NotificationsService {
       const rows: Array<{
         id: number; priority: NotificationPriority; title: string; message: string;
         conversation_id: number | null; order_id: number | null; created_at: Date;
-      }> = user.role === 'admin'
+      }> = user.role === 'admin' || user.role === 'supervisor'
         ? await this.dataSource.query(
             `SELECT id, priority, title, message, conversation_id, order_id, created_at
                FROM bot_notification

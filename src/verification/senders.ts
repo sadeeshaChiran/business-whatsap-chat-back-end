@@ -5,12 +5,7 @@ import nodemailer from 'nodemailer';
 const logger = new Logger('Verification');
 const env = (name: string) => String(process.env[name] ?? '').trim();
 
-/**
- * true = TEST mode (OTP_DEV_MODE=true and NODE_ENV is not "production"):
- *  - the mobile number is NOT verified and no SMS is sent
- *  - email codes are also written to the server log and returned to the app
- * Never use this in production.
- */
+/** true = codes are also written to the server log (only for local testing – never in production) */
 export const otpDevMode = () => env('OTP_DEV_MODE') === 'true' && env('NODE_ENV') !== 'production';
 
 /**
@@ -37,8 +32,8 @@ export async function sendEmail(to: string, subject: string, text: string, html:
 }
 
 /**
- * SMS code through Notify.lk to a normal mobile number (digits with country code, e.g. 94771234567).
- * NOTIFYLK_USER_ID, NOTIFYLK_API_KEY, NOTIFYLK_SENDER_ID (use your approved sender ID in production).
+ * SMS code with Notify.lk (Sri Lanka): NOTIFYLK_USER_ID, NOTIFYLK_API_KEY, NOTIFYLK_SENDER_ID (your approved sender
+ * name; "NotifyDEMO" only works for numbers added to the Notify.lk test list).
  */
 export async function sendSmsCode(phone: string, code: string): Promise<boolean> {
   if (!env('NOTIFYLK_USER_ID') || !env('NOTIFYLK_API_KEY')) {
@@ -48,29 +43,26 @@ export async function sendSmsCode(phone: string, code: string): Promise<boolean>
   try {
     const params = new URLSearchParams({
       user_id: env('NOTIFYLK_USER_ID'), api_key: env('NOTIFYLK_API_KEY'), sender_id: env('NOTIFYLK_SENDER_ID') || 'NotifyDEMO',
-      to: phone, message: `Your ${BrandingService.current().name} code is ${code}. It is valid for 10 minutes.`,
+      to: phone, message: `${code} is your ${BrandingService.current().name} code. It is valid for 10 minutes. Do not share it.`,
     });
-    const response = await fetch(`https://app.notify.lk/api/v1/send?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
-    const body = (await response.json().catch(() => null)) as { status?: string; message?: string } | null;
-    if (!response.ok || body?.status === 'error') {
-      // Never log the request URL (it contains the API key) or the code.
-      logger.warn(`SMS to ${phone} failed: HTTP ${response.status} ${body?.message ?? ''}`.trim());
-      return false;
-    }
-    return true;
+    const base = (env('NOTIFYLK_BASE_URL') || 'https://app.notify.lk/api/v1').replace(/\/+$/, '');
+    const response = await fetch(`${base}/send?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
+    const body = (await response.json().catch(() => ({}))) as { status?: string; data?: unknown; message?: string; errors?: unknown };
+    // Notify.lk answers {"status":"success","data":"Sent"} – anything else is a failure (wrong key, no credit, bad number …)
+    const ok = response.ok && String(body.status ?? '').toLowerCase() === 'success';
+    if (!ok) logger.warn(`SMS code to ${phone} failed: ${response.status} ${JSON.stringify(body).slice(0, 300)}`);
+    return ok;
   } catch (error) {
-    logger.warn(`SMS to ${phone} failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger.warn(`SMS code to ${phone} failed: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 }
 
-/**
- * Mobile code by SMS. In test mode no SMS is sent: the code is only written to the log.
- * Returns how it was sent, or null when it could not be sent.
- */
+/** Mobile number codes go by SMS (no WhatsApp needed). Dev mode logs the code instead. */
 export async function sendPhoneCode(phone: string, code: string): Promise<'sms' | 'dev' | null> {
+  if (await sendSmsCode(phone, code)) return 'sms';
   if (otpDevMode()) { logger.warn(`[dev] SMS code for ${phone}: ${code}`); return 'dev'; }
-  return (await sendSmsCode(phone, code)) ? 'sms' : null;
+  return null;
 }
 
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);

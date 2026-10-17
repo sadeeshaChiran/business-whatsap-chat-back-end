@@ -5,7 +5,7 @@ import { Type } from 'class-transformer';
 import { IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min } from 'class-validator';
 import { DataSource } from 'typeorm';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly } from '../auth/decorators/roles.decorator';
+import { ManagerOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
@@ -270,10 +270,10 @@ export class CustomerInsightsController {
   constructor(private readonly insights: CustomerInsightsService) {}
 
   @Get()
-  @AdminOnly()
+  @ManagerOnly()
   report(@CurrentUser() user: AuthenticatedUser, @Query() query: InsightsQueryDto) { return this.insights.report(user, query); }
 
   @Post('tag')
-  @AdminOnly()
+  @ManagerOnly()
   tag(@CurrentUser() user: AuthenticatedUser, @Body() dto: InsightsTagDto) { return this.insights.tagSegment(user, dto); }
 }

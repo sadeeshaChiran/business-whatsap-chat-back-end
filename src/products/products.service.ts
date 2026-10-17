@@ -16,6 +16,8 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductVariant } from './entities/product-variant.entity';
 import { Product } from './entities/product.entity';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
+import { MAX_PRODUCT_IMAGE_BYTES, absoluteProductImage, readOwnProductImage, storeIfDataUrl } from './product-images';
+import { Logger, OnModuleInit } from '@nestjs/common';
 type ImportVariant = {
   variant_name: string;
   variant_value: string;
@@ -68,7 +70,8 @@ type ImportProductGroup = {
 };
 
 @Injectable()
-export class ProductsService {
+export class ProductsService implements OnModuleInit {
+  private readonly logger = new Logger(ProductsService.name);
   constructor(
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
@@ -80,6 +83,120 @@ export class ProductsService {
     private readonly companyRepository: Repository<Company>,
     @Optional() private readonly planService?: PlanService,
   ) {}
+
+  /** Old products kept their photos as long "data:image/…" text – move them once into files with short full links. */
+  onModuleInit() {
+    setTimeout(() => void this.moveInlinePhotos()
+      .catch((error: unknown) => this.logger.warn(`moving inline product photos failed: ${error instanceof Error ? error.message : String(error)}`))
+      .then(() => this.describeMissingPhotos())
+      .catch(() => undefined), 5000).unref();
+  }
+
+  /**
+   * The AI looks at the first photo and writes one line about it (colour, pattern, style) into product.image_notes,
+   * so the sales bot can find the product when a customer sends a photo. Runs in the background; needs SALES_BOT_URL.
+   */
+  describePhotosLater(productId: number) {
+    void this.describePhotos(productId).catch((error: unknown) =>
+      this.logger.warn(`describing product ${productId} photo failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  async describePhotos(productId: number, force = false): Promise<string | null> {
+    const base = String(process.env.SALES_BOT_URL ?? '').trim().replace(/\/+$/, '');
+    if (!base) return null;
+    const [row]: Array<{ id: number; name: string; image_url: string | null; gallery: string[] | null; image_notes: string | null; image_notes_src: string | null }> =
+      await this.productRepository.query(`SELECT id, name, image_url, gallery, image_notes, image_notes_src FROM product WHERE id = $1`, [productId]);
+    if (!row) return null;
+    const url = [row.image_url, ...(row.gallery ?? [])].map((u) => String(u ?? '').trim()).find((u) => /^https?:\/\//i.test(u) || u.includes('/public/product-images/'));
+    if (!url) {
+      if (row.image_notes) await this.productRepository.query(`UPDATE product SET image_notes = NULL, image_notes_src = NULL WHERE id = $1`, [productId]);
+      return null;
+    }
+    if (!force && row.image_notes && row.image_notes_src === url) return row.image_notes; // same photo – nothing to do
+    let file = readOwnProductImage(url);
+    if (!file) {
+      const response = await fetch(absoluteProductImage(url), { signal: AbortSignal.timeout(20000) });
+      if (!response.ok) return null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > MAX_PRODUCT_IMAGE_BYTES * 2) return null;
+      file = { buffer, mimetype: (response.headers.get('content-type') || 'image/jpeg').split(';')[0] };
+    }
+    const reply = await fetch(`${base}/products/describe-photo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Bot-Key': String(process.env.SALES_BOT_API_KEY ?? '') },
+      body: JSON.stringify({ image_b64: file.buffer.toString('base64'), mime_type: file.mimetype, name: row.name }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!reply.ok) return null;
+    const notes = String(((await reply.json()) as { description?: string }).description ?? '').trim().slice(0, 300);
+    if (!notes) return null;
+    await this.productRepository.query(`UPDATE product SET image_notes = $2, image_notes_src = $3 WHERE id = $1`, [productId, notes, url]);
+    return notes;
+  }
+
+  /** Products with photos but no AI photo description yet (a few per start, so the cost stays small). */
+  private async describeMissingPhotos() {
+    if (!String(process.env.SALES_BOT_URL ?? '').trim()) return;
+    const rows: Array<{ id: number }> = await this.productRepository.query(`
+      SELECT id FROM product WHERE COALESCE(is_deleted, FALSE) = FALSE AND image_notes IS NULL
+         AND (COALESCE(image_url, '') <> '' OR jsonb_array_length(COALESCE(gallery, '[]'::jsonb)) > 0)
+       ORDER BY id DESC LIMIT 30`).catch(() => []);
+    for (const row of rows) await this.describePhotos(row.id).catch(() => null);
+  }
+
+  async moveInlinePhotos(): Promise<number> {
+    const rows: Array<{ id: number; company_id: number; image_url: string | null; gallery: string[] | null; variant_image_match: { dimensions?: string[]; images?: Record<string, string> } | null }> =
+      await this.productRepository.query(`
+        SELECT id, company_id, image_url, gallery, variant_image_match FROM product
+         WHERE image_url LIKE 'data:%' OR gallery::text LIKE '%data:image%' OR variant_image_match::text LIKE '%data:image%' LIMIT 500`);
+    let moved = 0;
+    for (const row of rows) {
+      const cache = new Map<string, string>(); // the same picture is often the cover AND in the gallery
+      const store = (value: string | null | undefined) => {
+        const text = String(value ?? '').trim();
+        if (!text.startsWith('data:')) return text;
+        if (!cache.has(text)) { try { cache.set(text, storeIfDataUrl(row.company_id, text)); } catch { cache.set(text, ''); } }
+        return cache.get(text) as string;
+      };
+      const gallery = (row.gallery ?? []).map(store).filter(Boolean);
+      const images = row.variant_image_match?.images ? Object.fromEntries(Object.entries(row.variant_image_match.images).map(([k, v]) => [k, store(v)])) : null;
+      await this.productRepository.query(`UPDATE product SET image_url = $2, gallery = $3::jsonb, variant_image_match = $4::jsonb WHERE id = $1`,
+        [row.id, store(row.image_url) || gallery[0] || null, JSON.stringify(gallery), row.variant_image_match ? JSON.stringify({ ...row.variant_image_match, images }) : null]);
+      moved++;
+    }
+    const variants: Array<{ id: number; company_id: number; image_url: string }> = await this.productRepository.query(`
+      SELECT v.id, p.company_id, v.image_url FROM product_variant v JOIN product p ON p.id = v."productId" WHERE v.image_url LIKE 'data:%' LIMIT 1000`).catch(() => []);
+    for (const v of variants) {
+      try { await this.productRepository.query(`UPDATE product_variant SET image_url = $2 WHERE id = $1`, [v.id, storeIfDataUrl(v.company_id, v.image_url)]); moved++; } catch { /* skip a broken picture */ }
+    }
+    if (moved) this.logger.log(`moved ${moved} inline product photos to files`);
+    return moved;
+  }
+
+  /** Photos that come as "data:image/…" (pasted, older app) are stored as files – the product keeps a short full link. */
+  private storeDtoImages(companyId: number, dto: CreateProductDto | UpdateProductDto) {
+    const cache = new Map<string, string>();
+    const store = (value: string | undefined | null) => {
+      const text = String(value ?? '').trim();
+      if (!text.startsWith('data:')) return text;
+      if (!cache.has(text)) cache.set(text, storeIfDataUrl(companyId, text));
+      return cache.get(text) as string;
+    };
+    if (dto.gallery) dto.gallery = dto.gallery.map(store).filter(Boolean);
+    if (dto.image_url !== undefined) dto.image_url = store(dto.image_url) || undefined;
+    for (const variant of dto.variants ?? []) if (variant.image_url) variant.image_url = store(variant.image_url);
+    if (dto.variant_image_match?.images) {
+      dto.variant_image_match.images = Object.fromEntries(Object.entries(dto.variant_image_match.images).map(([k, v]) => [k, store(v)]));
+    }
+  }
+
+  /** Own product code (SKU): unique in the company. Empty = automatic "SKU-<id>". */
+  private async assertSkuFree(companyId: number, sku: string, productId?: number) {
+    const [taken] = await this.productRepository.query(
+      `SELECT id FROM product WHERE company_id = $1 AND LOWER(sku) = LOWER($2) AND is_deleted = FALSE AND ($3::int IS NULL OR id <> $3) LIMIT 1`,
+      [companyId, sku, productId ?? null]);
+    if (taken) throw new BadRequestException(`The product code "${sku}" is already used by another product.`);
+  }
 
   /** Package limit: max products (null = unlimited). */
   private async assertProductRoom(companyId: number, adding: number) {
@@ -161,6 +278,7 @@ export class ProductsService {
   }
 
   private async ensureProductSku(product: Product): Promise<Product> {
+    if (product.sku?.trim()) return product; // own code given
     const nextSku = this.buildProductSku(product.id);
     if (product.sku === nextSku) {
       return product;
@@ -227,9 +345,10 @@ export class ProductsService {
     return gallery[0] ?? null;
   }
 
+  /** Weight is optional (only needed when delivery is charged by weight). */
   private validateProductWeight(weight: number | undefined | null) {
-    if (weight === undefined || weight === null || Number(weight) < 0) {
-      throw new BadRequestException('Product weight is required');
+    if (weight !== undefined && weight !== null && (!Number.isFinite(Number(weight)) || Number(weight) < 0)) {
+      throw new BadRequestException('Weight must be 0 or more (kg).');
     }
   }
 
@@ -419,6 +538,9 @@ export class ProductsService {
       user.company_id,
     );
 
+    this.storeDtoImages(Number(user.company_id), createProductDto);
+    const ownSku = String(createProductDto.sku ?? '').trim();
+    if (ownSku) await this.assertSkuFree(Number(user.company_id), ownSku);
     const gallery = this.normalizeGallery(createProductDto.gallery);
     const coverImage = this.resolveCoverImage(
       createProductDto.image_url,
@@ -444,7 +566,7 @@ export class ProductsService {
     const product = this.productRepository.create({
       name: createProductDto.name.trim(),
       description: createProductDto.description?.trim() ?? '',
-      sku: '',
+      sku: ownSku,
       price: basePrice,
       quantity: productQuantity,
       ...(createProductDto.status !== undefined
@@ -456,7 +578,7 @@ export class ProductsService {
       has_variants: hasVariants,
       image_url: coverImage,
       gallery,
-      weight: Number(createProductDto.weight),
+      weight: createProductDto.weight != null ? Number(createProductDto.weight) : null,
       selling_points: createProductDto.selling_points?.trim() ?? '',
       related_product_ids: await this.normalizeRelatedProductIds(createProductDto.related_product_ids, user.company_id),
       show_to_bot: createProductDto.show_to_bot ?? true,
@@ -481,6 +603,7 @@ export class ProductsService {
       savedProduct.has_variants,
     );
 
+    this.describePhotosLater(savedProduct.id);
     return this.findOwnedProduct(savedProduct.id, user.company_id);
   }
 
@@ -516,6 +639,12 @@ export class ProductsService {
     await this.assertProductBusiness(user.company_id);
 
     const product = await this.findProductEntity(id, user.company_id);
+    this.storeDtoImages(Number(user.company_id), updateProductDto);
+    if (updateProductDto.sku !== undefined) {
+      const ownSku = String(updateProductDto.sku ?? '').trim();
+      if (ownSku) await this.assertSkuFree(Number(user.company_id), ownSku, product.id);
+      product.sku = ownSku;
+    }
 
     if (updateProductDto.category_id !== undefined) {
       product.category = await this.findCategoryForCompany(
@@ -591,7 +720,7 @@ export class ProductsService {
     product.gallery = gallery;
     product.image_url = coverImage;
     if (updateProductDto.weight !== undefined) {
-      product.weight = Number(updateProductDto.weight);
+      product.weight = updateProductDto.weight != null ? Number(updateProductDto.weight) : null;
     }
 
     if (updateProductDto.variant_image_match !== undefined) {
@@ -606,7 +735,7 @@ export class ProductsService {
       );
     }
 
-    product.sku = this.buildProductSku(product.id);
+    if (!product.sku?.trim()) product.sku = this.buildProductSku(product.id);
 
     if (hasVariants && updateProductDto.variants !== undefined) {
       product.quantity = normalizedVariants.reduce(
@@ -623,6 +752,7 @@ export class ProductsService {
       await this.saveProductVariants(savedProduct, normalizedVariants, hasVariants);
     }
 
+    this.describePhotosLater(savedProduct.id);
     return this.findOwnedProduct(savedProduct.id, user.company_id);
   }
 
@@ -686,7 +816,7 @@ export class ProductsService {
 
   private parseGalleryUrls(value: unknown): string[] {
     return String(value ?? '')
-      .split(/[;|]/)
+      .split(/[;|\n]+|,\s*(?=https?:\/\/)/)
       .map((url) => url.trim())
       .filter(Boolean);
   }
@@ -897,6 +1027,9 @@ export class ProductsService {
         /^gallery$/,
         /product_images/,
         /product images/,
+        /^image_urls$/,
+        /^images$/,
+        /photo/,
       ]),
     );
     const coverImageUrl = String(
@@ -904,7 +1037,7 @@ export class ProductsService {
         /cover_image_url/,
         /cover image/,
         /^cover_image$/,
-        /image_url/,
+        /^image_url$/,
         /main image/,
       ]) ?? '',
     ).trim();
@@ -944,19 +1077,16 @@ export class ProductsService {
     };
   }
 
-  private groupImportLines(lines: ImportLine[]) {
+  private groupImportLines(lines: ImportLine[], warnings: string[] = []) {
     const errors: string[] = [];
     const groups = new Map<string, ImportProductGroup>();
 
     lines.forEach((line) => {
       if (!line.name) {
-        errors.push(`Row ${line.rowNumber}: Product name is required.`);
+        warnings.push(`Row ${line.rowNumber}: skipped – no product name.`);
         return;
       }
-      if (!line.categoryName) {
-        errors.push(`Row ${line.rowNumber}: Category is required.`);
-        return;
-      }
+      if (!line.categoryName) line.categoryName = 'General';
       const key = this.productImportKey(line.name, line.categoryName);
       const existing = groups.get(key);
       const isVariantContinuation = !!existing && !!line.variant;
@@ -966,7 +1096,7 @@ export class ProductsService {
           rowNumbers: [line.rowNumber],
           name: line.name,
           description: line.description,
-          sku: '',
+          sku: line.sku,
           price: Number.isFinite(line.price) ? line.price : 0,
           quantity: line.quantity,
           status: line.status,
@@ -983,6 +1113,7 @@ export class ProductsService {
       } else {
         existing.rowNumbers.push(line.rowNumber);
         if (line.description) existing.description = line.description;
+        if (line.sku && !existing.sku) existing.sku = line.sku;
         if (Number.isFinite(line.price)) existing.price = line.price;
         if (line.quantity) existing.quantity = line.quantity;
         if (line.status) existing.status = line.status;
@@ -1028,24 +1159,18 @@ export class ProductsService {
             : [];
       const coverImage = this.resolveCoverImage(group.coverImageUrl, gallery);
 
-      if (!Number.isFinite(group.weight) || group.weight < 0) {
-        errors.push(
-          `Rows ${rowLabel}: Product weight is required for delivery calculations.`,
-        );
+      if (Number.isFinite(group.weight) && group.weight < 0) {
+        errors.push(`Rows ${rowLabel}: weight cannot be below 0.`);
       }
       if (group.hasVariants && !group.variants.length) {
-        errors.push(
-          `Rows ${rowLabel}: Has variants is enabled but no variant combinations were found.`,
-        );
+        group.hasVariants = false;
+        warnings.push(`Rows ${rowLabel}: "has variants" was yes but no variant rows were found – imported without variants.`);
       }
 
+      // a variant photo that is not in the gallery yet is simply added to it
       group.variants.forEach((variant) => {
         const imageUrl = variant.image_url?.trim();
-        if (imageUrl && gallery.length > 0 && !gallery.includes(imageUrl)) {
-          errors.push(
-            `Rows ${rowLabel}: Variant "${variant.variant_value}" image must be selected from gallery_urls.`,
-          );
-        }
+        if (imageUrl && !gallery.includes(imageUrl)) gallery.push(imageUrl);
       });
 
       group.gallery = gallery;
@@ -1059,7 +1184,7 @@ export class ProductsService {
     return Array.from(groups.values());
   }
 
-  private normalizeImportRows(rows: Record<string, unknown>[]) {
+  private normalizeImportRows(rows: Record<string, unknown>[], warnings: string[] = []) {
     const lines = rows
       .map((row, index) => this.normalizeImportLine(row, index + 2))
       .filter(
@@ -1074,13 +1199,43 @@ export class ProductsService {
           ),
       );
 
-    return this.groupImportLines(lines);
+    return this.groupImportLines(lines, warnings);
+  }
+
+  /** Same product code (SKU), or else the same name → that product is updated instead of added twice. */
+  private async findImportMatch(group: ImportProductGroup, companyId: number): Promise<Product | null> {
+    if (group.sku) {
+      const bySku = await this.productRepository.createQueryBuilder('p')
+        .where('p.company_id = :companyId AND p.is_deleted = false AND LOWER(p.sku) = LOWER(:sku)', { companyId, sku: group.sku }).getOne();
+      if (bySku) return bySku;
+    }
+    return this.productRepository.createQueryBuilder('p')
+      .where('p.company_id = :companyId AND p.is_deleted = false AND LOWER(TRIM(p.name)) = LOWER(TRIM(:name))', { companyId, name: group.name })
+      .orderBy('p.id', 'DESC').getOne();
   }
 
   private async persistImportGroup(
     group: ImportProductGroup,
     user: AuthenticatedUser,
-  ) {
+  ): Promise<{ product: Product; updated: boolean }> {
+    const existing = await this.findImportMatch(group, Number(user.company_id));
+    if (existing) {
+      const dto: UpdateProductDto = {
+        name: group.name,
+        ...(group.description ? { description: group.description } : {}),
+        ...(Number.isFinite(group.price) && group.price > 0 ? { price: group.price } : {}),
+        ...(Number.isFinite(group.weight) ? { weight: group.weight } : {}),
+        ...(group.gallery.length ? { gallery: group.gallery, image_url: group.coverImageUrl || group.gallery[0] } : {}),
+        ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
+        ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
+        ...(group.available !== undefined ? { is_available: group.available } : {}),
+        ...(group.sku ? { sku: group.sku } : {}),
+        ...(group.hasVariants && group.variants.length ? { has_variants: true, variants: group.variants as never } : {}),
+      };
+      const category = await this.ensureCategoryByName(group.categoryName, user.company_id);
+      dto.category_id = category.id;
+      return { product: (await this.update(existing.id, dto, user)) as unknown as Product, updated: true };
+    }
     const category = await this.ensureCategoryByName(
       group.categoryName,
       user.company_id,
@@ -1095,7 +1250,7 @@ export class ProductsService {
     const gallery = this.normalizeGallery(group.gallery);
     const coverImage = this.resolveCoverImage(group.coverImageUrl, gallery);
 
-    this.validateProductWeight(group.weight);
+    this.validateProductWeight(Number.isFinite(group.weight) ? group.weight : null);
 
     const productQuantity = hasVariants
       ? normalizedVariants.reduce(
@@ -1108,7 +1263,8 @@ export class ProductsService {
       this.productRepository.create({
         name: group.name,
         description: group.description,
-        sku: '',
+        sku: group.sku && !(await this.productRepository.query(
+          `SELECT 1 FROM product WHERE company_id = $1 AND LOWER(sku) = LOWER($2) AND is_deleted = FALSE`, [user.company_id, group.sku])).length ? group.sku : '',
         price: basePrice,
         quantity: productQuantity,
         status: group.status,
@@ -1118,7 +1274,7 @@ export class ProductsService {
         has_variants: hasVariants,
         image_url: coverImage,
         gallery,
-        weight: Number(group.weight),
+        weight: Number.isFinite(group.weight) ? Number(group.weight) : null,
         ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
         ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
         ...(group.available !== undefined ? { is_available: group.available } : {}),
@@ -1133,7 +1289,44 @@ export class ProductsService {
       await this.saveProductVariants(product, normalizedVariants, hasVariants);
     }
 
-    return this.findOwnedProduct(product.id, user.company_id);
+    return { product: (await this.findOwnedProduct(product.id, user.company_id)) as unknown as Product, updated: false };
+  }
+
+  /** Sample Excel file for the import: the columns, three filled examples (one with variants) and how to fill it. */
+  importTemplate(): Buffer {
+    const head = ['name', 'sku', 'category', 'price', 'description', 'weight', 'available', 'show_to_bot', 'selling_points', 'image_urls',
+      'variant_name', 'variant_value', 'variant_price', 'variant_sku', 'variant_available', 'variant_weight', 'variant_image_url'];
+    const rows = [
+      ['Cotton Romper Set (3 pcs)', 'ROMP-001', 'Baby clothes', 2450, 'Soft cotton rompers for 0-12 months', 0.3, 'yes', 'yes', 'Soft, breathable, easy snaps',
+        'https://example.com/romper-1.jpg, https://example.com/romper-2.jpg', '', '', '', '', '', '', ''],
+      ['Baby Shoes', 'SHOE-01', 'Shoes', 1800, 'Non-slip soft sole', '', 'yes', 'yes', '', 'https://example.com/shoes.jpg',
+        'Size', '0-6 months', 1800, 'SHOE-01-S', 'yes', '', ''],
+      ['Baby Shoes', 'SHOE-01', 'Shoes', 1800, '', '', '', '', '', '', 'Size', '6-12 months', 1950, 'SHOE-01-M', 'yes', '', ''],
+      ['Gift Pack', '', 'Gifts', 5500, 'Diapers, wipes and a towel in a gift box', 2.5, 'no', 'yes', 'Perfect for baby showers', '', '', '', '', '', '', '', ''],
+    ];
+    const help = [
+      ['Column', 'What to write'],
+      ['name', 'Product name (required). Several rows with the same name = one product with variants.'],
+      ['sku', 'Your product code (optional). If a product with this code – or this name – already exists it is UPDATED, not added again.'],
+      ['category', 'Category name (optional – "General" when empty). New categories are created.'],
+      ['price', 'Price in Rs (numbers only).'],
+      ['description', 'Short description (optional).'],
+      ['weight', 'Weight in kg (optional – only needed when the delivery fee is charged by weight).'],
+      ['available', 'yes / no (optional, default yes).'],
+      ['show_to_bot', 'yes / no – no = the AI bot never offers it (default yes).'],
+      ['selling_points', 'Why customers love it – the AI bot uses this (optional).'],
+      ['image_urls', 'Full photo links (https://…), separated by commas. The first one is the cover.'],
+      ['variant_name / variant_value', 'For variants: one row per option, e.g. Size / 0-6 months. Leave empty for simple products.'],
+      ['variant_price, variant_sku, variant_available, variant_weight, variant_image_url', 'Optional details of that option.'],
+    ];
+    const book = XLSX.utils.book_new();
+    const sheet = XLSX.utils.aoa_to_sheet([head, ...rows]);
+    sheet['!cols'] = head.map((h) => ({ wch: Math.max(12, h.length + 2) }));
+    XLSX.utils.book_append_sheet(book, sheet, 'Products');
+    const guide = XLSX.utils.aoa_to_sheet(help);
+    guide['!cols'] = [{ wch: 34 }, { wch: 100 }];
+    XLSX.utils.book_append_sheet(book, guide, 'How to fill');
+    return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
   }
 
   async import(file: { buffer: Buffer } | undefined, user: AuthenticatedUser) {
@@ -1144,8 +1337,11 @@ export class ProductsService {
     }
 
     const rawRows = this.readImportRows(file);
-    const groupedRows = this.normalizeImportRows(rawRows);
+    const warnings: string[] = [];
+    const groupedRows = this.normalizeImportRows(rawRows, warnings);
+    if (!groupedRows.length) throw new BadRequestException(warnings.length ? warnings.join(' ') : 'No products found in the file. Download the sample file and fill it in.');
     const createdProducts: Product[] = [];
+    let updated = 0;
     // package limit: only products that do not exist yet count
     const existingNames = new Set(
       (await this.productRepository.find({ where: { company_id: user.company_id, is_deleted: false } as never, select: ['name'] as never }))
@@ -1154,11 +1350,20 @@ export class ProductsService {
     await this.assertProductRoom(Number(user.company_id), groupedRows.filter((g) => !existingNames.has(String(g.name ?? '').trim().toLowerCase())).length);
 
     for (const group of groupedRows) {
-      createdProducts.push(await this.persistImportGroup(group, user));
+      try {
+        const result = await this.persistImportGroup(group, user);
+        createdProducts.push(result.product);
+        if (result.updated) updated++;
+      } catch (error) {
+        warnings.push(`Rows ${group.rowNumbers.join(', ')} (${group.name}): ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     return {
       imported_count: createdProducts.length,
+      created_count: createdProducts.length - updated,
+      updated_count: updated,
+      warnings,
       items: createdProducts,
     };
   }

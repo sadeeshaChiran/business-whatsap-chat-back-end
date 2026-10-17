@@ -61,17 +61,17 @@ export async function sql(query, params = []) {
 }
 export async function closeDb() { if (db) await db.end(); db = null; }
 
-/** Sign-up with email + WhatsApp codes (dev mode), choose the Free package. */
+/** Sign-up with email + SMS codes (dev mode), choose the Free package. */
 export async function createWorkspace(label, { plan = 'free', category = 'product' } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
   const phone = `9477${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
   const start = await api('POST', '/auth/register/start', {
-    body: { name: `${label} Owner`, email, password: PASSWORD, whatsapp: phone, company: { name: `${label} Store ${RUN}`, category } },
+    body: { name: `${label} Owner`, email, password: PASSWORD, phone, company: { name: `${label} Store ${RUN}`, category } },
   });
   if (start.status !== 201) throw new Error(`register/start failed: ${start.status} ${JSON.stringify(start.json)}`);
   const codes = start.data.dev_codes;
   const verify = await api('POST', '/auth/register/verify', {
-    body: { registration_id: start.data.registration_id, email_code: codes.email, whatsapp_code: codes.whatsapp },
+    body: { registration_id: start.data.registration_id, email_code: codes.email, phone_code: codes.phone },
   });
   if (verify.status !== 201) throw new Error(`register/verify failed: ${verify.status} ${JSON.stringify(verify.json)}`);
   const token = verify.data.access_token;
@@ -88,9 +88,9 @@ export async function login(email, password = PASSWORD) {
   return r;
 }
 
-export async function createAgent(admin, label) {
+export async function createAgent(admin, label, { teamRole } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
-  const r = await api('POST', '/users/agents', { token: admin.token, body: { name: `${label} Agent`, email, password: PASSWORD } });
+  const r = await api('POST', '/users/agents', { token: admin.token, body: { name: `${label} Agent`, email, password: PASSWORD, ...(teamRole ? { team_role: teamRole } : {}) } });
   if (r.status !== 201) throw new Error(`create agent failed: ${r.status} ${JSON.stringify(r.json)}`);
   const session = await login(email);
   return { email, id: r.data.id, token: session.data.access_token, user: session.data.user };

@@ -59,6 +59,10 @@ export class Product {
   @Column({ type: 'text', default: '' })
   selling_points: string;
 
+  /** Short AI description of the photos (colour, pattern, style) – lets the bot match photos customers send */
+  @Column({ type: 'text', nullable: true })
+  image_notes: string | null;
+
   /** Add-on products the sales bot may suggest (ids of products in the same company) */
   @Column({ type: 'int', array: true, default: () => "'{}'" })
   related_product_ids: number[];

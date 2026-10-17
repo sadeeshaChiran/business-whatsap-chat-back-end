@@ -1,3 +1,5 @@
+import { Inject, Optional } from '@nestjs/common';
+import { ActivityLogService } from '../activity-log/activity-log';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -22,6 +24,8 @@ export type TeamMember = {
   is_agent_active: boolean;
   access_disabled: boolean;
   work_status: 'online' | 'offline' | 'no_need' | 'removed';
+  /** owner · supervisor (team lead) · agent */
+  team_role: 'owner' | 'supervisor' | 'agent';
   last_login_at: Date | null;
   created_at: Date;
   updated_at: Date;
@@ -29,6 +33,8 @@ export type TeamMember = {
 
 @Injectable()
 export class UsersService {
+  @Optional() @Inject(ActivityLogService) private readonly activity?: ActivityLogService;
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -60,6 +66,7 @@ export class UsersService {
       is_agent_active: Boolean(user.is_agent_active),
       access_disabled: Boolean(user.access_disabled),
       work_status: workStatus,
+      team_role: adminUserId !== null && Number(user.id) === adminUserId ? 'owner' : user.team_role === 'supervisor' ? 'supervisor' : 'agent',
       last_login_at: user.last_login_at ?? null,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -154,6 +161,7 @@ export class UsersService {
         company_id: companyId,
         is_active: true,
         is_agent_active: false,
+        team_role: dto.team_role === 'supervisor' ? 'supervisor' : 'agent',
         password_changed_at: new Date(),
       }),
     );
@@ -173,8 +181,14 @@ export class UsersService {
   async updateAgent(admin: AuthenticatedUser, agentId: number, dto: UpdateAgentDto): Promise<TeamMember> {
     const user = await this.findCompanyAgent(admin, agentId);
     if (dto.name !== undefined) user.name = dto.name.trim();
+    const roleBefore = user.team_role || 'agent';
+    if (dto.team_role !== undefined) user.team_role = dto.team_role === 'supervisor' ? 'supervisor' : 'agent';
     const saved = await this.userRepository.save(user);
     this.authService.invalidateAccount(saved.id);
+    if (roleBefore !== saved.team_role) {
+      await this.activity?.log(admin, { action: 'team_role', entity: 'agent', entity_id: Number(saved.id),
+        summary: `${saved.name}: ${roleBefore} → ${saved.team_role}`, details: { from: roleBefore, to: saved.team_role } });
+    }
     return UsersService.toMember(saved, Number(admin.id));
   }
 

@@ -166,6 +166,11 @@ export class UpdateCompanyDto extends PartialType(
   @Min(0)
   agent_offline_shift_minutes?: number;
 
+  @ApiPropertyOptional({ example: true, description: 'Accept new chats for agents automatically' })
+  @IsOptional()
+  @IsBoolean()
+  agent_auto_accept?: boolean;
+
   @ApiPropertyOptional({ description: 'Delete all existing company WhatsApp chats when the provider account identity changes.', example: false })
   @IsOptional()
   @IsBoolean()

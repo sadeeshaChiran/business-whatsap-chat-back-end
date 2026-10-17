@@ -1,3 +1,4 @@
+import { absoluteProductImage } from '../products/product-images';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -23,6 +24,8 @@ export type ContextProduct = {
   available?: boolean;
   photo_count: number;
   image_urls: string[];
+  /** what the photos show (colour, pattern, style) – helps match photos customers send */
+  image_notes?: string;
   description: string;
   selling_points: string;
   /** kg, null = not set */
@@ -115,10 +118,12 @@ export function productOptions(product: Product): ProductVariantOption[] {
   return product.has_variants && Array.isArray(row?.variants) ? row.variants : [];
 }
 
+/** Every photo of a product as a full link: cover, gallery, then variant photos (our own stored photos made absolute). */
 export function productImages(product: Product): string[] {
-  const urls = [product.image_url ?? '', ...(Array.isArray(product.gallery) ? product.gallery : [])]
-    .map((url) => String(url ?? '').trim())
-    .filter((url) => /^https?:\/\//i.test(url));
+  const variantPhotos = productOptions(product).map((option) => option.image_url ?? '');
+  const urls = [product.image_url ?? '', ...(Array.isArray(product.gallery) ? product.gallery : []), ...variantPhotos]
+    .map((url) => absoluteProductImage(String(url ?? '').trim()))
+    .filter((url) => /^https?:\/\//i.test(url) || /\/public\/product-images\//.test(url));
   return [...new Set(urls)];
 }
 
@@ -386,6 +391,7 @@ export class SalesBotContextService {
       available: product.is_available !== false,
       photo_count: images.length,
       image_urls: images,
+      image_notes: String(product.image_notes ?? '').slice(0, 300),
       description: String(product.description ?? '').slice(0, 600),
       selling_points: String(product.selling_points ?? '').slice(0, 1000),
       weight_kg: productWeight(product),
@@ -395,7 +401,7 @@ export class SalesBotContextService {
         price: variantPrice(product, option),
         stock: product.is_available === false || option.available === false ? 0 : null,
         available: product.is_available !== false && option.available !== false,
-        image_url: option.image_url?.trim() || null,
+        image_url: option.image_url?.trim() ? absoluteProductImage(option.image_url.trim()) : null,
         weight_kg: optionWeight(option) ?? productWeight(product),
       })),
       // only add-ons the bot can actually sell
