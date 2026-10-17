@@ -61,6 +61,8 @@ import {
   saveChatMedia,
 } from './chat-media.store';
 import { readDocumentText, splitIntoPieces } from './document-knowledge';
+import { Inject, Optional } from '@nestjs/common';
+import { ActivityLogService } from '../activity-log/activity-log';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -131,6 +133,9 @@ export function followUpView(conversation: BotConversation) {
 
 @Injectable()
 export class BotAdminService {
+
+  /** Who changed / deleted orders (owner + supervisors read it in Team → Activity log). */
+  @Optional() @Inject(ActivityLogService) private readonly activity?: ActivityLogService;
 
   constructor(
     @InjectRepository(Company)
@@ -332,7 +337,7 @@ export class BotAdminService {
   };
 
   async getStats(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const company_id = user.company_id;
 
     const [totalUsers, activeBots, totalConversations, totalOrders, pendingOrders] =
@@ -391,6 +396,32 @@ export class BotAdminService {
     }
   }
 
+  /** Owner or supervisor (team lead) – works with the whole team's chats, orders and customers. */
+  private managesAll(user: AuthenticatedUser, company: { admin_user_id?: number | string | null } | null) {
+    return user.role === 'supervisor' || user.role === 'admin' || (company != null && Number(company.admin_user_id) === Number(user.id));
+  }
+
+  private async assertManagerAccess(user: AuthenticatedUser) {
+    if (user.role === 'supervisor') return;
+    return this.assertAdminAccess(user);
+  }
+
+  /**
+   * The order, if this person may change it: the owner and supervisors every order of the company,
+   * agents only their own (taken by them, or of a customer they hold now).
+   */
+  private async findOrderForActor(user: AuthenticatedUser, orderId: number, relations: string[] = []) {
+    const companyId = this.requireUserCompanyId(user);
+    const order = await this.orderRepository.findOne({ where: { id: orderId, company_id: companyId }, relations });
+    if (!order) throw new NotFoundException('Order not found.');
+    const company = await this.getCompanyForUser(user);
+    if (this.managesAll(user, company)) return order;
+    const mine = Number((order as { agent_id?: number | null }).agent_id) === Number(user.id)
+      || (await this.agentClientIds(companyId, Number(user.id))).includes(Number(order.bot_channel_user_id));
+    if (!mine) throw new ForbiddenException('You can only change your own orders.');
+    return order;
+  }
+
   /** Admin OR agent assigned to a conversation in their company can access it */
   private async assertConversationAccess(
     user: AuthenticatedUser,
@@ -400,7 +431,7 @@ export class BotAdminService {
     if (!user.role) {
       const company = await this.getCompanyForUser(user);
       if (!company) throw new ForbiddenException('Company not found.');
-      isAdmin = Number(company.admin_user_id) === Number(user.id);
+      isAdmin = this.managesAll(user, company);
     }
     const conv = isAdmin
       ? await this.findConversationForCompany(conversationId, user.company_id)
@@ -588,15 +619,25 @@ export class BotAdminService {
     conversationId: number,
     leadStage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost',
   ) {
-    await this.assertAdminAccess(user);
+    // the owner, a supervisor, or the agent who has this customer
     const conversation = await this.findConversationForCompany(conversationId, user.company_id);
     if (!conversation) throw new NotFoundException('Conversation not found.');
+    const company = await this.getCompanyForUser(user);
+    if (!this.managesAll(user, company) && Number(conversation.assigned_agent_id) !== Number(user.id)) {
+      throw new ForbiddenException('Only the owner, a supervisor or the agent of this customer can change the stage.');
+    }
+    const before = conversation.lead_stage;
     conversation.lead_stage = leadStage;
+    conversation.lead_stage_manual = true;
     const saved = await this.conversationRepository.save(conversation);
-    return { id: saved.id, lead_stage: saved.lead_stage };
+    if (before !== saved.lead_stage) {
+      await this.activity?.log(user, { action: 'lead_stage', entity: 'conversation', entity_id: saved.id,
+        summary: `Pipeline stage ${before || 'new'} → ${saved.lead_stage}`, details: { from: before, to: saved.lead_stage } });
+    }
+    return { id: saved.id, lead_stage: saved.lead_stage, lead_stage_manual: true };
   }
   async getUnassignedConversations(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     return this.agentRoutingService.getUnassignedConversations(user.company_id);
   }
 
@@ -605,7 +646,7 @@ export class BotAdminService {
     conversationId: number,
     agentId: number,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     await this.agentRoutingService.manualAssignConversation(
       user.company_id,
       conversationId,
@@ -1320,7 +1361,7 @@ export class BotAdminService {
   }
 
   async getUsers(user: AuthenticatedUser, query: BotUsersQueryDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const page = query.page ?? 1;
     const limit = query.limit ?? 50;
     const offset = (page - 1) * limit;
@@ -1345,7 +1386,7 @@ export class BotAdminService {
   }
 
   async createContact(user: AuthenticatedUser, payload: CreateContactDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const phone = this.normalizePhoneKey(payload.phone);
     const displayName = payload.display_name.trim();
     if (!phone || !displayName) throw new BadRequestException('Name and phone are required.');
@@ -1370,7 +1411,7 @@ export class BotAdminService {
     // the admin, or the agent whose customer this is (agents may fix their customer's name)
     const company = await this.getCompanyForUser(user);
     if (!company) throw new ForbiddenException('Company not found.');
-    if (Number(company.admin_user_id) !== Number(user.id) && !(await this.agentClientIds(Number(company.id), Number(user.id))).includes(Number(id))) {
+    if (!this.managesAll(user, company) && !(await this.agentClientIds(Number(company.id), Number(user.id))).includes(Number(id))) {
       throw new ForbiddenException('You can only edit your own customers.');
     }
     const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
@@ -1383,7 +1424,7 @@ export class BotAdminService {
   }
 
   async deleteContact(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
     if (!contact) throw new NotFoundException('Contact not found.');
     const hasConversation = await this.conversationRepository.exist({ where: { bot_channel_user_id: id } });
@@ -1488,7 +1529,7 @@ export class BotAdminService {
       throw new ForbiddenException('Company not found.');
     }
 
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
     let channelUser: BotChannelUser | null = null;
 
     if (id > 0) {
@@ -1568,7 +1609,7 @@ export class BotAdminService {
   }
 
   async getConversations(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     if (requestedPage != null || requestedLimit != null) {
       return this.buildCompanyConversationRows(user.company_id, requestedPage, requestedLimit);
     }
@@ -1717,7 +1758,7 @@ export class BotAdminService {
     const companyId = this.requireUserCompanyId(user);
     const company = await this.getCompanyForUser(user);
     if (!company || Number(company.id) !== companyId) throw new ForbiddenException('Company not found.');
-    if (Number(company.admin_user_id) === Number(user.id)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
+    if (this.managesAll(user, company)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
     return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, Number(user.id));
   }
 
@@ -2167,7 +2208,7 @@ export class BotAdminService {
       Number.isInteger(requestedLimit) && requestedLimit > 0
         ? Math.min(requestedLimit, 50)
         : 30;
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const jid = remoteJid.trim();
     if (!jid) {
       throw new BadRequestException('remoteJid is required.');
@@ -2227,7 +2268,7 @@ export class BotAdminService {
     remoteJid: string,
     text: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const trimmed = text.trim();
     const jid = remoteJid.trim();
     if (!trimmed) {
@@ -2347,7 +2388,7 @@ export class BotAdminService {
       throw new ForbiddenException('Company not found.');
     }
 
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const conversation = isAdmin
       ? await this.findConversationForCompany(id, user.company_id)
@@ -2778,7 +2819,7 @@ export class BotAdminService {
   }
 
   async createMessageTemplate(user: AuthenticatedUser, payload: SaveMessageTemplateDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const name = payload.name.trim();
     if (!name || !payload.body.trim()) throw new BadRequestException('Template name and body are required.');
     const existing = await this.messageTemplateRepository.findOne({ where: { company_id: user.company_id, name } });
@@ -2793,7 +2834,7 @@ export class BotAdminService {
   }
 
   async deleteMessageTemplate(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const row = await this.messageTemplateRepository.findOne({ where: { id, company_id: user.company_id } });
     if (!row) throw new NotFoundException('Message template not found.');
     await this.messageTemplateRepository.remove(row);
@@ -2960,7 +3001,7 @@ export class BotAdminService {
     const company = await this.getCompanyForUser(user);
     // any company admin (not only the owner) may answer every chat; agents only their own
     const isAdmin =
-      (company != null && Number(company.admin_user_id) === Number(user.id)) || String(user.role ?? '').toLowerCase() === 'admin';
+      (company != null && this.managesAll(user, company)) || String(user.role ?? '').toLowerCase() === 'admin';
     if (
       !isAdmin &&
       Number(conversation.assigned_agent_id) !== Number(user.id)
@@ -3153,7 +3194,7 @@ export class BotAdminService {
       throw new NotFoundException('Conversation not found.');
     }
     const company = await this.getCompanyForUser(user);
-    const isAdmin = company != null && Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = company != null && this.managesAll(user, company);
     if (!isAdmin && Number(conversation.assigned_agent_id) !== Number(user.id)) {
       throw new ForbiddenException('You do not have access to this conversation.');
     }
@@ -3532,7 +3573,7 @@ export class BotAdminService {
   }
 
   async getOrders(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     return this.orderRepository.find({
       where: { company_id: user.company_id },
       relations: ['channelUser', 'items', 'statusHistory'],
@@ -3582,7 +3623,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     // Verify channel user exists and belongs to this company
     const channelUser = await this.channelUserRepository
@@ -3684,17 +3725,12 @@ export class BotAdminService {
     id: number,
     payload: UpdateOrderStatusDto,
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id, company_id: user.company_id },
-      relations: ['channelUser', 'items'],
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
-
+    const order = await this.findOrderForActor(user, id, ['channelUser', 'items']);
+    const before = order.status;
     order.status = payload.status;
     const saved = await this.orderRepository.save(order);
+    await this.activity?.log(user, { action: 'order_status', entity: 'order', entity_id: saved.id,
+      summary: `Order #${saved.id}: status ${before} → ${saved.status}`, details: { from: before, to: saved.status } });
     const message = await this.renderOrderStatusMessage(user.company_id, saved);
     await this.orderStatusHistoryRepository.save(
       this.orderStatusHistoryRepository.create({
@@ -3708,7 +3744,7 @@ export class BotAdminService {
   }
 
   async getStatusTemplates(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const existing = await this.orderStatusTemplateRepository.find({
       where: { company_id: user.company_id },
       order: { status: 'ASC' },
@@ -3724,7 +3760,7 @@ export class BotAdminService {
     user: AuthenticatedUser,
     payload: UpdateStatusTemplateDto,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     let template = await this.orderStatusTemplateRepository.findOne({
       where: { company_id: user.company_id, status: payload.status },
     });
@@ -3858,7 +3894,7 @@ export class BotAdminService {
   }
 
   async sendOrderInvoice(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.findOrderForActor(user, id);
     return this.sendInvoiceForCompany(user.company_id, id);
   }
 
@@ -4169,15 +4205,10 @@ export class BotAdminService {
     orderId: number,
     adminNote: string,
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId);
     order.admin_note = adminNote.trim() || null;
     await this.orderRepository.save(order);
+    await this.activity?.log(user, { action: 'order_note', entity: 'order', entity_id: order.id, summary: `Order #${order.id}: note changed` });
     return { order };
   }
 
@@ -4192,14 +4223,8 @@ export class BotAdminService {
       admin_note?: string;
     },
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-      relations: ['channelUser', 'items'],
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId, ['channelUser', 'items']);
+    const before = { customer_name: order.customer_name, customer_phone: order.customer_phone, address: order.address, status: order.status, admin_note: order.admin_note };
 
     if (payload.customer_name !== undefined) {
       order.customer_name = payload.customer_name.trim();
@@ -4218,20 +4243,29 @@ export class BotAdminService {
     }
 
     const saved = await this.orderRepository.save(order);
+    const changes = Object.fromEntries(Object.entries(before)
+      .filter(([key, value]) => (saved as unknown as Record<string, unknown>)[key] !== value)
+      .map(([key, value]) => [key, { from: value, to: (saved as unknown as Record<string, unknown>)[key] }]));
+    if (Object.keys(changes).length) {
+      await this.activity?.log(user, { action: 'order_edit', entity: 'order', entity_id: saved.id,
+        summary: `Order #${saved.id} edited: ${Object.keys(changes).join(', ').replace(/_/g, ' ')}`, details: changes });
+    }
     return { order: saved };
   }
 
   async deleteOrder(user: AuthenticatedUser, orderId: number) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId, ['items']);
+    const snapshot = {
+      customer_name: order.customer_name, customer_phone: order.customer_phone, address: order.address, status: order.status,
+      total: order.total_amount ?? null,
+      items: (order.items ?? []).map((item) => ({ name: item.product_name, quantity: item.quantity, price: item.unit_price })),
+      created_at: order.created_at,
+    };
     await this.orderItemRepository.delete({ order_id: orderId });
     await this.orderStatusHistoryRepository.delete({ order_id: orderId });
     await this.orderRepository.remove(order);
+    await this.activity?.log(user, { action: 'order_delete', entity: 'order', entity_id: orderId,
+      summary: `Order #${orderId} deleted (${snapshot.customer_name || 'customer'}${snapshot.total != null ? `, Rs ${snapshot.total}` : ''})`, details: snapshot });
     return { id: orderId, removed: true };
   }
 
@@ -4294,7 +4328,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const labels = await this.listCustomerLabels(user);
     const conversationsByLabel = new Map<number, Set<number>>(
@@ -4403,7 +4437,7 @@ export class BotAdminService {
     name: string,
     colorCode?: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const companyId = this.requireUserCompanyId(user);
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -4434,7 +4468,7 @@ export class BotAdminService {
   }
 
   async deleteCustomerLabel(user: AuthenticatedUser, labelId: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const companyId = this.requireUserCompanyId(user);
     const label = await this.customerLabelRepository
       .createQueryBuilder('label')
@@ -4636,7 +4670,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const channelUser = await this.channelUserRepository
       .createQueryBuilder('channelUser')
@@ -4687,7 +4721,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const qb = this.customerNoteRepository
       .createQueryBuilder('note')
@@ -4782,7 +4816,7 @@ export class BotAdminService {
     noteId: number,
     checked: boolean,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const companyId = this.requireUserCompanyId(user);
     const note = await this.customerNoteRepository
       .createQueryBuilder('note')

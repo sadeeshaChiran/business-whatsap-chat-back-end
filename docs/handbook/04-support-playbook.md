@@ -109,7 +109,12 @@ Also: broadcasts need the **Cloud API** (not QR), only text templates (no photo/
 
 | Problem | Explanation / fix |
 | --- | --- |
-| Wrong delivery fee | Check Delivery zones: the area name must match (or a `*` zone exists) and product weights are set. Weight is rounded up by default (2.3 kg → 3 kg). |
+| Wrong delivery fee | Check Delivery zones: the area name must match (or a `*` zone exists) and, for zones that charge by weight, product weights are set (weight is optional otherwise). Weight is rounded up by default (2.3 kg → 3 kg). |
+| Bot sends a link instead of a photo / no photo | The product needs a photo in Media gallery. Uploaded photos are links like `…/public/product-images/12-x.jpg` – open it in a browser; 404 = file missing on the server (restore `CHAT_MEDIA_DIR/products` from backup). `PUBLIC_API_BASE_URL` must be the public API address, or Instagram/WhatsApp can't download the photo. |
+| Bot doesn't recognise a customer's photo | Product has no "looks" note yet: save the product again (needs `SALES_BOT_URL`), or check `product.image_notes`. |
+| Import added duplicates | Rows match existing products by SKU, then by exact name. Give each product a SKU in the file. |
+| Agent says "You can only change your own orders" | The order is not the agent's (not taken by them and the customer isn't theirs now). The owner or a supervisor can change it. |
+| "Who deleted this order?" | Team → Activity log → Deleted orders (shows who, when and the full order). |
 | Bot says "the team will confirm the fee" | No zone matched and no `*` zone. Add the area or `*`. |
 | Bot won't take a booking at a time | Outside opening hours, or capacity full ("Bookings at the same time"). It offers the 3 nearest free times. |
 | Customer can't cancel an order in chat | Only Pending orders can be changed by the bot; others create a request for the team. |
@@ -120,7 +125,11 @@ Also: broadcasts need the **Cloud API** (not QR), only text templates (no photo/
 | Problem | Fix |
 | --- | --- |
 | Agent gets no chats | The agent must be **Online** (top bar switch) and not "Away" on the Team board. |
-| Chat stuck with an absent agent | It moves after "Move an un-accepted chat after" (Settings). Admin can reassign in the chat's contact panel or Chat queue. |
+| Chat stuck with an absent agent | With automatic accept on (default) chats are active right away – use "Move chats of an offline agent after", or reassign in the contact panel / Chat queue. With it off, it moves after "Move an un-accepted chat after". |
+| Agent wants the Accept button back | Owner: Settings → Chat routing → turn off **Accept new chats automatically**. |
+| Supervisor can't open a page | Supervisors can't open products, bot settings, automation, marketing, channels, billing or company settings – by design. |
+| Pipeline stage keeps changing | The bot moves stages forward by itself; only a **Won/Lost picked by hand** is never changed. Pick the stage in the chat's contact panel. |
+| A customer message got no bot reply | Check the chat: messages that arrive while the bot is writing are answered right after. If the bot is off for the chat or a person took over, it does not reply. |
 | "Add agent" disabled | All seats used – remove an agent or upgrade (or custom package). |
 | Agent can't see a page | Agents only see their own chats and agent pages; owner-only pages say "Only the company admin can do this." |
 
@@ -141,7 +150,7 @@ Also: broadcasts need the **Cloud API** (not QR), only text templates (no photo/
 | --- | --- |
 | "Too many requests" (429) | 10 login attempts per minute per IP. Wait one minute. |
 | Account locked | 8 wrong passwords → locked 15 minutes. Wait, or reset the password. |
-| No verification code | Check SMTP / WhatsApp OTP / Notify.lk in Config checks. Ask the customer to check spam. |
+| No verification code | Email: check SMTP in Config checks, ask the customer to check spam. SMS: Config checks → **SMS codes (Notify.lk)** must be green; check the Notify.lk balance and sender ID; the number must be a Sri Lankan mobile (07X…). WhatsApp is not used for codes any more. |
 | Suspended workspace | Everyone is signed out. Re-activate in Companies after the issue is solved. |
 | Lost phone / shared password | Settings → Password & sessions → **Sign out on all devices**, then change the password. |
 

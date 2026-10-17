@@ -14,6 +14,7 @@ Every change is tested before it reaches customers. Tests run against a **test d
 | --- | --- |
 | `npm test` | Unit tests (jest, `src/**/*.spec.ts`): delivery fee, booking slots, referral capture, WhatsApp error texts, document reading, guards … |
 | `npm run test:security` | Security and business rules against a running API: tenant isolation, agent vs admin rights, super admin only, packages and offers, quoted replies, feedback, follow-ups, free delivery, service limits, simulator, trials and the team handbook access |
+| `npm run test:team` | SMS sign-up codes, supervisor rights, agents change only their own orders + activity log, automatic accept, pipeline stage by hand, product photos as files (upload, public link, fake image refused), own SKU / optional weight, import sample file; plus the agent-work flow (needs the fake bot) |
 | `npm run test:flows` | Automation flows and forms |
 | `npm run test:crm` | CRM, marketing, social, customer insights (visits, groups, tags, per-click ad results) |
 | `npm run test:meta` | Meta connection check, flows from comments/ads, **Ads & leads** report, ad capture, Messenger ad-card replies, Instagram story replies |

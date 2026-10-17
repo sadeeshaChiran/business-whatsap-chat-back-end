@@ -17,6 +17,7 @@ import { MetaModule } from './integrations/meta/meta.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.module';
 import { SalesBotModule } from './sales-bot/sales-bot.module';
+import { ActivityLogModule } from './activity-log/activity-log';
 import { PlatformModule } from './platform/platform.module';
 import { VerificationModule } from './verification/verification';
 import { CrmModule } from './crm/crm';
@@ -63,6 +64,7 @@ if (!supabaseDatabaseUrl) {
     FlowsModule,
     SocialModule,
     SalesBotModule,
+    ActivityLogModule,
     RealtimeModule,
   ],
   controllers: [AppController],

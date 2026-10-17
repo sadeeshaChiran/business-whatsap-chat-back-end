@@ -176,6 +176,7 @@ export class CompanyService {
       agent_assignment_timeout_minutes:
         company.agent_assignment_timeout_minutes ?? 1440,
       agent_offline_shift_minutes: company.agent_offline_shift_minutes ?? 0,
+      agent_auto_accept: company.agent_auto_accept ?? true,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };
@@ -303,6 +304,9 @@ export class CompanyService {
     }
     if (updateCompanyDto.agent_offline_shift_minutes !== undefined) {
       company.agent_offline_shift_minutes = updateCompanyDto.agent_offline_shift_minutes;
+    }
+    if (updateCompanyDto.agent_auto_accept !== undefined) {
+      company.agent_auto_accept = updateCompanyDto.agent_auto_accept;
     }
 
     if (!(await this.planService.planAllowsBot(company.plan))) {

@@ -231,7 +231,7 @@ export class SuperAdminExtraService {
       last_24h: { replies: num(stats?.replies_24h), avg_latency_ms: num(stats?.avg_latency_ms), p95_latency_ms: num(stats?.p95_latency_ms), cache_ratio: num(stats?.cache_ratio), bot_errors: num(errors?.n) },
       config: {
         public_api_url: set('PUBLIC_API_BASE_URL'), app_public_url: set('APP_PUBLIC_URL'), payhere: set('PAYHERE_MERCHANT_ID') && set('PAYHERE_MERCHANT_SECRET'),
-        meta_app: set('META_APP_ID') && set('META_APP_SECRET'), email: set('SMTP_HOST'), whatsapp_otp: set('OTP_WHATSAPP_PHONE_NUMBER_ID') && set('OTP_WHATSAPP_TOKEN'),
+        meta_app: set('META_APP_ID') && set('META_APP_SECRET'), email: set('SMTP_HOST'), sms_otp: set('NOTIFYLK_USER_ID') && set('NOTIFYLK_API_KEY'),
         pusher: set('PUSHER_APP_ID'),
       },
     };

@@ -31,6 +31,10 @@ export class User {
   @Column({ type: 'boolean', default: false })
   is_agent_active: boolean;
 
+  /** 'agent' or 'supervisor' (team lead: sees every chat, order, CRM and report; no billing / channels / bot settings) */
+  @Column({ type: 'varchar', length: 20, default: 'agent' })
+  team_role: string;
+
   @Column({ type: 'timestamptz', nullable: true })
   email_verified_at: Date | null;
 

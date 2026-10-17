@@ -301,6 +301,7 @@ export class AuthService {
   private roleOf(user: User, company: Company | null): UserRole {
     if (user.is_super_admin) return 'super_admin';
     if (company && Number(company.admin_user_id) === Number(user.id)) return 'admin';
+    if (user.team_role === 'supervisor') return 'supervisor';
     return 'agent';
   }
 

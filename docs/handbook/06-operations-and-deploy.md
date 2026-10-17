@@ -43,7 +43,7 @@ How the production server is set up, how to release a new version safely, and ho
 | Realtime | `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET`, `PUSHER_CLUSTER`, `PUSHER_HOST`, `PUSHER_PORT` |
 | Platform | `SUPER_ADMIN_EMAILS` |
 | Payments | `PAYHERE_MERCHANT_ID`, `PAYHERE_MERCHANT_SECRET`, `PAYHERE_SANDBOX`, `PAYHERE_APP_ID`, `PAYHERE_APP_SECRET` |
-| Codes (sign-up, reset) | `REGISTRATION_VERIFICATION`, `OTP_DEV_MODE` (false in production), `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `OTP_WHATSAPP_PHONE_NUMBER_ID`, `OTP_WHATSAPP_TOKEN`, `OTP_WHATSAPP_TEMPLATE`, `OTP_WHATSAPP_LANG`, `NOTIFYLK_USER_ID`, `NOTIFYLK_API_KEY`, `NOTIFYLK_SENDER_ID` |
+| Codes (sign-up, reset) | `REGISTRATION_VERIFICATION`, `OTP_DEV_MODE` (false in production), `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `NOTIFYLK_USER_ID`, `NOTIFYLK_API_KEY`, `NOTIFYLK_SENDER_ID`, `NOTIFYLK_BASE_URL` (optional) – sign-up / change-number codes by SMS. The old `OTP_WHATSAPP_*` settings are no longer used. |
 | Mobile push | `FCM_SERVICE_ACCOUNT_JSON` (native app), `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (browser / phone notifications – optional, created automatically if empty; never change once set), `PUSH_TICK_MS` |
 | Tests only | `META_GRAPH_BASE_URL` (fake Meta server – never set in production) |
 
@@ -133,7 +133,8 @@ npm run build                       # uses .env.production.local
 ## Backups
 
 - Supabase takes daily backups automatically (check the retention for the plan in use).
-- Chat media files are stored on the API server in `CHAT_MEDIA_DIR` – include this folder in the server backup.
+- Chat media files are stored on the API server in `CHAT_MEDIA_DIR` – include this folder in the server backup. **Product photos** are in `CHAT_MEDIA_DIR/products` (links `…/public/product-images/…`) – losing it breaks product photos for customers and the bot.
+- Migration `supabase_oct17_updates.sql` (runs on start): `bot_conversation.bot_answered_inbound_id`, `bot_conversation.lead_stage_manual`, `product.image_notes` / `image_notes_src`, `companies.agent_auto_accept` (default true), `app_user.team_role`, table `company_activity_log`.
 - Keep a copy of the three `.env` files in the password manager (not on a laptop, not in email).
 
 ## Rate limits (for reference)

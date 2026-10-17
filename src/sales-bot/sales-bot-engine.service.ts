@@ -29,6 +29,7 @@ import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
+import { absoluteProductImage, readOwnProductImage } from '../products/product-images';
 import { SalesBotContextService, sriLankaNow, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
@@ -260,19 +261,30 @@ export class SalesBotEngineService implements OnModuleInit {
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     if (!(await this.botMayReply(company, conversation, channelUser, simulated))) return;
 
-    // Customer messages since our last reply (several quick messages are answered together)
-    const lastOut = await this.messageRepository.findOne({
-      where: { conversation_id: conversationId, direction: 'outbound' },
-      order: { id: 'DESC' },
-    });
+    // Customer messages the bot has not answered yet (several quick messages are answered together). A message that
+    // arrives WHILE the bot is writing its reply has a smaller id than that reply – so we remember the last customer
+    // message each reply answered (bot_answered_inbound_id) instead of looking at the bot's last message. A reply by a
+    // person / a flow / a form still counts as "answered".
+    const [marks] = await this.messageRepository.query(`
+      SELECT c.bot_answered_inbound_id AS answered,
+             (SELECT MAX(m.id) FROM bot_message m WHERE m.conversation_id = c.id AND m.direction::text = 'outbound'
+                 AND COALESCE(m.source, '') NOT IN ($2, 'meta-context')) AS handled,
+             (SELECT MAX(m.id) FROM bot_message m WHERE m.conversation_id = c.id AND m.direction::text = 'outbound') AS last_out
+        FROM bot_conversation c WHERE c.id = $1`, [conversationId, BOT_SOURCE]);
+    const after = marks?.answered != null
+      ? Math.max(Number(marks.answered), Number(marks.handled ?? 0))
+      : Number(marks?.last_out ?? 0); // chats from before this change
     const pending = await this.messageRepository
       .createQueryBuilder('m')
       .where('m.conversation_id = :conversationId', { conversationId })
       .andWhere("m.direction::text = 'inbound'")
-      .andWhere('m.id > :after', { after: lastOut?.id ?? 0 })
+      .andWhere('m.id > :after', { after })
       .orderBy('m.id', 'ASC')
       .getMany();
     if (!pending.length) return;
+    const answeredUpTo = pending[pending.length - 1].id;
+    const markAnswered = () => this.messageRepository.query(
+      `UPDATE bot_conversation SET bot_answered_inbound_id = GREATEST(COALESCE(bot_answered_inbound_id, 0), $2) WHERE id = $1`, [conversationId, answeredUpTo]).catch(() => undefined);
 
     const message = pending
       .map((row) => {
@@ -287,7 +299,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // Messenger / Instagram chats are answered through the connected Page, not a WhatsApp channel
     const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
     const media = mediaRow ? await this.loadMedia(mediaRow.media_url as string, channel) : null;
-    if (!message && !media) return;
+    if (!message && !media) { await markAnswered(); return; }
 
     const history = await this.history(conversationId, pending[0].id);
     const sessionState = this.readSessionState(channelUser.session_state);
@@ -311,6 +323,7 @@ export class SalesBotEngineService implements OnModuleInit {
       await this.handoff(companyId, conversation, channelUser, 'bot_error', 'The bot could not answer – please reply to the customer.');
       await this.conversationRepository.query(
         `UPDATE bot_conversation SET followup_status = 'stopped', followup_due_at = NULL WHERE id = $1 AND followup_status = 'waiting'`, [conversationId]);
+      await markAnswered();
       return;
     }
 
@@ -328,8 +341,18 @@ export class SalesBotEngineService implements OnModuleInit {
       session_state: JSON.stringify({ ...sessionState, sales_bot: session }),
     });
 
-    await this.sendPhotos(companyId, conversation, channelUser, channel, result.photo_product_ids, simulated);
-    const text = outcome.replyOverride ?? result.reply;
+    // photo links the AI wrote into the text become real photos; products it talks about get their photos too
+    let text = outcome.replyOverride ?? result.reply;
+    let photoIds = result.photo_product_ids;
+    if (text && !outcome.replyOverride) {
+      const found = await this.photosFromReply(companyId, text, photoIds).catch((error: unknown) => {
+        this.logger.warn(`photo links in the reply not checked: ${error instanceof Error ? error.message : String(error)}`);
+        return { text: text as string, productIds: photoIds };
+      });
+      text = found.text;
+      photoIds = found.productIds;
+    }
+    await this.sendPhotos(companyId, conversation, channelUser, channel, photoIds, simulated);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -339,6 +362,11 @@ export class SalesBotEngineService implements OnModuleInit {
         await this.sendText(companyId, conversation, channelUser, channel, parts[index], index === 0 ? outcome.intent : null, simulated);
       }
     }
+    await markAnswered();
+    // the customer wrote again while the bot was writing → answer that too (after the usual short wait)
+    const [newer] = await this.messageRepository.query(
+      `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' AND id > $2 LIMIT 1`, [conversationId, answeredUpTo]);
+    if (newer) this.schedule(companyId, conversationId);
     await this.advanceLead(conversation.id, 'contacted');
     await this.planFollowUpAfterReply(companyId, conversation, result, outcome, session)
       .catch((error: unknown) => this.logger.warn(`follow-up plan failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -486,21 +514,79 @@ export class SalesBotEngineService implements OnModuleInit {
     return !failed;
   }
 
+  /**
+   * The AI sometimes writes a photo link ("https://placehold.co/…png", our own product photo link) into the text
+   * instead of asking for the photo. Those links are removed from the text and the photo is sent as a real image.
+   * When the bot picked no photos, products named in the reply (max 2) get their photos.
+   */
+  async photosFromReply(companyId: number, reply: string, chosen: number[]): Promise<{ text: string; productIds: number[] }> {
+    const ids = new Set(chosen.map(Number).filter((id) => id > 0));
+    const urlPattern = /(https?:\/\/[^\s<>"']+)/gi;
+    const trimLink = (raw: string) => {
+      let link = raw.replace(/[.,!?;:]+$/, '');
+      // "(see https://x/a.jpg)" – drop a closing bracket that is not part of the link
+      while (link.endsWith(')') && (link.match(/\(/g)?.length ?? 0) < (link.match(/\)/g)?.length ?? 0)) link = link.slice(0, -1).replace(/[.,!?;:]+$/, '');
+      return link;
+    };
+    const links = [...reply.matchAll(urlPattern)].map((match) => trimLink(match[1]));
+    const isPhotoLink = (url: string) =>
+      /placehold\.co|\/public\/product-images\/|\.(jpe?g|png|webp|gif)(\?|#|$)/i.test(url);
+    const photoLinks = links.filter(isPhotoLink);
+    const products = await this.productRepository.find({ where: { company_id: companyId, is_deleted: false }, relations: ['variants'], take: 500 });
+    const withPhotos = products.filter((product) => productImages(product).length > 0);
+    for (const link of photoLinks) {
+      const owner = withPhotos.find((product) => productImages(product).some((url) => url === link || absoluteProductImage(link) === url
+        || decodeURIComponent(url).toLowerCase() === decodeURIComponent(link).toLowerCase()));
+      if (owner) ids.add(Number(owner.id));
+    }
+    if (!ids.size) {
+      const lower = reply.toLowerCase();
+      const named = withPhotos
+        .filter((product) => String(product.name ?? '').trim().length >= 4 && lower.includes(String(product.name).trim().toLowerCase()))
+        .sort((a, b) => String(b.name).length - String(a.name).length);
+      for (const product of named.slice(0, 2)) ids.add(Number(product.id));
+    }
+    // a line that only held a photo link disappears completely (empty lines split the reply into messages)
+    let text = reply.split('\n').flatMap((line) => {
+      if (!photoLinks.some((link) => line.includes(link))) return [line];
+      let rest = line;
+      for (const link of photoLinks) rest = rest.split(link).join('');
+      rest = rest.replace(/\(\s*\)|\[\s*\]/g, '').replace(/^[\s:：\-–]+|[\s:：\-–]+$/g, '');
+      return rest ? [rest] : [];
+    }).join('\n');
+    text = text
+      .replace(/\[(?:image|photo|picture)[^\]]*\]\(\s*\)/gi, '')
+      .replace(/!\[[^\]]*\]\(\s*\)/g, '')
+      .replace(/^[ \t]*(?:image|photo|picture|පින්තූරය|படம்)\s*[:：-]?\s*$/gim, '')
+      .replace(/[ \t]+$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return { text, productIds: [...ids].slice(0, 3) };
+  }
+
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     channel: WhatsappChannel | null, productIds: number[], simulated: boolean) {
     if (!productIds.length) return;
-    const products = await this.productRepository.find({ where: productIds.slice(0, 3).map((id) => ({ id, company_id: companyId, is_deleted: false })) });
+    const products = await this.productRepository.find({ where: productIds.slice(0, 3).map((id) => ({ id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
+    // never send the same photo twice in one chat
+    const already = new Set<string>((await this.messageRepository.query(
+      `SELECT media_url FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' AND media_url IS NOT NULL`,
+      [conversation.id]) as Array<{ media_url: string }>).map((row) => row.media_url));
     let sent = 0;
     for (const product of products) {
-      for (const url of productImages(product).slice(0, 3)) {
+      for (const url of productImages(product).filter((link) => !already.has(link)).slice(0, 3)) {
         if (sent >= 6) break;
+        const own = readOwnProductImage(url);
         let messageId: string | null = null;
         const social = socialPlatformOf(channelUser.platform);
         if (!simulated && social) {
           try {
             let buffer: Buffer | undefined;
             let mimetype: string | undefined;
-            if (social === 'messenger') {
+            if (own) {
+              buffer = own.buffer;
+              mimetype = own.mimetype;
+            } else if (social === 'messenger') {
               const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
               if (!response.ok) continue;
               buffer = Buffer.from(await response.arrayBuffer());
@@ -515,10 +601,14 @@ export class SalesBotEngineService implements OnModuleInit {
           }
         } else if (!simulated && channel) {
           try {
-            const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
-            if (!response.ok) continue;
-            const buffer = Buffer.from(await response.arrayBuffer());
-            const mimetype = (response.headers.get('content-type') || 'image/jpeg').split(';')[0];
+            let buffer = own?.buffer;
+            let mimetype = own?.mimetype ?? 'image/jpeg';
+            if (!buffer) {
+              const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+              if (!response.ok) continue;
+              buffer = Buffer.from(await response.arrayBuffer());
+              mimetype = (response.headers.get('content-type') || 'image/jpeg').split(';')[0];
+            }
             messageId = (await this.providerFactory.getAdapterForChannel(channel).sendMedia(channel, channelUser.external_user_id, {
               buffer, mimetype, fileName: `${product.name}.${mimetype.split('/')[1] || 'jpg'}`, mediaType: 'image',
             })).messageId;
@@ -1049,7 +1139,10 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!conversation) return;
     const current = (conversation.lead_stage ?? 'new') as LeadStage;
     let next = current;
-    if (stage === 'won' || stage === 'lost') next = stage;
+    // a Won / Lost picked by a person is final for the bot
+    const handSetFinal = conversation.lead_stage_manual && (current === 'won' || current === 'lost');
+    if (handSetFinal) next = current;
+    else if (stage === 'won' || stage === 'lost') next = stage;
     else if (current !== 'won' && current !== 'lost' && LEAD_RANK[stage] > LEAD_RANK[current]) next = stage;
     const cleaned = Object.fromEntries(Object.entries(details ?? {}).filter(([, value]) => value !== undefined && value !== null && value !== ''));
     const hasDetails = Object.keys(cleaned).length > 0;

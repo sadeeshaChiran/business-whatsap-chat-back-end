@@ -8,3 +8,6 @@ export const Roles = (...roles: UserRole[]) => SetMetadata(ROLES_KEY, roles);
 
 /** Company owner only (agents get 403). */
 export const AdminOnly = () => Roles('admin');
+
+/** Company owner or supervisor (team lead). */
+export const ManagerOnly = () => Roles('admin', 'supervisor');

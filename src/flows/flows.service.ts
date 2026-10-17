@@ -672,7 +672,7 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
             await this.dataSource.query(`
               INSERT INTO crm_contact (bot_channel_user_id, company_id, stage, updated_at) VALUES ($1,$2,$3,NOW())
               ON CONFLICT (bot_channel_user_id) DO UPDATE SET stage = EXCLUDED.stage, updated_at = NOW()`, [target.channelUserId, target.companyId, step.stage]);
-            await this.dataSource.query(`UPDATE bot_conversation SET lead_stage = $2 WHERE id = $1`, [target.conversationId, step.stage]).catch(() => undefined);
+            await this.dataSource.query(`UPDATE bot_conversation SET lead_stage = $2 WHERE id = $1 AND NOT (lead_stage_manual AND lead_stage IN ('won', 'lost'))`, [target.conversationId, step.stage]).catch(() => undefined);
             break;
           case 'handoff':
             if (step.text) await this.sender.send(target, { kind: 'text', text: this.fill(step.text, target, vars) }, source);

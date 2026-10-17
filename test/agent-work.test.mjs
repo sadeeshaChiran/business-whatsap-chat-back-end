@@ -25,7 +25,8 @@ async function outbound() {
 
 test('setup: shop with a product, delivery zone, bot on, one agent online', async () => {
   owner = await createWorkspace('agentwork');
-  await sql('UPDATE companies SET bot_enabled = true WHERE id = $1', [owner.companyId]);
+  // this test accepts chats by hand (Settings → Chat routing → automatic accept off)
+  await sql('UPDATE companies SET bot_enabled = true, agent_auto_accept = false WHERE id = $1', [owner.companyId]);
   const cat = await api('POST', '/product-catergory', { token: owner.token, body: { name: `Shoes ${Date.now()}` } });
   const product = await api('POST', '/products', { token: owner.token, body: { name: 'Red shoe', price: 2500, quantity: 20, category_id: cat.data.id, weight: 0.6 } });
   assert.equal(product.status, 201, product.text);

@@ -73,6 +73,14 @@ export class SalesBotAdminService {
     return company;
   }
 
+  /** Owner or supervisor (team lead) – bookings, follow-ups and reports. */
+  private async managerCompany(user: AuthenticatedUser): Promise<Company> {
+    if (user.role !== 'supervisor') return this.adminCompany(user);
+    const company = await this.companyRepository.findOne({ where: { id: Number(user.company_id) } });
+    if (!company) throw new ForbiddenException('Company not found.');
+    return company;
+  }
+
   /* ───────────────────────── Services ───────────────────────── */
 
   private serviceView(row: BotService) {
@@ -207,7 +215,7 @@ export class SalesBotAdminService {
   }
 
   async updateBookingNotes(user: AuthenticatedUser, id: number, dto: UpdateBookingNotesDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     row.notes = dto.notes.trim();
@@ -215,14 +223,14 @@ export class SalesBotAdminService {
   }
 
   async sendBookingInvoice(user: AuthenticatedUser, id: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     return this.botAdminService.sendBookingInvoiceForCompany(Number(company.id), id);
   }
 
   async listBookings(user: AuthenticatedUser, query: BookingsQueryDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const rows = await this.bookingRepository.find({
       where: { company_id: Number(company.id), ...(query.status ? { status: query.status } : {}) },
       order: { created_at: 'DESC' },
@@ -232,7 +240,7 @@ export class SalesBotAdminService {
   }
 
   async updateBookingStatus(user: AuthenticatedUser, id: number, dto: UpdateBookingStatusDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     const companyId = Number(company.id);
@@ -321,7 +329,7 @@ export class SalesBotAdminService {
 
   /** stop = no more follow-ups for this chat · resume = plan the next one again */
   async setFollowUp(user: AuthenticatedUser, conversationId: number, action: 'stop' | 'resume') {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const conversation = await this.companyConversation(Number(company.id), conversationId);
     if (action === 'stop') {
       await this.conversationRepository.update(conversation.id, { followup_status: 'off', followup_due_at: null });
@@ -352,7 +360,7 @@ export class SalesBotAdminService {
 
   /** Last 30 days: chats that got a follow-up, and how many of those customers ordered within 7 days after it. */
   async followUpStats(user: AuthenticatedUser) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const companyId = Number(company.id);
     const [row] = (await this.conversationRepository.query(
       `WITH fu AS (
@@ -475,7 +483,7 @@ export class SalesBotAdminService {
   /* ───────────────────────── Reply review ───────────────────────── */
 
   async replies(user: AuthenticatedUser, query: RepliesQueryDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const limit = Math.min(Math.max(Number(query.limit) || 60, 1), 200);
     const rows: Array<Record<string, unknown>> = await this.dataSource.query(
       `SELECT b.id, b.conversation_id, b.content AS bot_reply, b.created_at, b.intent,
@@ -518,7 +526,7 @@ export class SalesBotAdminService {
   /* ───────────────────────── Reports ───────────────────────── */
 
   async report(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const companyId = Number(company.id);
     const maxDays = (await this.planService.limitsForCompany(companyId)).numbers.reports_days;
     const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365, maxDays ?? 365);
@@ -570,13 +578,13 @@ export class SalesBotAdminService {
 
   /** Agent performance (company admin): chats, speed, replies and the orders / bookings that count for each agent. */
   async teamPerformance(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     return teamReport(this.dataSource, Number(company.id), Number(daysRaw) || 30);
   }
 
   /** Home dashboard: engagement, replies, delivery, channels, orders, bookings, leads, what needs attention. */
   async dashboard(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     return dashboardReport(this.dataSource, Number(company.id), Number(daysRaw) || 7);
   }
 }

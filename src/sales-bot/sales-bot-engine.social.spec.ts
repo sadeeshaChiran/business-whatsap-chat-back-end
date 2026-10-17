@@ -23,7 +23,7 @@ function build(platform: string, botResult: Record<string, unknown> = {}, packag
     { findOne: async () => ({ id: 7, plan: 'free', bot_enabled: true }) } as never,
     { findOne: async () => conversation, update: jest.fn() } as never,
     { findOne: async () => ({ ...channelUser, bot_enabled: true }), update: jest.fn() } as never,
-    { findOne: async () => null, createQueryBuilder: () => qb, create: (x: any) => x, save: async (x: any) => { saved.push(x); return x; } } as never,
+    { findOne: async () => null, query: async () => [], createQueryBuilder: () => qb, create: (x: any) => x, save: async (x: any) => { saved.push(x); return x; } } as never,
     {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
     { create: (x: any) => x, save: async (x: any) => x } as never,
     { create: (x: any) => x, save: async (x: any) => x } as never, // bot notifications
