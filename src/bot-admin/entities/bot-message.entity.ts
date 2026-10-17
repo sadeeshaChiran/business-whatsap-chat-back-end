@@ -75,6 +75,14 @@ export class BotMessage {
   @Column({ type: 'text', nullable: true })
   reply_to_text: string | null;
 
+  /** What a photo in the chat is: customer photo → its product match, bot photo → the product name */
+  @Column({ type: 'text', nullable: true })
+  media_note: string | null;
+
+  /** Customer photo: the full match result (product ids, confidence) – reused when someone replies to that photo */
+  @Column({ type: 'jsonb', nullable: true })
+  media_match: Record<string, unknown> | null;
+
   /** owner feedback on a bot reply: up | down (inbox thumbs) */
   @Column({ type: 'varchar', length: 8, nullable: true })
   feedback: string | null;

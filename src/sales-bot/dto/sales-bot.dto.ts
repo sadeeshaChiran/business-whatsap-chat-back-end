@@ -323,6 +323,13 @@ export class SimulateCustomerMessageDto {
   @MaxLength(40)
   ad_id?: string;
 
+  /** the customer replies to (quotes) this earlier message of the chat */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  reply_to_message_id?: number;
+
   @IsString()
   @MinLength(9)
   @MaxLength(20)

@@ -134,6 +134,7 @@ npm run build                       # uses .env.production.local
 
 - Supabase takes daily backups automatically (check the retention for the plan in use).
 - Chat media files are stored on the API server in `CHAT_MEDIA_DIR` – include this folder in the server backup. **Product photos** are in `CHAT_MEDIA_DIR/products` (links `…/public/product-images/…`) – losing it breaks product photos for customers and the bot.
+- Migration `supabase_oct18_photo_match.sql`: `product.image_hashes` / `image_hashes_src`, `bot_message.media_note` / `media_match`. On the first start after deploy the API fingerprints all product photos in the background (no AI cost). The sales bot needs **Pillow** (`pip install -r requirements.txt`).
 - Migration `supabase_oct17_updates.sql` (runs on start): `bot_conversation.bot_answered_inbound_id`, `bot_conversation.lead_stage_manual`, `product.image_notes` / `image_notes_src`, `companies.agent_auto_accept` (default true), `app_user.team_role`, table `company_activity_log`.
 - Keep a copy of the three `.env` files in the password manager (not on a laptop, not in email).
 

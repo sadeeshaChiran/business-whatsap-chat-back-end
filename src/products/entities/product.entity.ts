@@ -63,6 +63,10 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   image_notes: string | null;
 
+  /** Perceptual fingerprints of the photos: [{url, hashes: [{p, d, c}]}] – finds the product when a customer re-sends our photo */
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  image_hashes: Array<{ url: string; hashes: Array<{ p: string; d: string; c: string }> }> | null;
+
   /** Add-on products the sales bot may suggest (ids of products in the same company) */
   @Column({ type: 'int', array: true, default: () => "'{}'" })
   related_product_ids: number[];

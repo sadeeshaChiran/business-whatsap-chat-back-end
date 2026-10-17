@@ -1,3 +1,4 @@
+import { linkQuotedReplyById } from '../common/message-reply';
 import { followUpView } from '../bot-admin/bot-admin.service';
 import { isTestPhone, TEST_PHONE_PREFIX } from '../common/test-phone';
 import { planFollowUp } from './follow-up';
@@ -433,10 +434,14 @@ export class SalesBotAdminService {
 
     const mediaUrl = file && kind ? saveChatMedia(Number(company.id), file.buffer, file.mimetype, file.originalname) : null;
     const content = text || (kind === 'image' ? '[image]' : kind === 'voice' ? '[voice note]' : '');
+    const providerMessageId = `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(Number(company.id), phone, dto.name?.trim() || undefined, {
       content, message_type: kind ?? 'text', media_url: mediaUrl, source: 'customer',
-      provider_message_id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      provider_message_id: providerMessageId,
     });
+    if (routing.conversationId && dto.reply_to_message_id) {
+      await linkQuotedReplyById(this.conversationRepository.manager, routing.conversationId, providerMessageId, dto.reply_to_message_id);
+    }
     // flows answer the simulator exactly like a real WhatsApp chat (so they can be tried before going live)
     const flowHandled = routing.conversationId
       ? await FlowHook.inbound({ companyId: Number(company.id), conversationId: routing.conversationId, platform: 'whatsapp', text: content, adId: dto.ad_id?.trim() || null })
