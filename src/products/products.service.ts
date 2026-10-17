@@ -97,8 +97,61 @@ export class ProductsService implements OnModuleInit {
    * so the sales bot can find the product when a customer sends a photo. Runs in the background; needs SALES_BOT_URL.
    */
   describePhotosLater(productId: number) {
+    void this.fingerprintPhotos(productId).catch((error: unknown) =>
+      this.logger.warn(`fingerprinting product ${productId} photos failed: ${error instanceof Error ? error.message : String(error)}`));
     void this.describePhotos(productId).catch((error: unknown) =>
       this.logger.warn(`describing product ${productId} photo failed: ${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  /** Bytes of a product photo: our own stored file from disk, anything else downloaded (max 8 MB). */
+  private async photoBytes(url: string): Promise<{ buffer: Buffer; mimetype: string } | null> {
+    const own = readOwnProductImage(url);
+    if (own) return own;
+    const link = absoluteProductImage(url);
+    if (!/^https?:\/\//i.test(link)) return null;
+    const response = await fetch(link, { signal: AbortSignal.timeout(20000) }).catch(() => null);
+    if (!response?.ok) return null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer.length || buffer.length > 8 * 1024 * 1024) return null;
+    return { buffer, mimetype: (response.headers.get('content-type') || 'image/jpeg').split(';')[0] };
+  }
+
+  /**
+   * Perceptual fingerprints of every photo of the product (cover, gallery, option photos) – no AI, no cost.
+   * When a customer sends one of these photos back (screenshot, forwarded, cropped) the bot knows the product for sure.
+   */
+  async fingerprintPhotos(productId: number, force = false): Promise<number> {
+    const base = String(process.env.SALES_BOT_URL ?? '').trim().replace(/\/+$/, '');
+    if (!base) return 0;
+    const [row]: Array<{ image_url: string | null; gallery: string[] | null; variant_image_match: { images?: Record<string, string> } | null; image_hashes_src: string | null }> =
+      await this.productRepository.query(`SELECT image_url, gallery, variant_image_match, image_hashes_src FROM product WHERE id = $1`, [productId]);
+    if (!row) return 0;
+    const variantRows: Array<{ image_url: string | null }> = await this.productRepository.query(
+      `SELECT elem->>'image_url' AS image_url FROM product_variant v, jsonb_array_elements(COALESCE(v.variants, '[]'::jsonb)) elem
+        WHERE v.product_id = $1 AND COALESCE(elem->>'image_url', '') <> ''`, [productId]).catch(() => []);
+    const urls = [...new Set([row.image_url, ...(row.gallery ?? []), ...Object.values(row.variant_image_match?.images ?? {}), ...variantRows.map((v) => v.image_url)]
+      .map((u) => String(u ?? '').trim()).filter((u) => /^https?:\/\//i.test(u) || u.includes('/public/product-images/')))].slice(0, 12);
+    const signature = urls.join('|');
+    if (!force && row.image_hashes_src === signature) return 0;
+    if (!urls.length) {
+      await this.productRepository.query(`UPDATE product SET image_hashes = '[]'::jsonb, image_hashes_src = '' WHERE id = $1`, [productId]);
+      return 0;
+    }
+    const files = await Promise.all(urls.map((url) => this.photoBytes(url).catch(() => null)));
+    const images = files.map((file) => ({ image_b64: file ? file.buffer.toString('base64') : '', mime_type: file?.mimetype ?? 'image/jpeg' }));
+    const response = await fetch(`${base}/photos/fingerprint`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Bot-Key': String(process.env.SALES_BOT_API_KEY ?? '') },
+      body: JSON.stringify({ images: images.filter((i) => i.image_b64) }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) throw new Error(`fingerprint service answered ${response.status}`);
+    const hashes = ((await response.json()) as { hashes?: Array<Array<{ p: string; d: string; c: string }>> }).hashes ?? [];
+    const readable = urls.filter((_, index) => images[index].image_b64);
+    const stored = readable.map((url, index) => ({ url, hashes: hashes[index] ?? [] })).filter((item) => item.hashes.length);
+    await this.productRepository.query(`UPDATE product SET image_hashes = $2::jsonb, image_hashes_src = $3 WHERE id = $1`,
+      [productId, JSON.stringify(stored), signature]);
+    return stored.length;
   }
 
   async describePhotos(productId: number, force = false): Promise<string | null> {
@@ -137,6 +190,18 @@ export class ProductsService implements OnModuleInit {
   /** Products with photos but no AI photo description yet (a few per start, so the cost stays small). */
   private async describeMissingPhotos() {
     if (!String(process.env.SALES_BOT_URL ?? '').trim()) return;
+    // fingerprints first (no AI cost): every product with photos, 50 at a time
+    for (let round = 0; round < 60; round++) {
+      const pending: Array<{ id: number }> = await this.productRepository.query(`
+        SELECT id FROM product WHERE COALESCE(is_deleted, FALSE) = FALSE AND image_hashes IS NULL
+           AND (COALESCE(image_url, '') <> '' OR jsonb_array_length(COALESCE(gallery, '[]'::jsonb)) > 0)
+         ORDER BY id DESC LIMIT 50`).catch(() => []);
+      if (!pending.length) break;
+      for (const item of pending) {
+        const done = await this.fingerprintPhotos(item.id).catch(() => -1);
+        if (done < 0) await this.productRepository.query(`UPDATE product SET image_hashes = '[]'::jsonb WHERE id = $1`, [item.id]).catch(() => undefined);
+      }
+    }
     const rows: Array<{ id: number }> = await this.productRepository.query(`
       SELECT id FROM product WHERE COALESCE(is_deleted, FALSE) = FALSE AND image_notes IS NULL
          AND (COALESCE(image_url, '') <> '' OR jsonb_array_length(COALESCE(gallery, '[]'::jsonb)) > 0)
@@ -164,10 +229,20 @@ export class ProductsService implements OnModuleInit {
         [row.id, store(row.image_url) || gallery[0] || null, JSON.stringify(gallery), row.variant_image_match ? JSON.stringify({ ...row.variant_image_match, images }) : null]);
       moved++;
     }
-    const variants: Array<{ id: number; company_id: number; image_url: string }> = await this.productRepository.query(`
-      SELECT v.id, p.company_id, v.image_url FROM product_variant v JOIN product p ON p.id = v."productId" WHERE v.image_url LIKE 'data:%' LIMIT 1000`).catch(() => []);
-    for (const v of variants) {
-      try { await this.productRepository.query(`UPDATE product_variant SET image_url = $2 WHERE id = $1`, [v.id, storeIfDataUrl(v.company_id, v.image_url)]); moved++; } catch { /* skip a broken picture */ }
+    // option photos live in product_variant.variants (JSON list of options)
+    const variantRows: Array<{ id: number; company_id: number; variants: Array<Record<string, unknown>> }> = await this.productRepository.query(`
+      SELECT v.id, p.company_id, v.variants FROM product_variant v JOIN product p ON p.id = v.product_id
+       WHERE v.variants::text LIKE '%data:image%' LIMIT 1000`).catch(() => []);
+    for (const v of variantRows) {
+      try {
+        const options = (v.variants ?? []).map((option) => {
+          const url = String(option.image_url ?? '');
+          if (!url.startsWith('data:')) return option;
+          try { return { ...option, image_url: storeIfDataUrl(v.company_id, url) }; } catch { return { ...option, image_url: '' }; }
+        });
+        await this.productRepository.query(`UPDATE product_variant SET variants = $2::jsonb WHERE id = $1`, [v.id, JSON.stringify(options)]);
+        moved++;
+      } catch { /* skip a broken picture */ }
     }
     if (moved) this.logger.log(`moved ${moved} inline product photos to files`);
     return moved;

@@ -14,6 +14,7 @@ Every change is tested before it reaches customers. Tests run against a **test d
 | --- | --- |
 | `npm test` | Unit tests (jest, `src/**/*.spec.ts`): delivery fee, booking slots, referral capture, WhatsApp error texts, document reading, guards … |
 | `npm run test:security` | Security and business rules against a running API: tenant isolation, agent vs admin rights, super admin only, packages and offers, quoted replies, feedback, follow-ups, free delivery, service limits, simulator, trials and the team handbook access |
+| `npm run test:photos` | Customer photos → product (needs the fake bot): our blue watch screenshot → blue (not the red one of the same design), forwarded / cut-out copies, a watch we don't sell → not in shop, replies to a bot photo and to the customer's own photo, photo labels, history notes. Live AI check with real shop photos: sales bot `evals/photo_match.py` |
 | `npm run test:team` | SMS sign-up codes, supervisor rights, agents change only their own orders + activity log, automatic accept, pipeline stage by hand, product photos as files (upload, public link, fake image refused), own SKU / optional weight, import sample file; plus the agent-work flow (needs the fake bot) |
 | `npm run test:flows` | Automation flows and forms |
 | `npm run test:crm` | CRM, marketing, social, customer insights (visits, groups, tags, per-click ad results) |

@@ -837,6 +837,8 @@ export class BotAdminService {
       delivery_status: message.delivery_status ?? null,
       reply_to_message_id: message.reply_to_message_id ?? null,
       reply_to_text: message.reply_to_text ?? null,
+      // photo: which product it is (customer photo → the match, bot photo → the product it shows)
+      media_note: message.media_note ?? null,
       feedback: message.feedback ?? null,
       // sales_bot / bot = an AI reply (the inbox shows "AI reply" and the 👍 / 👎 buttons)
       source: message.source ?? null,
@@ -2504,6 +2506,7 @@ export class BotAdminService {
         'm.delivery_status',
         'm.reply_to_message_id',
         'm.reply_to_text',
+        'm.media_note',
         'm.feedback',
         'm.created_at',
       ])

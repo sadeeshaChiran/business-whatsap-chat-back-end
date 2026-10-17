@@ -1,5 +1,5 @@
 import { withQuote } from '../common/message-reply';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AgentRoutingService } from '../agent-routing/agent-routing.service';
@@ -29,7 +29,8 @@ import { BotBooking } from './entities/bot-booking.entity';
 import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
-import { absoluteProductImage, readOwnProductImage } from '../products/product-images';
+import { absoluteProductImage, readOwnProductImage, sniffImage } from '../products/product-images';
+import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-match';
 import { SalesBotContextService, sriLankaNow, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
@@ -63,6 +64,35 @@ const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 
 
 export const BOT_SOURCE = 'sales_bot';
 const PLACEHOLDER = /^\[[^\]]*\]$/;
+
+/** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
+type PhotoPick = { id: number; variant?: string | null; limit?: number; skipIfSentWithinMin: number };
+
+/** "📷 Cotton Romper Set (3 pcs) – Red – Rs 2,500": the label sent with a product photo. */
+/**
+ * Which product photos to send, in order: what the customer's photo matched (sure → that product; not sure → the
+ * 2-3 closest, one photo each, so the customer can point at the right one), then what the AI chose, then products
+ * named in the reply. A photo already sent in the last minutes is not repeated.
+ */
+export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number[]): PhotoPick[] {
+  const picks: PhotoPick[] = [];
+  for (const match of matches) {
+    if ((match.status === 'exact' || match.status === 'likely') && match.products[0]) {
+      picks.push({ id: match.products[0].product_id, variant: match.products[0].variant, limit: 2, skipIfSentWithinMin: 10 });
+    } else if (match.status === 'unsure') {
+      for (const product of match.products.slice(0, 3)) picks.push({ id: product.product_id, variant: product.variant, limit: 1, skipIfSentWithinMin: 10 });
+    }
+  }
+  const autoSet = new Set(auto);
+  for (const id of chosen) if (!autoSet.has(id)) picks.push({ id, limit: 3, skipIfSentWithinMin: 15 });
+  for (const id of auto) picks.push({ id, limit: 2, skipIfSentWithinMin: 24 * 60 });
+  return picks;
+}
+
+export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: string | null): string {
+  const price = Number(product.price);
+  return `📷 ${product.name}${variant ? ` – ${variant}` : ''}${Number.isFinite(price) && price > 0 ? ` – Rs ${price.toLocaleString('en-US')}` : ''}`;
+}
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 
 /** Sent instead of the AI text when a confirmed order needs a human check. */
@@ -139,6 +169,9 @@ export class SalesBotEngineService implements OnModuleInit {
   private readonly running = new Set<number>();
   /** Conversations from the Customer simulator: never send to WhatsApp. */
   private readonly simulated = new Set<number>();
+
+  /** Customer photo → product (optional so unit tests can build the engine without it). */
+  @Optional() @Inject(PhotoMatchService) private readonly photoMatcher?: PhotoMatchService;
 
   constructor(
     @InjectRepository(Company) private readonly companyRepository: Repository<Company>,
@@ -294,12 +327,21 @@ export class SalesBotEngineService implements OnModuleInit {
       })
       .filter(Boolean)
       .join('\n');
-    const mediaRow = [...pending].reverse().find((row) => row.media_url && (row.message_type === 'image' || row.message_type === 'voice'));
     const social = socialPlatformOf(channelUser.platform);
     // Messenger / Instagram chats are answered through the connected Page, not a WhatsApp channel
     const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
+    // the customer's photos of this turn – or the earlier photo they replied to ("mekata kiyada?")
+    const photoRows = pending.filter((row) => row.media_url && row.message_type === 'image').slice(-3);
+    if (!photoRows.length) {
+      const quoting = [...pending].reverse().find((row) => row.reply_to_message_id);
+      const target = quoting ? await this.messageRepository.findOne({ where: { id: Number(quoting.reply_to_message_id), conversation_id: conversationId } }) : null;
+      if (target?.message_type === 'image' && target.media_url && String(target.direction) === 'inbound') photoRows.push(target);
+    }
+    const mediaRow = [...pending].reverse().find((row) => row.media_url && (row.message_type === 'image' || row.message_type === 'voice'))
+      ?? photoRows[photoRows.length - 1];
     const media = mediaRow ? await this.loadMedia(mediaRow.media_url as string, channel) : null;
     if (!message && !media) { await markAnswered(); return; }
+    const photoMatches = await this.matchPhotos(companyId, conversationId, photoRows, mediaRow, media, channel);
 
     const history = await this.history(conversationId, pending[0].id);
     const sessionState = this.readSessionState(channelUser.session_state);
@@ -308,6 +350,7 @@ export class SalesBotEngineService implements OnModuleInit {
     let result: SalesBotResult;
     try {
       const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId: conversation.id, message });
+      if (photoMatches.length) context.photo_matches = photoMatches;
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
         session: {
@@ -344,15 +387,17 @@ export class SalesBotEngineService implements OnModuleInit {
     // photo links the AI wrote into the text become real photos; products it talks about get their photos too
     let text = outcome.replyOverride ?? result.reply;
     let photoIds = result.photo_product_ids;
+    let autoIds: number[] = [];
     if (text && !outcome.replyOverride) {
       const found = await this.photosFromReply(companyId, text, photoIds).catch((error: unknown) => {
         this.logger.warn(`photo links in the reply not checked: ${error instanceof Error ? error.message : String(error)}`);
-        return { text: text as string, productIds: photoIds };
+        return { text: text as string, productIds: photoIds, autoIds: [] as number[] };
       });
       text = found.text;
       photoIds = found.productIds;
+      autoIds = found.autoIds;
     }
-    await this.sendPhotos(companyId, conversation, channelUser, channel, photoIds, simulated);
+    await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds), simulated);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -435,7 +480,10 @@ export class SalesBotEngineService implements OnModuleInit {
       .limit(20)
       .getMany();
     return rows.reverse().map((row) => {
-      const content = row.message_type === 'image' ? `[photo] ${PLACEHOLDER.test(row.content.trim()) ? '' : row.content}`.trim()
+      const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
+      // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
+      const content = row.message_type === 'image'
+        ? `[photo${row.media_note && row.direction === 'inbound' ? `: ${row.media_note}` : ''}] ${caption}`.trim()
         : row.message_type === 'voice' ? '[voice note]' : row.content;
       if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content) : content };
       const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
@@ -519,8 +567,43 @@ export class SalesBotEngineService implements OnModuleInit {
    * instead of asking for the photo. Those links are removed from the text and the photo is sent as a real image.
    * When the bot picked no photos, products named in the reply (max 2) get their photos.
    */
-  async photosFromReply(companyId: number, reply: string, chosen: number[]): Promise<{ text: string; productIds: number[] }> {
+  /**
+   * Finds which of our products the customer's photo(s) show (see photo-match.ts). The result is kept on the message
+   * (media_note / media_match): the chat history, the inbox and a later reply to that photo all know what it was.
+   */
+  private async matchPhotos(companyId: number, conversationId: number, rows: BotMessage[], mediaRow: BotMessage | undefined,
+    media: { mime_type: string; data_b64: string } | null, channel: WhatsappChannel | null): Promise<PhotoMatch[]> {
+    if (!this.photoMatcher || !rows.length) return [];
+    const out: PhotoMatch[] = [];
+    for (const row of rows) {
+      let match = (row.media_match as PhotoMatch | null) ?? null;
+      if (!match) {
+        const file = row === mediaRow && media ? media : await this.loadMedia(row.media_url as string, channel);
+        if (!file?.mime_type.startsWith('image/')) continue;
+        const found = await this.photoMatcher.match(companyId, file).catch((error: unknown) => {
+          this.logger.warn(`photo match failed (conversation ${conversationId}): ${error instanceof Error ? error.message : String(error)}`);
+          return null;
+        });
+        if (!found) continue;
+        match = found.match;
+        for (const usage of found.usage) {
+          await this.usageRepository.save(this.usageRepository.create({
+            company_id: companyId, conversation_id: conversationId, model: String((usage as { model?: string }).model ?? 'photo-match'),
+            input_tokens: usage.input_tokens, cached_tokens: 0, output_tokens: usage.output_tokens, calls: usage.calls ?? 1,
+            cost_usd: usage.cost_usd, latency_ms: usage.latency_ms, is_test: false,
+          })).catch(() => undefined);
+        }
+        await this.messageRepository.query(`UPDATE bot_message SET media_note = $2, media_match = $3::jsonb WHERE id = $1`, [row.id, photoMatchNote(match), JSON.stringify(match)]);
+        this.logger.log(`conv ${conversationId}: customer photo → ${match.status} (${match.method}) ${match.products.map((p) => `#${p.product_id} ${p.confidence}%`).join(', ')}`);
+      }
+      out.push(match);
+    }
+    return out;
+  }
+
+  async photosFromReply(companyId: number, reply: string, chosen: number[]): Promise<{ text: string; productIds: number[]; autoIds: number[] }> {
     const ids = new Set(chosen.map(Number).filter((id) => id > 0));
+    const autoIds = new Set<number>();
     const urlPattern = /(https?:\/\/[^\s<>"']+)/gi;
     const trimLink = (raw: string) => {
       let link = raw.replace(/[.,!?;:]+$/, '');
@@ -544,7 +627,7 @@ export class SalesBotEngineService implements OnModuleInit {
       const named = withPhotos
         .filter((product) => String(product.name ?? '').trim().length >= 4 && lower.includes(String(product.name).trim().toLowerCase()))
         .sort((a, b) => String(b.name).length - String(a.name).length);
-      for (const product of named.slice(0, 2)) ids.add(Number(product.id));
+      for (const product of named.slice(0, 2)) { ids.add(Number(product.id)); autoIds.add(Number(product.id)); }
     }
     // a line that only held a photo link disappears completely (empty lines split the reply into messages)
     let text = reply.split('\n').flatMap((line) => {
@@ -561,70 +644,119 @@ export class SalesBotEngineService implements OnModuleInit {
       .replace(/[ \t]+$/gm, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-    return { text, productIds: [...ids].slice(0, 3) };
+    return { text, productIds: [...ids].slice(0, 3), autoIds: [...autoIds] };
   }
 
+  /**
+   * Sends product photos as real pictures, each labelled with the product name and price (WhatsApp: caption;
+   * Messenger / Instagram: a short line first) so the customer always knows which item a photo is.
+   * A photo is not sent again if it went out recently in this chat (window per pick).
+   */
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, productIds: number[], simulated: boolean) {
-    if (!productIds.length) return;
-    const products = await this.productRepository.find({ where: productIds.slice(0, 3).map((id) => ({ id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
-    // never send the same photo twice in one chat
-    const already = new Set<string>((await this.messageRepository.query(
-      `SELECT media_url FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' AND media_url IS NOT NULL`,
-      [conversation.id]) as Array<{ media_url: string }>).map((row) => row.media_url));
+    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean): Promise<number> {
+    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, 3);
+    if (!unique.length) return 0;
+    const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
+    const recent: Array<{ media_url: string; at: Date }> = await this.messageRepository.query(
+      `SELECT media_url, created_at AS at FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound'
+          AND message_type::text = 'image' AND media_url IS NOT NULL`, [conversation.id]).catch(() => []);
+    const sentWithin = (url: string, minutes: number) => recent.some((row) => row.media_url === url && Date.now() - new Date(row.at).getTime() < minutes * 60_000);
+    const social = socialPlatformOf(channelUser.platform);
     let sent = 0;
-    for (const product of products) {
-      for (const url of productImages(product).filter((link) => !already.has(link)).slice(0, 3)) {
+    for (const pick of unique) {
+      const product = products.find((p) => Number(p.id) === pick.id);
+      if (!product) continue;
+      // the option the customer asked about / sent a photo of comes first
+      const all = productImages(product);
+      const optionPhoto = pick.variant ? this.optionPhoto(product, pick.variant) : null;
+      const ordered = optionPhoto ? [optionPhoto, ...all.filter((url) => url !== optionPhoto)] : all;
+      const urls = ordered.filter((url) => !sentWithin(url, pick.skipIfSentWithinMin)).slice(0, pick.limit ?? 3);
+      const label = photoLabel(product, pick.variant ?? null);
+      let labelled = false;
+      for (const url of urls) {
         if (sent >= 6) break;
-        const own = readOwnProductImage(url);
+        const file = simulated ? null : await this.photoFile(url);
+        if (!simulated && !file && (!social || social === 'messenger')) {
+          this.logger.warn(`product ${product.id} photo could not be loaded: ${url}`);
+          continue;
+        }
         let messageId: string | null = null;
-        const social = socialPlatformOf(channelUser.platform);
+        let failed = false;
+        const caption = labelled ? undefined : label;
         if (!simulated && social) {
           try {
-            let buffer: Buffer | undefined;
-            let mimetype: string | undefined;
-            if (own) {
-              buffer = own.buffer;
-              mimetype = own.mimetype;
-            } else if (social === 'messenger') {
-              const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
-              if (!response.ok) continue;
-              buffer = Buffer.from(await response.arrayBuffer());
-              mimetype = (response.headers.get('content-type') || 'image/jpeg').split(';')[0];
-            }
+            if (caption) await this.sendText(companyId, conversation, channelUser, channel, caption, null, false);
             messageId = await this.socialSender.sendImage(companyId, social, channelUser.source_account_id, channelUser.external_user_id, {
-              url, buffer, mimetype, fileName: `${product.name}.${(mimetype || 'image/jpeg').split('/')[1] || 'jpg'}`,
+              url: absoluteProductImage(url), buffer: file?.buffer, mimetype: file?.mimetype, fileName: `${product.name}.${(file?.mimetype || 'image/jpeg').split('/')[1] || 'jpg'}`,
             });
           } catch (error) {
-            this.logger.warn(`sending a product photo on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
-            continue;
+            failed = true;
+            this.logger.warn(`sending product ${product.id} photo on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
           }
-        } else if (!simulated && channel) {
+        } else if (!simulated && channel && file) {
           try {
-            let buffer = own?.buffer;
-            let mimetype = own?.mimetype ?? 'image/jpeg';
-            if (!buffer) {
-              const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
-              if (!response.ok) continue;
-              buffer = Buffer.from(await response.arrayBuffer());
-              mimetype = (response.headers.get('content-type') || 'image/jpeg').split(';')[0];
-            }
             messageId = (await this.providerFactory.getAdapterForChannel(channel).sendMedia(channel, channelUser.external_user_id, {
-              buffer, mimetype, fileName: `${product.name}.${mimetype.split('/')[1] || 'jpg'}`, mediaType: 'image',
+              buffer: file.buffer, mimetype: file.mimetype, fileName: `${product.name}.${file.mimetype.split('/')[1] || 'jpg'}`, mediaType: 'image',
+              ...(caption ? { caption } : {}),
             })).messageId;
           } catch (error) {
-            this.logger.warn(`sending a product photo failed: ${error instanceof Error ? error.message : String(error)}`);
-            continue;
+            failed = true;
+            this.logger.warn(`sending product ${product.id} photo failed: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
+        if (failed) continue;
+        labelled = true;
         await this.messageRepository.save(this.messageRepository.create({
-          conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: socialPlatformOf(channelUser.platform) ?? (channelUser.platform || 'whatsapp'),
-          provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: '[image]', media_url: url, source: BOT_SOURCE,
+          conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: social ?? (channelUser.platform || 'whatsapp'),
+          provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: label, media_url: url, source: BOT_SOURCE,
+          media_note: `bot sent a photo of our product ${product.name}${pick.variant ? ` (${pick.variant})` : ''} #${product.id}`,
         }));
         sent += 1;
       }
     }
     if (sent) await this.touch(companyId, conversation.id);
+    return sent;
+  }
+
+  /** The photo of one option ("Red", "Red / M"), from the option photos or the photo-per-option table. */
+  private optionPhoto(product: Product, variant: string): string | null {
+    const wanted = variant.trim().toLowerCase();
+    for (const option of productOptions(product)) {
+      if (option.image_url && (variantLabel(option).toLowerCase() === wanted || String(option.variant_value ?? '').toLowerCase() === wanted)) {
+        return absoluteProductImage(option.image_url);
+      }
+    }
+    for (const [key, image] of Object.entries(product.variant_image_match?.images ?? {})) {
+      if (image && (key.toLowerCase() === wanted || wanted.includes(key.toLowerCase()))) return absoluteProductImage(image);
+    }
+    return null;
+  }
+
+  /**
+   * A product photo ready for WhatsApp / Messenger: our own file from disk or downloaded, checked to really be a
+   * picture. WEBP / GIF / other formats are turned into JPEG (WhatsApp only takes JPEG and PNG photos).
+   */
+  private async photoFile(url: string): Promise<{ buffer: Buffer; mimetype: string } | null> {
+    let file: { buffer: Buffer; mimetype: string } | null = readOwnProductImage(url);
+    if (!file) {
+      if (!/^https?:\/\//i.test(url)) return null;
+      const response = await fetch(url, { signal: AbortSignal.timeout(20000) }).catch(() => null);
+      if (!response?.ok) return null;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (!buffer.length || buffer.length > 16 * 1024 * 1024) return null;
+      file = { buffer, mimetype: sniffImage(buffer) ?? (response.headers.get('content-type') || '').split(';')[0] };
+    }
+    const type = sniffImage(file.buffer);
+    if (type === 'image/jpeg' || type === 'image/png') return { buffer: file.buffer, mimetype: type };
+    const base = SalesBotClient.baseUrl();
+    if (!base) return null;
+    const converted = await fetch(`${base}/photos/jpeg`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Bot-Key': String(process.env.SALES_BOT_API_KEY ?? '') },
+      body: JSON.stringify({ image_b64: file.buffer.toString('base64') }),
+      signal: AbortSignal.timeout(30000),
+    }).then((r) => (r.ok ? r.json() as Promise<{ image_b64?: string }> : null)).catch(() => null);
+    return converted?.image_b64 ? { buffer: Buffer.from(converted.image_b64, 'base64'), mimetype: 'image/jpeg' } : null;
   }
 
   private async touch(companyId: number, conversationId: number) {

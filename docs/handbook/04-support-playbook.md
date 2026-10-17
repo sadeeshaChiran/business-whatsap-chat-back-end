@@ -111,7 +111,9 @@ Also: broadcasts need the **Cloud API** (not QR), only text templates (no photo/
 | --- | --- |
 | Wrong delivery fee | Check Delivery zones: the area name must match (or a `*` zone exists) and, for zones that charge by weight, product weights are set (weight is optional otherwise). Weight is rounded up by default (2.3 kg → 3 kg). |
 | Bot sends a link instead of a photo / no photo | The product needs a photo in Media gallery. Uploaded photos are links like `…/public/product-images/12-x.jpg` – open it in a browser; 404 = file missing on the server (restore `CHAT_MEDIA_DIR/products` from backup). `PUBLIC_API_BASE_URL` must be the public API address, or Instagram/WhatsApp can't download the photo. |
-| Bot doesn't recognise a customer's photo | Product has no "looks" note yet: save the product again (needs `SALES_BOT_URL`), or check `product.image_notes`. |
+| Bot doesn't recognise a customer's photo | Look at the note under the photo in the inbox (Our product / Not sure / Not in our shop). "Not sure" = two products look alike or the photo is unclear – the bot asked the customer (by design). Check the product has its own clear photos (each colour as an option photo) and `product.image_hashes` is filled (saving the product refreshes it; needs `SALES_BOT_URL`). |
+| Bot picked the wrong product | Very rare: tell us the chat. Check both products don't share the same photo, and that option photos are set. Live check with real photos: `evals/photo_match.py` in the sales bot. |
+| Product photo not delivered on WhatsApp | API log "sending product N photo failed": photo link not reachable, or the file is not a picture. WEBP/GIF are converted automatically (needs the sales bot running). |
 | Import added duplicates | Rows match existing products by SKU, then by exact name. Give each product a SKU in the file. |
 | Agent says "You can only change your own orders" | The order is not the agent's (not taken by them and the customer isn't theirs now). The owner or a supervisor can change it. |
 | "Who deleted this order?" | Team → Activity log → Deleted orders (shows who, when and the full order). |

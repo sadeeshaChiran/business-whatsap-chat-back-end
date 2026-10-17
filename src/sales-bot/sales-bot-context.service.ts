@@ -41,6 +41,8 @@ export type SalesBotContext = {
     free_delivery_over?: number | null;
   };
   products: ContextProduct[];
+  /** what the customer's photo(s) in this message matched in our catalog (see photo-match.ts) */
+  photo_matches?: import('./photo-match').PhotoMatch[];
   services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null; available: boolean }>;
   /** included_kg + per_extra_kg set = weight rule (fee = fee + extra kg × per_extra_kg) */
   /** weight_rounding: up (2.3 kg -> 3), nearest (2.3 -> 2, 2.5 -> 3), exact */
@@ -87,7 +89,7 @@ export function effectiveSellsOf(company: Pick<Company, 'business_category'> | n
   const category = String(company?.business_category ?? '').toLowerCase();
   return category === 'both' ? 'both' : category === 'service' ? 'services' : 'products';
 }
-const toNumber = (value: unknown, fallback = 0) => {
+export const toNumber = (value: unknown, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
