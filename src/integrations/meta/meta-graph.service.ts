@@ -82,12 +82,32 @@ export class MetaGraphService {
     return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
   }
 
+  /**
+   * WhatsApp Embedded Signup as a full-page redirect (same way as the Facebook Page login): no popup and no Meta
+   * browser SDK, so nothing can get stuck in the browser. Meta comes back to META_OAUTH_REDIRECT_URI with a code.
+   */
+  buildWhatsappAuthUrl(state: string): string {
+    const cfg = this.getConfig();
+    const configId = process.env.META_WHATSAPP_CONFIG_ID?.trim() ?? '';
+    if (!configId) throw new BadRequestException('One-click WhatsApp connection is not switched on for this platform yet (META_WHATSAPP_CONFIG_ID).');
+    const params = new URLSearchParams({
+      client_id: cfg.appId,
+      redirect_uri: cfg.redirectUri,
+      state,
+      response_type: 'code',
+      config_id: configId,
+      override_default_response_type: 'true',
+      extras: JSON.stringify({ setup: {}, featureType: '', sessionInfoVersion: '3' }),
+    });
+    return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
+  }
+
   frontendSuccessRedirect(query = '', returnPath?: string): string {
     const configured =
       process.env.META_OAUTH_SUCCESS_REDIRECT?.trim() ||
       'http://localhost:3000/channels/messenger';
     const base =
-      returnPath === '/channels/messenger' || returnPath === '/channels/instagram'
+      returnPath === '/channels/messenger' || returnPath === '/channels/instagram' || returnPath === '/channels/whatsapp'
         ? new URL(configured).origin + returnPath
         : configured;
     return query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base;
@@ -185,9 +205,10 @@ export class MetaGraphService {
    * was created, so we try, in order: no redirect_uri (documented for Embedded Signup), an empty redirect_uri, the
    * dashboard page the popup was opened from, and META_OAUTH_REDIRECT_URI. A rejected attempt does not use up the code.
    */
-  async exchangeEmbeddedSignupCode(code: string, pageUrl?: string): Promise<string> {
+  async exchangeEmbeddedSignupCode(code: string, pageUrl?: string, viaRedirect = false): Promise<string> {
     const cfg = this.getConfig();
-    const candidates: Array<string | null> = [null, ''];
+    // a code from the redirect flow is only accepted with the same redirect_uri – try that first
+    const candidates: Array<string | null> = viaRedirect && cfg.redirectUri?.trim() ? [cfg.redirectUri.trim(), null, ''] : [null, ''];
     for (const uri of [pageUrl?.trim(), pageUrl?.trim().replace(/\/+$/, '') + '/', cfg.redirectUri?.trim()]) {
       if (uri && uri !== '/' && !candidates.includes(uri)) candidates.push(uri);
     }
@@ -324,7 +345,9 @@ export class MetaGraphService {
         id?: string;
         name?: string;
         access_token?: string;
-        instagram_business_account?: { id?: string; username?: string };
+        category?: string;
+        picture?: { data?: { url?: string } };
+        instagram_business_account?: { id?: string; username?: string; name?: string; profile_picture_url?: string };
       }>;
     };
 
@@ -333,7 +356,7 @@ export class MetaGraphService {
       userToken,
       {
         fields:
-          'id,name,access_token,instagram_business_account{id,username}',
+          'id,name,access_token,category,picture.type(square){url},instagram_business_account{id,username,name,profile_picture_url}',
         limit: '50',
       },
     );
@@ -347,6 +370,10 @@ export class MetaGraphService {
         instagram_business_account_id:
           row.instagram_business_account?.id ?? null,
         instagram_username: row.instagram_business_account?.username ?? null,
+        picture_url: row.picture?.data?.url ?? null,
+        category: row.category ?? null,
+        instagram_name: row.instagram_business_account?.name ?? null,
+        instagram_picture_url: row.instagram_business_account?.profile_picture_url ?? null,
       }));
 
     if (!pages.length) {
@@ -651,11 +678,15 @@ export class MetaGraphService {
     const wabaIds = Array.from(new Set((debug.data?.data?.granular_scopes ?? [])
       .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
       .flatMap((s) => s.target_ids ?? [])));
+    const found: Array<{ waba_id: string; phone_number_id: string; fresh: boolean }> = [];
     for (const wabaId of wabaIds) {
-      const numbers = await this.healthGet<{ data?: Array<{ id: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name' });
-      const first = numbers.data?.data?.[0];
-      if (first?.id) return { waba_id: wabaId, phone_number_id: first.id };
+      const numbers = await this.healthGet<{ data?: Array<{ id: string; platform_type?: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
+      for (const number of numbers.data?.data ?? []) {
+        // a number just added in the signup is not on the Cloud API yet
+        if (number.id) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
+      }
     }
-    return null;
+    const pick = found.find((n) => n.fresh) ?? found[0];
+    return pick ? { waba_id: pick.waba_id, phone_number_id: pick.phone_number_id } : null;
   }
 }

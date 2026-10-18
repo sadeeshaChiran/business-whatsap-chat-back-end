@@ -82,7 +82,8 @@ def generated(spec, target):
     while len(out) < target:
         cat, types, brands, adjectives = rnd.choice(spec)
         tname, lo, hi, kg, scheme = rnd.choice(types)
-        name = f"{rnd.choice(brands)} {rnd.choice(adjectives)} {tname}".replace("  ", " ").strip()
+        brand = rnd.choice(brands)
+        name = f"{brand} {rnd.choice(adjectives)} {tname}".replace("  ", " ").strip()
         if name in seen:
             name = f"{name} {rnd.choice(['Pro', 'Plus', 'Max', 'Lite', 'Classic', 'Mini', 'XL', 'Twin Pack', 'Value Pack'])}"
             if name in seen:
@@ -103,7 +104,7 @@ def generated(spec, target):
             variants = [{"variant_name": "Model", "variant_value": m, "price": p} for m in rnd.sample(
                 ["iPhone 15", "iPhone 14", "iPhone 13", "Samsung A55", "Samsung A35", "Samsung S24", "Redmi Note 13", "Galaxy A15"], 4)]
         desc = f"{name}. {rnd.choice(['Original product with warranty.', 'Best seller.', 'Good quality at a fair price.', 'Imported.', 'Made in Sri Lanka.'])}"
-        out.append({"cat": cat, "name": name, "price": p, "kg": kg, "desc": desc, "sp": rnd.choice(
+        out.append({"cat": cat, "name": name, "brand": brand, "price": p, "kg": kg, "desc": desc, "sp": rnd.choice(
             ["Cash on delivery island-wide.", "7-day exchange.", "Top rated by customers.", "Fast delivery.", ""]), "variants": variants})
     return out
 
@@ -266,8 +267,8 @@ BEGIN
         for i, p in enumerate(products):
             sku = f"{key[:3].upper()}-{i + 1:04d}"
             available = rnd.random() > 0.04
-            print(f"  INSERT INTO product (name, description, sku, price, quantity, status, category_id, company_id, created_by, has_variants, weight, selling_points, is_available, show_to_bot) "
-                  f"VALUES ({q(p['name'])}, {q(p['desc'])}, {q(sku)}, {p['price']}, {0 if not available else rnd.randint(3, 60)}, {q('In Stock' if available else 'Out of Stock')}, "
+            print(f"  INSERT INTO product (name, brand, description, sku, price, quantity, status, category_id, company_id, created_by, has_variants, weight, selling_points, is_available, show_to_bot) "
+                  f"VALUES ({q(p['name'])}, {q(p.get('brand'))}, {q(p['desc'])}, {q(sku)}, {p['price']}, {0 if not available else rnd.randint(3, 60)}, {q('In Stock' if available else 'Out of Stock')}, "
                   f"(cat_ids->>{q(p['cat'])})::int, cid, uid, {q(bool(p['variants']))}, {p['kg']}, {q(p['sp'])}, {q(available)}, TRUE) RETURNING id INTO pid;")
             if p["variants"]:
                 vs = [{**v, "sku": f"{sku}-{j + 1}", "quantity": rnd.randint(0, 20), "weight": p["kg"]} for j, v in enumerate(p["variants"])]
