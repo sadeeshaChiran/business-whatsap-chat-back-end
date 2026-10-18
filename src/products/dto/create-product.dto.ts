@@ -90,6 +90,12 @@ export class CreateProductDto {
   weight?: number | null;
 
 
+  @ApiPropertyOptional({ example: 'Casio', description: 'Brand (optional)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  brand?: string | null;
+
   @ApiPropertyOptional({ example: 'Soft sole, non-slip, loved by moms', description: 'Why customers love it (used by the sales bot)' })
   @IsOptional()
   @IsString()

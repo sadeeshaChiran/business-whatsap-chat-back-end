@@ -22,6 +22,8 @@ export type ContextProduct = {
   price: number;
   stock: number | null;
   available?: boolean;
+  /** brand, '' when none */
+  brand?: string;
   photo_count: number;
   image_urls: string[];
   /** what the photos show (colour, pattern, style) – helps match photos customers send */
@@ -391,6 +393,7 @@ export class SalesBotContextService {
       price: toNumber(product.price),
       stock: productStock(product),
       available: product.is_available !== false,
+      brand: String(product.brand ?? '').trim(),
       photo_count: images.length,
       image_urls: images,
       image_notes: String(product.image_notes ?? '').slice(0, 300),

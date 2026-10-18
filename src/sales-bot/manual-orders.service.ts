@@ -70,14 +70,14 @@ export class ManualOrdersService {
     const products = await this.productRepository.find({
       where: { company_id: companyId, is_deleted: false }, relations: ['category', 'variants'], order: { name: 'ASC' }, take: 3000,
     });
-    const matched = products.filter((product) => !term || `${product.name} ${product.category?.name ?? ''}`.toLowerCase().includes(term)).slice(0, 60);
+    const matched = products.filter((product) => !term || `${product.name} ${product.brand ?? ''} ${product.category?.name ?? ''}`.toLowerCase().includes(term)).slice(0, 60);
     const services = await this.serviceRepository.find({ where: { company_id: companyId, is_active: true }, order: { name: 'ASC' }, take: 500 });
     const zones = await this.zoneRepository.find({ where: { company_id: companyId }, order: { area: 'ASC' } });
     return {
       products: matched.map((product) => {
         const row = this.contextService.toContextProduct(product);
         return {
-          id: row.id, name: row.name, category: row.category, price: row.price, stock: row.stock, available: row.available !== false,
+          id: row.id, name: row.name, brand: row.brand || null, category: row.category, price: row.price, stock: row.stock, available: row.available !== false,
           weight_kg: row.weight_kg, image_url: row.image_urls[0] ?? null,
           variants: row.variants.map((variant) => ({
             variant_id: variant.variant_id, name: variant.name, price: variant.price, stock: variant.stock, available: variant.available !== false,

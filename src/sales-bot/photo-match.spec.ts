@@ -34,16 +34,18 @@ describe('PhotoMatchService', () => {
     const { svc, calls } = service([
       product(1, 'Red Classic Watch', [H('ffff0000ffff0000', '00ff00ff00ff00ff', 40)]),
       product(2, 'Blue Classic Watch', [H('ffff0000ffff0001', '00ff00ff00ff00ff', 120)]),
-    ], { '/photos/analyze': analysis() });
+    ], { '/photos/fingerprint': { hashes: [analysis().hashes] }, '/photos/analyze': analysis() });
     const result = await svc.match(7, media);
     expect(result?.match.status).toBe('exact');
     expect(result?.match.products.map((p) => p.product_id)).toEqual([2]); // same shape, but only blue has the same colours
-    expect(calls).toEqual(['/photos/analyze']);
+    expect(calls).toEqual(['/photos/fingerprint']); // no AI at all
+    expect(result?.usage).toEqual([]);
   });
 
   it('the same photo used for two products → unsure, both offered', async () => {
     const same = H('ffff0000ffff0000', '00ff00ff00ff00ff');
-    const { svc } = service([product(1, 'Watch size S', [same]), product(2, 'Watch size L', [same])], { '/photos/analyze': analysis() });
+    const { svc } = service([product(1, 'Watch size S', [same]), product(2, 'Watch size L', [same])],
+      { '/photos/fingerprint': { hashes: [analysis().hashes] }, '/photos/analyze': analysis() });
     const result = await svc.match(7, media);
     expect(result?.match.status).toBe('unsure');
     expect(result?.match.products.map((p) => p.product_id).sort()).toEqual([1, 2]);

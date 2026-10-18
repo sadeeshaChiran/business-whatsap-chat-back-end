@@ -59,6 +59,10 @@ export class Product {
   @Column({ type: 'text', default: '' })
   selling_points: string;
 
+  /** Brand (optional), e.g. "Casio", "Nike" – shown with the product and used by the AI bot to find it */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  brand: string | null;
+
   /** Short AI description of the photos (colour, pattern, style) – lets the bot match photos customers send */
   @Column({ type: 'text', nullable: true })
   image_notes: string | null;
