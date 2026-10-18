@@ -44,3 +44,23 @@ describe('photo choice', () => {
       expect([text, wantsAllPhotos(text)]).toEqual([text, false]);
   });
 });
+
+describe('photo choice – a size never pulls in another colour', () => {
+  // Black comes only in S, so its photo is labelled "Black / S"
+  const shirt = {
+    id: 21, name: 'Basic Tee', price: 1490, has_variants: true, image_url: img('red'), gallery: [],
+    variants: [{ variants: [
+      { variant_name: 'Colour / Size', variant_value: 'Red / S', price: 1490, image_url: img('red') },
+      { variant_name: 'Colour / Size', variant_value: 'Blue / S', price: 1490, image_url: img('blue') },
+      { variant_name: 'Colour / Size', variant_value: 'Blue / M', price: 1490, image_url: img('blue') },
+      { variant_name: 'Colour / Size', variant_value: 'Black / S', price: 1690, image_url: img('black') },
+    ] }],
+  } as never;
+  it('variant Blue / S → only the blue photo', () => {
+    expect(variantPhotoOptions(shirt, 2)).toEqual(['blue']);
+    expect(choosePhotos(shirt, variantPhotoOptions(shirt, 2), false).map((p) => p.url)).toEqual([img('blue')]);
+  });
+  it('"blue S size" → only blue', () => {
+    expect(askedPhotoOptions(shirt, 'blue S size thiyenawada')).toEqual(['blue']);
+  });
+});
