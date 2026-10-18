@@ -28,6 +28,10 @@ export type SalesBotOrder = {
 export type SalesBotResult = {
   reply: string;
   photo_product_ids: number[];
+  /** an option the customer asked to see: its photo goes first */
+  photo_variants?: Array<{ product_id: number; variant_id: number }>;
+  /** the customer asked for ALL photos / all colours → every photo of the product, each labelled with its option */
+  photo_all?: boolean;
   order: SalesBotOrder | null;
   booking: { service_id?: number; service_name?: string; date?: string; time?: string; customer_name?: string; notes?: string; confirm?: boolean } | null;
   lead: { need?: string; budget?: string; location?: string; contact_time?: string; customer_name?: string; notes?: string } | null;
@@ -112,6 +116,10 @@ export class SalesBotClient {
       ...result,
       reply: String(result.reply ?? '').trim(),
       photo_product_ids: Array.isArray(result.photo_product_ids) ? result.photo_product_ids.map(Number).filter((id) => id > 0) : [],
+      photo_variants: Array.isArray(result.photo_variants)
+        ? result.photo_variants.map((v) => ({ product_id: Number(v?.product_id), variant_id: Number(v?.variant_id) })).filter((v) => v.product_id > 0 && v.variant_id > 0).slice(0, 3)
+        : [],
+      photo_all: result.photo_all === true,
       tools_used: Array.isArray(result.tools_used) ? result.tools_used : [],
       notes: Array.isArray(result.notes)
         ? result.notes.filter((note) => note && String(note.text ?? '').trim()).map((note) => ({ text: String(note.text).trim().slice(0, 500), about: note.about === 'order' ? 'order' : 'customer' }))

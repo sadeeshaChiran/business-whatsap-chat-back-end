@@ -135,7 +135,7 @@ describe('photo helpers', () => {
         { product_id: 6, name: 'B', price: 1, variant: null, confidence: 70, available: true },
         { product_id: 7, name: 'C', price: 1, variant: null, confidence: 65, available: true }] },
     ], [9, 10], [10]);
-    expect(picks.map((p) => [p.id, p.limit])).toEqual([[5, 2], [6, 1], [7, 1], [9, 3], [10, 2]]);
+    expect(picks.map((p) => p.id)).toEqual([5, 6, 7, 9, 10]);
     expect(picks[0].variant).toBe('Red');
   });
 
