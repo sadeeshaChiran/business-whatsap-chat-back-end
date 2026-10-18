@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { absoluteProductImage, readOwnProductImage } from '../products/product-images';
-import { productImages, productOptions, toNumber, variantLabel } from './sales-bot-context.service';
+import { photoOption, productImages, productOptions, toNumber, variantLabel } from './sales-bot-context.service';
 
 /**
  * Customer photo → the right product of THIS shop.
@@ -131,13 +131,7 @@ export class PhotoMatchService {
 
   /** Which option a photo belongs to ("Red / M"), from the option photos and the photo-per-option table. */
   private variantOf(product: Product, url: string): string | null {
-    for (const option of productOptions(product)) {
-      if (option.image_url && absoluteProductImage(option.image_url) === url) return variantLabel(option);
-    }
-    for (const [key, image] of Object.entries(product.variant_image_match?.images ?? {})) {
-      if (image && absoluteProductImage(image) === url) return key;
-    }
-    return null;
+    return photoOption(product, url)?.label ?? null;
   }
 
   private entry(product: Product, confidence: number, variant: string | null, differences?: string): PhotoMatchProduct {

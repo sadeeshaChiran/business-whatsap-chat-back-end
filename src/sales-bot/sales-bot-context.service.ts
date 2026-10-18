@@ -122,6 +122,31 @@ export function productOptions(product: Product): ProductVariantOption[] {
   return product.has_variants && Array.isArray(row?.variants) ? row.variants : [];
 }
 
+/**
+ * Which option a product photo shows, e.g. "Colour: Blue" – from the option photos and the photo-per-option table.
+ * When several options share the photo ("Blue / S", "Blue / M") only the part they have in common is named ("Blue"),
+ * so a size is never guessed from a colour photo. price = their price when they all cost the same.
+ */
+export function photoOption(product: Product, url: string): { label: string; price: number | null } | null {
+  const target = absoluteProductImage(String(url ?? '').trim());
+  const options = productOptions(product).filter((option) => option.image_url && absoluteProductImage(String(option.image_url).trim()) === target);
+  if (options.length) {
+    const prices = [...new Set(options.map((option) => variantPrice(product, option)))];
+    const price = prices.length === 1 && Number.isFinite(prices[0]) ? prices[0] : null;
+    if (options.length === 1) return { label: variantLabel(options[0]), price };
+    const names = String(options[0].variant_name ?? '').split('/').map((part) => part.trim());
+    const values = options.map((option) => String(option.variant_value ?? '').split('/').map((part) => part.trim()));
+    const shared = values[0]
+      .map((value, i) => (values.every((v) => v[i] === value) ? (names[i] && names.length === values[0].length ? `${names[i]}: ${value}` : value) : null))
+      .filter((part): part is string => Boolean(part));
+    return shared.length ? { label: shared.join(' / '), price } : null;
+  }
+  for (const [key, image] of Object.entries(product.variant_image_match?.images ?? {})) {
+    if (image && absoluteProductImage(String(image).trim()) === target) return { label: key, price: null };
+  }
+  return null;
+}
+
 /** Every photo of a product as a full link: cover, gallery, then variant photos (our own stored photos made absolute). */
 export function productImages(product: Product): string[] {
   const variantPhotos = productOptions(product).map((option) => option.image_url ?? '');

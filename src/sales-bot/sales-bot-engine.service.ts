@@ -31,8 +31,9 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
 import { absoluteProductImage, readOwnProductImage, sniffImage } from '../products/product-images';
 import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-match';
-import { SalesBotContextService, sriLankaNow, optionWeight, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
+import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
+import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
 
 type PricedItem = {
@@ -63,10 +64,16 @@ type LeadStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost'
 const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 2, proposal: 3, won: 4, lost: 4 };
 
 export const BOT_SOURCE = 'sales_bot';
+
+/** "get_product,delivery_fee" – which lookups made an AI reply need extra calls (for the cost report). */
+function usageTools(tools: unknown): string {
+  const names = (Array.isArray(tools) ? tools : []).map((t) => String((t as { name?: string })?.name ?? t)).filter((n) => n && n !== 'send_reply');
+  return names.join(',').slice(0, 300);
+}
 const PLACEHOLDER = /^\[[^\]]*\]$/;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
-type PhotoPick = { id: number; variant?: string | null; limit?: number; skipIfSentWithinMin: number };
+type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number };
 
 /** "📷 Cotton Romper Set (3 pcs) – Red – Rs 2,500": the label sent with a product photo. */
 /**
@@ -74,23 +81,25 @@ type PhotoPick = { id: number; variant?: string | null; limit?: number; skipIfSe
  * 2-3 closest, one photo each, so the customer can point at the right one), then what the AI chose, then products
  * named in the reply. A photo already sent in the last minutes is not repeated.
  */
-export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number[]): PhotoPick[] {
+export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number[], chosenVariants: Array<{ product_id: number; variant_id: number }> = []): PhotoPick[] {
   const picks: PhotoPick[] = [];
   for (const match of matches) {
     if ((match.status === 'exact' || match.status === 'likely') && match.products[0]) {
-      picks.push({ id: match.products[0].product_id, variant: match.products[0].variant, limit: 2, skipIfSentWithinMin: 10 });
+      picks.push({ id: match.products[0].product_id, variant: match.products[0].variant, skipIfSentWithinMin: 10 });
     } else if (match.status === 'unsure') {
-      for (const product of match.products.slice(0, 3)) picks.push({ id: product.product_id, variant: product.variant, limit: 1, skipIfSentWithinMin: 10 });
+      for (const product of match.products.slice(0, 3)) picks.push({ id: product.product_id, variant: product.variant, skipIfSentWithinMin: 10 });
     }
   }
   const autoSet = new Set(auto);
-  for (const id of chosen) if (!autoSet.has(id)) picks.push({ id, limit: 3, skipIfSentWithinMin: 15 });
-  for (const id of auto) picks.push({ id, limit: 2, skipIfSentWithinMin: 24 * 60 });
+  // an option the customer asked to see ("the blue one") goes first – only that option's photo is sent
+  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id)) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 15 });
+  for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 15 });
+  for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 24 * 60 });
   return picks;
 }
 
-export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: string | null): string {
-  const price = Number(product.price);
+export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: string | null, optionPrice?: number | null): string {
+  const price = Number(optionPrice ?? product.price);
   return `📷 ${product.name}${variant ? ` – ${variant}` : ''}${Number.isFinite(price) && price > 0 ? ` – Rs ${price.toLocaleString('en-US')}` : ''}`;
 }
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
@@ -131,7 +140,7 @@ function askMissingMessage(language: string, missing: string[]): string {
   return `To confirm your order, please send your ${want}.`;
 }
 
-/** The order summary written by the backend (real prices) when the bot skipped it. */
+/** The order summary written by the backend (real prices): on every summary turn, and when the bot skipped it. */
 function summaryMessage(language: string, order: { items: Array<{ quantity: number; product_name: string; variant_name: string; total_price: number }>;
   delivery_area: string | null; delivery_fee: number | null; total: number; customer_name: string; address: string; customer_phone: string; payment_method: string }): string {
   const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''} – ${rs(item.total_price)}`);
@@ -397,7 +406,10 @@ export class SalesBotEngineService implements OnModuleInit {
       photoIds = found.productIds;
       autoIds = found.autoIds;
     }
-    await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds), simulated);
+    // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
+    const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
+    await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []), simulated,
+      { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -457,6 +469,7 @@ export class SalesBotEngineService implements OnModuleInit {
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens,
       output_tokens: result.usage.output_tokens, calls: result.usage.calls ?? 1,
       cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: false,
+      thinking_tokens: result.usage.thinking_tokens ?? 0, tools_used: usageTools(result.tools_used),
     }));
     this.logger.log(`conv ${conversationId}: ${result.usage.calls ?? 1} AI calls, ${result.usage.latency_ms} ms, $${result.usage.cost_usd.toFixed(5)}, intent ${outcome.intent ?? '-'}`);
   }
@@ -653,28 +666,35 @@ export class SalesBotEngineService implements OnModuleInit {
    * A photo is not sent again if it went out recently in this chat (window per pick).
    */
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean): Promise<number> {
-    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, 3);
+    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean } = {}): Promise<number> {
+    const all = Boolean(ask.all);
+    // all photos of 1-3 products, or one photo each of up to 4 products
+    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, all ? 3 : 4);
     if (!unique.length) return 0;
+    const maxPhotos = all ? 10 : 6;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
-    const recent: Array<{ media_url: string; at: Date }> = await this.messageRepository.query(
-      `SELECT media_url, created_at AS at FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound'
-          AND message_type::text = 'image' AND media_url IS NOT NULL`, [conversation.id]).catch(() => []);
-    const sentWithin = (url: string, minutes: number) => recent.some((row) => row.media_url === url && Date.now() - new Date(row.at).getTime() < minutes * 60_000);
+    // age worked out by the database (created_at has no time zone – comparing in Node was off by the server's offset)
+    const recent: Array<{ media_url: string; age_min: number }> = await this.messageRepository.query(
+      `SELECT media_url, EXTRACT(EPOCH FROM (LOCALTIMESTAMP - created_at)) / 60 AS age_min FROM bot_message
+        WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' AND media_url IS NOT NULL`, [conversation.id]).catch(() => []);
+    const sentWithin = (url: string, minutes: number) => recent.some((row) => row.media_url === url && Number(row.age_min) < minutes);
     const social = socialPlatformOf(channelUser.platform);
     let sent = 0;
     for (const pick of unique) {
       const product = products.find((p) => Number(p.id) === pick.id);
       if (!product) continue;
-      // the option the customer asked about / sent a photo of comes first
-      const all = productImages(product);
-      const optionPhoto = pick.variant ? this.optionPhoto(product, pick.variant) : null;
-      const ordered = optionPhoto ? [optionPhoto, ...all.filter((url) => url !== optionPhoto)] : all;
-      const urls = ordered.filter((url) => !sentWithin(url, pick.skipIfSentWithinMin)).slice(0, pick.limit ?? 3);
-      const label = photoLabel(product, pick.variant ?? null);
-      let labelled = false;
+      // the colour the customer named wins ("white abc eka"); else the option the AI / the photo check chose
+      const named = askedPhotoOptions(product, ask.customerText ?? '');
+      const wanted = named.length ? named : variantPhotoOptions(product, pick.variantId, pick.variant);
+      // asked again for all photos → send them even if some went out a few minutes ago
+      const urls = choosePhotos(product, wanted, all).map((photo) => photo.url).filter((url) => !sentWithin(url, all ? 2 : pick.skipIfSentWithinMin));
+      let lastLabel = '';
       for (const url of urls) {
-        if (sent >= 6) break;
+        // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
+        const shown = photoOption(product, url);
+        const variant = shown?.label ?? null;
+        const label = photoLabel(product, variant, shown?.price);
+        if (sent >= maxPhotos) break;
         const file = simulated ? null : await this.photoFile(url);
         if (!simulated && !file && (!social || social === 'messenger')) {
           this.logger.warn(`product ${product.id} photo could not be loaded: ${url}`);
@@ -682,7 +702,7 @@ export class SalesBotEngineService implements OnModuleInit {
         }
         let messageId: string | null = null;
         let failed = false;
-        const caption = labelled ? undefined : label;
+        const caption = label === lastLabel ? undefined : label;
         if (!simulated && social) {
           try {
             if (caption) await this.sendText(companyId, conversation, channelUser, channel, caption, null, false);
@@ -705,31 +725,17 @@ export class SalesBotEngineService implements OnModuleInit {
           }
         }
         if (failed) continue;
-        labelled = true;
+        lastLabel = label;
         await this.messageRepository.save(this.messageRepository.create({
           conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: social ?? (channelUser.platform || 'whatsapp'),
           provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: label, media_url: url, source: BOT_SOURCE,
-          media_note: `bot sent a photo of our product ${product.name}${pick.variant ? ` (${pick.variant})` : ''} #${product.id}`,
+          media_note: `bot sent a photo of our product ${product.name}${variant ? ` (${variant})` : ''} #${product.id}`,
         }));
         sent += 1;
       }
     }
     if (sent) await this.touch(companyId, conversation.id);
     return sent;
-  }
-
-  /** The photo of one option ("Red", "Red / M"), from the option photos or the photo-per-option table. */
-  private optionPhoto(product: Product, variant: string): string | null {
-    const wanted = variant.trim().toLowerCase();
-    for (const option of productOptions(product)) {
-      if (option.image_url && (variantLabel(option).toLowerCase() === wanted || String(option.variant_value ?? '').toLowerCase() === wanted)) {
-        return absoluteProductImage(option.image_url);
-      }
-    }
-    for (const [key, image] of Object.entries(product.variant_image_match?.images ?? {})) {
-      if (image && (key.toLowerCase() === wanted || wanted.includes(key.toLowerCase()))) return absoluteProductImage(image);
-    }
-    return null;
   }
 
   /**
@@ -850,6 +856,11 @@ export class SalesBotEngineService implements OnModuleInit {
       }
       if (orderOutcome === 'summary' && session.pending_order) {
         replyOverride = summaryMessage(result.language, session.pending_order);
+      }
+      if (orderOutcome === 'summary_shown' && session.pending_order) {
+        // the AI's short lead line ("Hari, meka thamai order eka:") + the exact summary; a long AI summary is replaced
+        const lead = String(result.reply ?? '').trim();
+        replyOverride = `${lead && lead.length <= 160 && !/\d{3}/.test(lead) ? `${lead}\n\n` : ''}${summaryMessage(result.language, session.pending_order)}`;
       }
       if (orderOutcome.startsWith('unavailable:')) {
         replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
@@ -1192,6 +1203,7 @@ export class SalesBotEngineService implements OnModuleInit {
       company_id: companyId, conversation_id: conversationId, model: result.usage.model,
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens, output_tokens: result.usage.output_tokens,
       calls: result.usage.calls ?? 1, cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: false,
+      thinking_tokens: result.usage.thinking_tokens ?? 0, tools_used: usageTools(result.tools_used),
     }));
     if (!result.reply) return end(null);
     // last check right before sending: the customer wrote, or the team stopped it, while the AI was thinking
@@ -1461,6 +1473,10 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!order.confirm_order) {
       session.pending_order = pending;
       if (summaryShown) await this.advanceLead(conversation.id, 'proposal', { order_value: total });
+      // the summary turn: the customer sees the EXACT summary from the server (real prices, delivery fee, total) –
+      // the AI only writes a short line before it (saves its output tokens and never shows a wrong total)
+      const complete = !problem && subtotal > 0 && name && address && (!isSocial || phone.replace(/\D/g, '').length >= 9);
+      if (order.summary_shown === true && complete) return 'summary_shown';
       return 'pending';
     }
 
