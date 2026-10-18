@@ -1,3 +1,4 @@
+import { mergeMemory } from './sales-bot-engine.service';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 
 const img = (name: string) => `https://shop.example/${name}.jpg`;
@@ -62,5 +63,17 @@ describe('photo choice – a size never pulls in another colour', () => {
   });
   it('"blue S size" → only blue', () => {
     expect(askedPhotoOptions(shirt, 'blue S size thiyenawada')).toEqual(['blue']);
+  });
+});
+
+describe('chat memory', () => {
+  it('adds new facts, keeps the newest when long, accepts an old-style full memory', () => {
+    expect(mergeMemory('', 'Name Nimal.')).toBe('Name Nimal.');
+    expect(mergeMemory('Name Nimal.', 'Wants size M, black.')).toBe('Name Nimal. Wants size M, black.');
+    expect(mergeMemory('Name Nimal. Wants size M.', 'Name Nimal. Wants size M. Budget 5000.')).toBe('Name Nimal. Wants size M. Budget 5000.');
+    expect(mergeMemory('Name Nimal.', 'Name Nimal.')).toBe('Name Nimal.');
+    const long = mergeMemory('A'.repeat(300) + '. ' + 'B'.repeat(290) + '.', 'Newest fact.');
+    expect(long.length).toBeLessThanOrEqual(600);
+    expect(long.endsWith('Newest fact.')).toBe(true);
   });
 });
