@@ -1,43 +1,54 @@
 #!/usr/bin/env node
 /**
- * Sales bot SCALE test: the same kind of customer chats in 4 test shops of different size
- * (15 / 200 / 750 / 2000 products, made with scripts/make-test-shops.py → test-shops.sql),
- * through the real bot (real Gemini). Prints cost, tokens, speed and quality checks per shop.
+ * Sales bot QUALITY + PERFORMANCE test with the REAL AI (Gemini): real customer chats in several shops, through the
+ * real API and bot. Prints, per shop: AI calls per reply, which lookups ran, tokens, thinking, Rs per reply (2026 / 2027),
+ * reply speed (average + slowest) and PASS / FAIL quality checks.
+ *
+ *   Shops (skipped automatically when the login does not exist):
+ *     small / medium / mediumlarge / large  – the 4 TEST shops (15 / 200 / 750 / 2000 products, test-shops.sql)
+ *     vora   – clothing shop, 72 products with Colour / Size (set VORA_EMAIL and VORA_PASSWORD)
+ *     salon  – Glow Beauty Salon demo (services + bookings, demo-accounts.sql)
  *
  *   cd backend      (the API needs SALES_BOT_TEST_MODE=true while you test – nothing is sent to WhatsApp)
- *   API_URL=https://api.example.com/v1/api node scripts/scale-test.mjs
+ *   VORA_EMAIL=you@shop.lk VORA_PASSWORD=... node scripts/scale-test.mjs
  *
- * Optional: SCALE_TEST_PASSWORD (default ScaleTest-2026!), SCALE_TEST_SHOPS=small,large (only some shops),
- *           USD_LKR (default 330.33). Costs about Rs 40–80 of AI in total.
- * The database address is read from .env (PRODUCT_DATABASE_URL) to read replies and AI usage.
+ * Optional: API_URL (default http://localhost:3001/v1/api), SCALE_TEST_SHOPS=vora,salon (only some shops),
+ *   SCALE_TEST_PASSWORD (test shops, default ScaleTest-2026!), DEMO_PASSWORD (demo shops, default 12345678), USD_LKR.
+ * Costs about Rs 80–150 of AI in total. The database address is read from .env (PRODUCT_DATABASE_URL).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import pg from 'pg';
 
 const API = (process.env.API_URL || 'http://localhost:3001/v1/api').replace(/\/+$/, '');
-const PASSWORD = process.env.SCALE_TEST_PASSWORD || 'ScaleTest-2026!';
 const USD_LKR = Number(process.env.USD_LKR || 330.33);
+const BUDGET_RS = Number(process.env.BUDGET_RS || 0.6);
 const env = (() => {
   try {
     return Object.fromEntries(readFileSync('.env', 'utf8').split('\n').map((line) => line.match(/^([A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2].replace(/^['"]|['"]$/g, '')]));
   } catch { return {}; }
 })();
 const DATABASE_URL = process.env.PRODUCT_DATABASE_URL || env.PRODUCT_DATABASE_URL;
+const TEST_PW = process.env.SCALE_TEST_PASSWORD || 'ScaleTest-2026!';
+const DEMO_PW = process.env.DEMO_PASSWORD || '12345678';
 
-/** Shop-specific words for the meaning / budget questions. */
+/** Shop-specific words for the meaning / budget / not-sold questions. */
 const SHOPS = [
-  { key: 'small', label: 'Small (15)', email: 'scale-small@agentmetra.test',
+  { key: 'small', label: 'Small (15)', email: 'scale-small@agentmetra.test', password: TEST_PW,
     meaning: { text: 'kolla babata sellam ekak ona', category: 'Toys' }, budget: { text: 'baby gift ekak ona, 2000 witara budget', max: 2000 },
     missing: 'iPhone 16 Pro Max thiyenawada?' },
-  { key: 'medium', label: 'Medium (200)', email: 'scale-medium@agentmetra.test',
+  { key: 'medium', label: 'Medium (200)', email: 'scale-medium@agentmetra.test', password: TEST_PW,
     meaning: { text: 'amma ta saree ekak ona', category: 'Sarees' }, budget: { text: 'gahanu kenekta dress ekak ona 4000ta adui', max: 4000 },
     missing: 'iPhone 16 Pro Max thiyenawada?' },
-  { key: 'mediumlarge', label: 'Medium-large (750)', email: 'scale-mediumlarge@agentmetra.test',
+  { key: 'mediumlarge', label: 'Medium-large (750)', email: 'scale-mediumlarge@agentmetra.test', password: TEST_PW,
     meaning: { text: 'phone eka charge karanna adapter ekak ona', category: 'Chargers & Cables' }, budget: { text: 'earbuds ekak ona 5000 athara', max: 5000 },
     missing: 'washing machine thiyenawada?' },
-  { key: 'large', label: 'Large (2000)', email: 'scale-large@agentmetra.test',
+  { key: 'large', label: 'Large (2000)', email: 'scale-large@agentmetra.test', password: TEST_PW,
     meaning: { text: 'kiri piti packet ekak ona', category: 'Milk Powder & Dairy' }, budget: { text: 'tea packet ekak ona 800ta adui', max: 800 },
     missing: 'iPhone 16 Pro Max thiyenawada?' },
+  { key: 'vora', label: 'VORA clothing (72)', email: process.env.VORA_EMAIL || '', password: process.env.VORA_PASSWORD || DEMO_PW,
+    meaning: { text: 'office yanna gahanu kenekta mokak hari ona', category: "Women's Tops" }, budget: { text: 'ammata saree ekak 10000ta adui', max: 10000 },
+    missing: 'iPhone 16 Pro Max thiyenawada?' },
+  { key: 'salon', label: 'Glow salon (services)', email: 'glow@demo.test', password: DEMO_PW, services: true },
 ];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,13 +65,14 @@ async function call(method, path, { token, body, form } = {}) {
 }
 
 const botMessages = async (db, id) => (await db.query(
-  `SELECT content, intent FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' ORDER BY id`, [id])).rows;
+  `SELECT id, content, message_type, media_url FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' ORDER BY id`, [id])).rows;
 
 /** One customer chat (each inner array = messages sent quickly together). Returns the conversation id and bot replies. */
 async function chat(db, token, phone, bursts, log) {
   let conversationId = null;
   let seen = 0;
   const replies = [];
+  const turns = [];
   for (const burst of bursts) {
     for (const text of burst) {
       const form = new FormData(); form.append('phone', phone); form.append('name', 'Scale Test'); form.append('text', text);
@@ -74,95 +86,176 @@ async function chat(db, token, phone, bursts, log) {
     for (let i = 0; i < 60; i++) {
       await sleep(1000);
       messages = await botMessages(db, conversationId);
-      if (messages.length > seen) { await sleep(3000); messages = await botMessages(db, conversationId); break; }
+      if (messages.some((m, idx) => idx >= seen && m.message_type === 'text')) { await sleep(2500); messages = await botMessages(db, conversationId); break; }
     }
     const fresh = messages.slice(seen);
     seen = messages.length;
-    for (const reply of fresh) log(`  bot:      ${String(reply.content).replace(/\n/g, ' / ').slice(0, 170)}`);
+    for (const reply of fresh) log(`  bot:      ${reply.message_type === 'image' ? '[photo] ' : ''}${String(reply.content).replace(/\n/g, ' / ').slice(0, 190)}`);
     if (!fresh.length) log('  bot:      (no reply)');
     replies.push(...fresh);
+    turns.push(fresh);
   }
-  return { conversationId, replies, text: replies.map((r) => String(r.content)).join(' \n ') };
+  const texts = replies.filter((r) => r.message_type !== 'image');
+  return { conversationId, replies, turns, photos: replies.filter((r) => r.message_type === 'image'), text: texts.map((r) => String(r.content)).join(' \n ') };
 }
 
 const money = (text) => [...String(text).matchAll(/Rs\.?\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, ''))).filter((n) => n > 0);
 const words = (name) => String(name).toLowerCase().split(/\s+/).slice(0, 2).join(' ');
 const mentions = (text, product) => String(text).toLowerCase().includes(words(product.name)) || money(text).includes(Math.round(Number(product.price)));
+const notAvailable = (text) => /\bna\b|\bnaa\b|naha|nehe|nathi|not available|out of stock|sold out|don't have|do not have|samawenna|sorry|ivara|iwara|නැ|නෑ|ඉවර/i.test(text);
+const toolsOf = async (db, conversationId) => (await db.query(`SELECT tools_used FROM bot_ai_usage WHERE conversation_id = $1 ORDER BY id`, [conversationId]).catch(() => ({ rows: [] }))).rows.map((r) => r.tools_used || '');
 
 async function testShop(db, shop, log) {
-  const login = await call('POST', '/auth/login', { body: { email: shop.email, password: PASSWORD } });
+  const login = await call('POST', '/auth/login', { body: { email: shop.email, password: shop.password } });
   const token = login.data?.access_token;
-  if (!token) throw new Error(`${shop.email}: login failed (${login.status}) – did you run test-shops.sql?`);
+  if (!token) throw new Error(`${shop.email}: login failed (${login.status})`);
   const { rows: [company] } = await db.query(`SELECT company_id FROM app_user WHERE email = $1`, [shop.email]);
+  const companyId = company.company_id;
   const { rows: products } = await db.query(
-    `SELECT p.id, p.name, p.price, p.has_variants, p.is_available, c.name AS category FROM product p JOIN product_catergory c ON c.id = p.category_id
-      WHERE p.company_id = $1 AND NOT p.is_deleted ORDER BY p.name`, [company.company_id]);
+    `SELECT p.id, p.name, p.price, p.has_variants, p.is_available, c.name AS category, v.variants
+       FROM product p JOIN product_catergory c ON c.id = p.category_id LEFT JOIN product_variant v ON v.product_id = p.id
+      WHERE p.company_id = $1 AND NOT p.is_deleted ORDER BY p.name`, [companyId]);
+  const { rows: zones } = await db.query(`SELECT area, fee, included_kg, per_extra_kg FROM bot_delivery_zone WHERE company_id = $1 ORDER BY id`, [companyId]);
+  const { rows: faqs } = await db.query(`SELECT question, answer FROM bot_training_data WHERE company_id = $1 AND is_active AND category = 'faq' ORDER BY id`, [companyId]);
   const run = Date.now().toString().slice(-5);
   let n = 0;
   const phone = () => `999471${run}${String(n++).padStart(2, '0')}`.slice(0, 14);
   const conversations = [];
   const checks = [];
+  const small = products.length <= 100;
+  const check = (name, ok, detail = '') => { checks.push([name, Boolean(ok), detail]); };
 
-  // warm-up (not counted): the first AI message of a shop builds its prompt cache, and for shops over
-  // 100 products the meaning-search index – so every shop is measured the same way (like a real, busy shop)
+  // warm-up (not counted): the first AI message builds the prompt cache (and the meaning-search index for big shops)
   log(`  (warm-up, not counted${products.length > 100 ? ': building the meaning-search index, waiting 60 s' : ''})`);
-  await chat(db, token, phone(), [['mona mona badu thiyenawada?']], () => {});
-  if (products.length > 100) await sleep(Number(process.env.SCALE_TEST_WARMUP_MS ?? 60_000));
-  else await sleep(5000);
+  await chat(db, token, phone(), [[shop.services ? 'mona mona services thiyenawada?' : 'mona mona badu thiyenawada?']], () => {});
+  await sleep(products.length > 100 ? Number(process.env.SCALE_TEST_WARMUP_MS ?? 60_000) : 5000);
 
-  // 1) browse
-  log('\n  [browse]');
-  const browse = await chat(db, token, phone(), [['Hi'], ['mona mona badu thiyenawada?', 'price list ekak ewanna']], log);
-  conversations.push(browse.conversationId);
+  const step = async (label, bursts) => {
+    log(`\n  [${label}]`);
+    const result = await chat(db, token, phone(), bursts, log);
+    conversations.push(result.conversationId);
+    return result;
+  };
 
-  // 2) a product deep in the catalog (after the first 400 by name)
-  const deep = products[Math.floor(products.length * 0.9)];
-  log(`\n  [exact product: ${deep.name} – Rs ${Number(deep.price)}]`);
-  const exact = await chat(db, token, phone(), [[`${deep.name} thiyenawada? kiyada?`]], log);
-  conversations.push(exact.conversationId);
-  checks.push(['Finds a product by name', mentions(exact.text, deep), deep.name]);
+  if (shop.services) {
+    const { rows: services } = await db.query(`SELECT name, price FROM bot_service WHERE company_id = $1 AND is_active ORDER BY id`, [companyId]);
+    const svc = services[0];
+    const list = await step('services list', [['Hi'], ['mona mona services thiyenawada? price list ekak denna']]);
+    check('Lists real services with prices', services.filter((s) => list.text.toLowerCase().includes(words(s.name))).length >= 2, `${services.length} services`);
+    const price = await step(`price: ${svc.name}`, [[`${svc.name} kiyada?`]]);
+    check('Exact service price', money(price.text).includes(Math.round(Number(svc.price))), `Rs ${Number(svc.price)}`);
+    const book = await step('booking', [[`heta udee 10ta ${svc.name} ekak book karanna puluwanda? mage nama Sunil, 0771234567`], ['ow hari'], ['ok']]);
+    const { rows: [booked] } = await db.query(`SELECT COUNT(*)::int AS n FROM bot_booking WHERE conversation_id = $1`, [book.conversationId]);
+    check('Takes a booking', booked.n >= 1, `${booked.n} booking(s)`);
+    const sinhala = await step('Sinhala script', [['ඔයාලා ඉරිදා විවෘතද?']]);
+    check('Answers in Sinhala script', /[඀-෿]/.test(sinhala.text));
+  } else {
+    // 1) browse
+    const browse = await step('browse', [['Hi'], ['mona mona badu thiyenawada?', 'price list ekak ewanna']]);
+    check('Browse shows real products', products.some((p) => mentions(browse.text, p)));
 
-  // 3) by meaning, Singlish
-  const inCategory = products.filter((p) => p.category === shop.meaning.category);
-  log(`\n  [meaning: "${shop.meaning.text}" → ${shop.meaning.category}]`);
-  const meaning = await chat(db, token, phone(), [[shop.meaning.text]], log);
-  conversations.push(meaning.conversationId);
-  checks.push(['Understands Singlish meaning', inCategory.some((p) => mentions(meaning.text, p)), shop.meaning.category]);
+    // 2) a product deep in the catalog
+    const deep = products[Math.floor(products.length * 0.9)];
+    const exact = await step(`exact product: ${deep.name} – Rs ${Number(deep.price)}`, [[`${deep.name} thiyenawada? kiyada?`]]);
+    check('Finds a product by name', mentions(exact.text, deep), deep.name);
 
-  // 4) budget
-  log(`\n  [budget: ${shop.budget.text}]`);
-  const budget = await chat(db, token, phone(), [[shop.budget.text]], log);
-  conversations.push(budget.conversationId);
-  const prices = money(budget.text);
-  checks.push(['Suggests items within budget', prices.some((p) => p <= shop.budget.max), prices.join(', ') || 'no prices']);
+    // 3) one option (colour / size) with its own price, and a sold-out option
+    const withOptions = products.filter((p) => p.has_variants && Array.isArray(p.variants) && p.variants.length > 1);
+    const priced = withOptions.flatMap((p) => p.variants.map((v) => ({ p, v }))).find(({ p, v }) => v.available !== false && Number(v.price) > 0 && Number(v.price) !== Number(p.price));
+    if (priced) {
+      const ask = `${priced.p.name} ${String(priced.v.variant_value).replace(' / ', ' ')} ekak kiyada?`;
+      const option = await step(`option price: ${priced.p.name} ${priced.v.variant_value} – Rs ${Number(priced.v.price)}`, [[ask]]);
+      check('Exact price of an option (bigger size / pack)', money(option.text).includes(Math.round(Number(priced.v.price))), `Rs ${Number(priced.v.price)}`);
+      if (small) check('No product lookup needed (one call)', !(await toolsOf(db, option.conversationId)).some((t) => t.includes('get_product')), (await toolsOf(db, option.conversationId)).join(' | ') || 'no lookups');
+    }
+    const soldOut = withOptions.flatMap((p) => p.variants.map((v) => ({ p, v }))).find(({ p, v }) => v.available === false && p.is_available);
+    if (soldOut) {
+      const out = await step(`sold-out option: ${soldOut.p.name} ${soldOut.v.variant_value}`, [[`${soldOut.p.name} ${String(soldOut.v.variant_value).replace(' / ', ' ')} thiyenawada?`]]);
+      check('Says a sold-out option is not available', notAvailable(out.text), soldOut.v.variant_value);
+    }
 
-  // 5) something the shop does not sell
-  log(`\n  [not sold: ${shop.missing}]`);
-  const missing = await chat(db, token, phone(), [[shop.missing]], log);
-  conversations.push(missing.conversationId);
-  checks.push(['Says "not available" (no made-up item)', /\bna\b|\bnaa\b|naha|nehe|nathi|not available|don't have|do not have|no,|sorry|samawenna|නැ|නෑ/i.test(missing.text), '']);
+    // 4) the named colour's photo (only when the product has a photo per colour)
+    const coloured = withOptions.find((p) => new Set(p.variants.filter((v) => v.image_url).map((v) => v.image_url)).size >= 2);
+    if (coloured) {
+      const target = coloured.variants.filter((v) => v.image_url)[1];
+      const colour = String(target.variant_value).split(' / ')[0];
+      const photo = await step(`colour photo: ${coloured.name} ${colour}`, [[`${coloured.name} ${colour} eka photo ekak ewanna`]]);
+      const urls = photo.photos.map((m) => m.media_url);
+      check('Sends the named colour\'s photo only', urls.length >= 1 && urls.every((u) => String(u).includes(String(target.image_url).split('/').pop())), `${colour}: ${urls.length} photo(s)`);
+    }
 
-  // 6) quick order: product without sizes, then "ok" to the summary
-  const simple = products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available);
-  log(`\n  [order: ${simple.name}]`);
-  const order = await chat(db, token, phone(), [[`${simple.name} ekak ona. Sunil Silva, 22 Lake Road, Colombo 05. COD`], ['ok'], ['ok']], log);
-  conversations.push(order.conversationId);
-  const { rows: [ordered] } = await db.query(
-    `SELECT COUNT(*)::int AS n FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1`, [order.conversationId]);
-  checks.push(['Takes an order (ok = confirm)', ordered.n === 1, `${ordered.n} order(s)`]);
+    // 5) Singlish meaning + budget
+    if (shop.meaning) {
+      const inCategory = products.filter((p) => p.category === shop.meaning.category);
+      const meaning = await step(`meaning: "${shop.meaning.text}" → ${shop.meaning.category}`, [[shop.meaning.text]]);
+      check('Understands Singlish meaning', inCategory.some((p) => mentions(meaning.text, p)), shop.meaning.category);
+      const budget = await step(`budget: ${shop.budget.text}`, [[shop.budget.text]]);
+      const prices = money(budget.text);
+      check('Suggests items within budget', prices.some((p) => p <= shop.budget.max), prices.join(', ') || 'no prices');
+      const missing = await step(`not sold: ${shop.missing}`, [[shop.missing]]);
+      check('Says "not available" (no made-up item)', notAvailable(missing.text));
+    }
+
+    // 6) delivery fee (flat zone → exact fee, no lookup) and an FAQ (in the prompt → no search)
+    const flat = zones.find((z) => z.area !== '*' && (z.included_kg == null || !Number(z.per_extra_kg)));
+    if (flat) {
+      const area = String(flat.area).split(',')[0].replace(/\s*\d+-\d+$/, '').trim();
+      const delivery = await step(`delivery: ${area} – Rs ${Number(flat.fee)}`, [[`${area} ta delivery kiyada? kochchara dawas yanawada?`]]);
+      check('Exact delivery fee', money(delivery.text).includes(Math.round(Number(flat.fee))), `Rs ${Number(flat.fee)}`);
+      check('No delivery lookup for a flat fee', !(await toolsOf(db, delivery.conversationId)).some((t) => t.includes('delivery_fee')), (await toolsOf(db, delivery.conversationId)).join(' | ') || 'no lookups');
+    }
+    if (faqs.length) {
+      const faq = faqs[0];
+      const answer = await step(`FAQ: ${faq.question}`, [[faq.question]]);
+      const key = String(faq.answer).toLowerCase().match(/[a-z]{5,}/g) ?? [];
+      check('Answers an FAQ from the shop', key.some((w) => answer.text.toLowerCase().includes(w)), faq.question);
+      if (faqs.length <= 30) check('No FAQ search needed', !(await toolsOf(db, answer.conversationId)).some((t) => t.includes('search_knowledge')), (await toolsOf(db, answer.conversationId)).join(' | ') || 'no lookups');
+    }
+
+    // 7) Sinhala script
+    const sinhala = await step('Sinhala script', [['ඔයාලා cash on delivery කරනවද?']]);
+    check('Answers in Sinhala script', /[඀-෿]/.test(sinhala.text));
+
+    // 8) order: an option product when there is one (exact variant + total), else a simple product; then "ok"
+    const orderProduct = (priced?.p) ?? products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available);
+    const orderOption = priced?.v ?? null;
+    const what = `${orderProduct.name}${orderOption ? ` ${String(orderOption.variant_value).replace(' / ', ' ')}` : ''}`;
+    const unit = Number(orderOption?.price ?? orderProduct.price);
+    const zone = flat ?? zones[0];
+    const areaWord = zone ? String(zone.area).split(',')[0].replace(/\s*\d+-\d+$/, '').trim() : 'Colombo';
+    const order = await step(`order: 2 x ${what} → ${areaWord}`, [[`${what} 2k ona. Sunil Silva, 22 Lake Road, ${areaWord}. COD`], ['ok'], ['ok']]);
+    const { rows: [saved] } = await db.query(
+      `SELECT o.id, o.total_amount, o.delivery_fee FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1 ORDER BY o.id DESC LIMIT 1`, [order.conversationId]);
+    check('Takes an order (ok = confirm)', Boolean(saved), saved ? `order #${saved.id}` : 'no order');
+    if (saved) {
+      const { rows: items } = await db.query(`SELECT product_name, variant_text, quantity, unit_price FROM bot_order_item WHERE order_id = $1`, [saved.id]);
+      const right = items.length === 1 && Number(items[0].quantity) === 2 && Number(items[0].unit_price) === unit
+        && (!orderOption || String(items[0].variant_text ?? '').toLowerCase().includes(String(orderOption.variant_value).split(' / ')[0].toLowerCase()));
+      check('Order has the right item, option, quantity and price', right, items.map((i) => `${i.quantity} x ${i.product_name} ${i.variant_text ?? ''} @ ${Number(i.unit_price)}`).join('; '));
+      const summaryTotal = money(order.text.match(/Total:[^\n]*/i)?.[0] ?? '')[0];
+      check('Summary total = saved order total', summaryTotal === Math.round(Number(saved.total_amount)), `summary Rs ${summaryTotal ?? '?'} / saved Rs ${Number(saved.total_amount)}`);
+    }
+  }
 
   const { rows: usage } = await db.query(
-    `SELECT calls, input_tokens, cached_tokens, output_tokens, cost_usd, latency_ms FROM bot_ai_usage WHERE conversation_id = ANY($1::int[])`,
-    [conversations.filter(Boolean)]);
+    `SELECT calls, input_tokens, cached_tokens, output_tokens, cost_usd, latency_ms,
+            COALESCE(thinking_tokens, 0) AS thinking_tokens, COALESCE(tools_used, '') AS tools_used
+       FROM bot_ai_usage WHERE conversation_id = ANY($1::int[])`, [conversations.filter(Boolean)])
+    .catch(() => db.query(`SELECT calls, input_tokens, cached_tokens, output_tokens, cost_usd, latency_ms, 0 AS thinking_tokens, '' AS tools_used
+       FROM bot_ai_usage WHERE conversation_id = ANY($1::int[])`, [conversations.filter(Boolean)]));
   const ai = usage.filter((u) => Number(u.calls) > 0);
   const sum = (key, rows = usage) => rows.reduce((s, u) => s + Number(u[key] || 0), 0);
   const avg = (key) => (ai.length ? sum(key, ai) / ai.length : 0);
+  const latencies = ai.map((u) => Number(u.latency_ms) / 1000).sort((a, b) => a - b);
+  const lookups = {};
+  for (const u of ai) for (const t of String(u.tools_used).split(',').filter(Boolean)) lookups[t] = (lookups[t] ?? 0) + 1;
+  const perReply = usage.length ? sum('cost_usd') / usage.length : 0;
   return {
     shop: shop.label, products: products.length, replies: usage.length, aiReplies: ai.length,
-    callsPerReply: ai.length ? sum('calls', ai) / ai.length : 0,
-    input: avg('input_tokens'), cached: avg('cached_tokens'), output: avg('output_tokens'),
-    cost: sum('cost_usd'), perReply: usage.length ? sum('cost_usd') / usage.length : 0, latency: avg('latency_ms') / 1000,
-    checks,
+    callsPerReply: ai.length ? sum('calls', ai) / ai.length : 0, oneCall: ai.length ? ai.filter((u) => Number(u.calls) === 1).length / ai.length : 0,
+    input: avg('input_tokens'), cached: avg('cached_tokens'), output: avg('output_tokens'), thinking: avg('thinking_tokens'),
+    cost: sum('cost_usd'), perReply, latency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0,
+    slowest: latencies.at(-1) ?? 0, lookups, checks,
   };
 }
 
@@ -174,30 +267,43 @@ async function main() {
   const results = [];
   for (const shop of SHOPS) {
     if (only.length && !only.includes(shop.key)) continue;
-    console.log(`\n=================== ${shop.label} ===================`);
-    const login = await call('POST', '/auth/login', { body: { email: shop.email, password: PASSWORD } });
-    const status = await call('GET', '/bot/sales-bot/simulate/status', { token: login.data?.access_token });
+    if (!shop.email) { console.log(`\n(skipped ${shop.label}: set VORA_EMAIL and VORA_PASSWORD to test it)`); continue; }
+    const login = await call('POST', '/auth/login', { body: { email: shop.email, password: shop.password } });
+    if (!login.data?.access_token) { console.log(`\n(skipped ${shop.label}: cannot log in as ${shop.email})`); continue; }
+    const status = await call('GET', '/bot/sales-bot/simulate/status', { token: login.data.access_token });
     if (status.data?.test_mode === false) throw new Error('Set SALES_BOT_TEST_MODE=true on the API (and restart) while testing.');
-    results.push(await testShop(db, shop, (line) => console.log(line)));
+    console.log(`\n=================== ${shop.label} ===================`);
+    try {
+      results.push(await testShop(db, shop, (line) => console.log(line)));
+    } catch (error) {
+      console.log(`  ERROR in ${shop.label}: ${error.message}`);
+    }
   }
   await db.end();
 
-  console.log('\n\n=================== RESULT ===================');
-  const table = results.map((r) => ({
-    Shop: r.shop, Replies: r.replies, 'AI calls/reply': r.callsPerReply.toFixed(2),
-    'Input tok': Math.round(r.input), 'Cached tok': Math.round(r.cached), 'Output tok': Math.round(r.output),
-    'Rs/reply 2026': rs(r.perReply), 'Rs/reply 2027': rs(r.perReply * 2), 'Avg sec': r.latency.toFixed(1),
-    Quality: `${r.checks.filter((c) => c[1]).length}/${r.checks.length}`,
-  }));
-  console.table(table);
+  console.log('\n\n=================== PERFORMANCE & COST ===================');
+  console.table(results.map((r) => ({
+    Shop: r.shop, Products: r.products, Replies: r.replies, 'AI calls/reply': r.callsPerReply.toFixed(2), '1-call replies': `${Math.round(r.oneCall * 100)}%`,
+    'Cached tok': Math.round(r.cached), 'Fresh tok': Math.round(r.input - r.cached), 'Output tok': Math.round(r.output), 'Thinking tok': Math.round(r.thinking),
+    'Rs/reply 2026': rs(r.perReply), 'Rs/reply 2027': rs(r.perReply * 2), Budget: Number(rs(r.perReply)) <= BUDGET_RS ? 'OK' : 'OVER',
+    'Avg sec': r.latency.toFixed(1), 'Slowest sec': r.slowest.toFixed(1),
+  })));
+  console.log('\nLookups (each = one more AI call):');
+  for (const r of results) console.log(`  ${r.shop}: ${Object.entries(r.lookups).map(([k, v]) => `${k} ×${v}`).join(', ') || 'none'}`);
   console.log('\n=================== QUALITY CHECKS ===================');
+  let pass = 0; let total = 0;
   for (const r of results) {
-    console.log(`\n${r.shop}`);
-    for (const [name, ok, detail] of r.checks) console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
+    const ok = r.checks.filter((c) => c[1]).length;
+    pass += ok; total += r.checks.length;
+    console.log(`\n${r.shop}  –  ${ok}/${r.checks.length}`);
+    for (const [name, good, detail] of r.checks) console.log(`  ${good ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
   }
-  const csv = ['shop,products,replies,ai_calls_per_reply,input_tokens,cached_tokens,output_tokens,rs_per_reply_2026,rs_per_reply_2027,avg_seconds,quality',
-    ...results.map((r) => [r.shop, r.products, r.replies, r.callsPerReply.toFixed(2), Math.round(r.input), Math.round(r.cached), Math.round(r.output),
-      rs(r.perReply), rs(r.perReply * 2), r.latency.toFixed(1), `${r.checks.filter((c) => c[1]).length}/${r.checks.length}`].join(','))].join('\n');
+  const all = results.reduce((s, r) => s + r.cost, 0) / Math.max(1, results.reduce((s, r) => s + r.replies, 0));
+  console.log(`\nTOTAL: quality ${pass}/${total} · average Rs ${rs(all)} per reply (2026), Rs ${rs(all * 2)} (2027) · budget Rs ${BUDGET_RS}`);
+  const csv = ['shop,products,replies,ai_calls_per_reply,one_call_pct,cached_tokens,fresh_tokens,output_tokens,thinking_tokens,rs_per_reply_2026,rs_per_reply_2027,avg_seconds,slowest_seconds,quality',
+    ...results.map((r) => [r.shop, r.products, r.replies, r.callsPerReply.toFixed(2), Math.round(r.oneCall * 100), Math.round(r.cached), Math.round(r.input - r.cached),
+      Math.round(r.output), Math.round(r.thinking), rs(r.perReply), rs(r.perReply * 2), r.latency.toFixed(1), r.slowest.toFixed(1),
+      `${r.checks.filter((c) => c[1]).length}/${r.checks.length}`].join(','))].join('\n');
   writeFileSync('scale-test-results.csv', csv);
   console.log('\nSaved scale-test-results.csv. Send this whole output to Claude for the review.');
   console.log('Afterwards set SALES_BOT_TEST_MODE=false again.');
