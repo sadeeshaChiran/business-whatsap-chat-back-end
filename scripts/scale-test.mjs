@@ -152,7 +152,11 @@ async function testShop(db, shop, log) {
   } else {
     // 1) browse
     const browse = await step('browse', [['Hi'], ['mona mona badu thiyenawada?', 'price list ekak ewanna']]);
-    check('Browse shows real products', products.some((p) => mentions(browse.text, p)));
+    // big shops answer with categories + prices (the prompt has a category index, not every product)
+    const categories = [...new Set(products.map((p) => String(p.category)))];
+    const namedCategories = categories.filter((c) => browse.text.toLowerCase().includes(c.toLowerCase().split(/[ &]+/)[0]));
+    check('Browse shows real products / categories with prices', products.some((p) => mentions(browse.text, p))
+      || (products.length > 100 && namedCategories.length >= 2 && money(browse.text).length >= 2), `${namedCategories.length} categories, ${money(browse.text).length} prices`);
 
     // 2) a product deep in the catalog
     const deep = products[Math.floor(products.length * 0.9)];
