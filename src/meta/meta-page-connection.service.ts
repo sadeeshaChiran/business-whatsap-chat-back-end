@@ -82,6 +82,10 @@ export class MetaPageConnectionService {
       name: page.name,
       has_instagram: Boolean(page.instagram_business_account_id),
       instagram_username: page.instagram_username ?? null,
+      picture_url: page.picture_url ?? null,
+      category: page.category ?? null,
+      instagram_name: page.instagram_name ?? null,
+      instagram_picture_url: page.instagram_picture_url ?? null,
     }));
   }
 

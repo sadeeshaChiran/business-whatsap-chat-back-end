@@ -9,12 +9,14 @@ import type { Response } from 'express';
 import { MetaGraphService } from './meta-graph.service';
 import { parseMetaOAuthState } from './meta-oauth-state.util';
 import { MetaPageConnectionService } from '../../meta/meta-page-connection.service';
+import { WhatsappConnectService } from './whatsapp-connect.service';
 
 @Controller('integrations/meta')
 export class MetaOAuthController {
   constructor(
     private readonly metaGraphService: MetaGraphService,
     private readonly metaPageConnectionService: MetaPageConnectionService,
+    private readonly whatsappConnectService: WhatsappConnectService,
   ) {}
 
   @Get('callback')
@@ -50,11 +52,38 @@ export class MetaOAuthController {
 
     try {
       const payload = parseMetaOAuthState(state.trim());
+      if (payload.w) {
+        // WhatsApp Embedded Signup (redirect flow): connect the number right here, then go back to the dashboard
+        const result = await this.whatsappConnectService.connect(
+          {
+            id: payload.u,
+            company_id: payload.c,
+            name: '',
+            email: '',
+            role: 'admin',
+            is_super_admin: false,
+          },
+          { code: code.trim(), via_redirect: true },
+        );
+        const params = new URLSearchParams({
+          meta: 'whatsapp_connected',
+          number: result.display_phone_number,
+        });
+        if (result.verified_name) params.set('name', result.verified_name);
+        if (result.replaced_previous_number) params.set('replaced', '1');
+        if (result.registration_message)
+          params.set('warning', result.registration_message);
+        return res.redirect(
+          this.metaGraphService.frontendSuccessRedirect(
+            params.toString(),
+            '/channels/whatsapp',
+          ),
+        );
+      }
       const userToken = await this.metaGraphService.exchangeCodeForUserToken(
         code.trim(),
       );
-      const metaUserId =
-        await this.metaGraphService.fetchMetaUserId(userToken);
+      const metaUserId = await this.metaGraphService.fetchMetaUserId(userToken);
       const pages = await this.metaGraphService.fetchManagedPages(userToken);
       await this.metaPageConnectionService.savePendingPages(
         payload.c,
