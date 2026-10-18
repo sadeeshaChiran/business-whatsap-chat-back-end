@@ -65,6 +65,22 @@ const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 
 
 export const BOT_SOURCE = 'sales_bot';
 
+/**
+ * Chat memory grows by the NEW facts the AI sends (it no longer rewrites the whole memory every time = fewer output
+ * tokens). Newest facts last; the oldest are dropped past 600 characters. An old-style full memory (it starts with the
+ * current memory) simply replaces it.
+ */
+export function mergeMemory(current: string | undefined, add: string): string {
+  const old = String(current ?? '').trim();
+  const next = add.trim();
+  if (!next) return old;
+  if (!old || next.startsWith(old.slice(0, 40)) || next.includes(old)) return next.slice(-600);
+  if (old.includes(next)) return old;
+  let merged = `${old}${/[.;!?]$/.test(old) ? '' : '.'} ${next}`;
+  while (merged.length > 600 && merged.includes('. ')) merged = merged.slice(merged.indexOf('. ') + 2);
+  return merged.slice(-600);
+}
+
 /** "get_product,delivery_fee" – which lookups made an AI reply need extra calls (for the cost report). */
 function usageTools(tools: unknown): string {
   const names = (Array.isArray(tools) ? tools : []).map((t) => String((t as { name?: string })?.name ?? t)).filter((n) => n && n !== 'send_reply');
@@ -387,7 +403,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // Save first, so a blocked order never gets a "confirmed!" message
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
     session.language = result.language;
-    if (result.memory) session.memory = String(result.memory).slice(0, 600);
+    if (result.memory) session.memory = mergeMemory(session.memory, String(result.memory));
     if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
     await this.channelUserRepository.update(channelUser.id, {
       session_state: JSON.stringify({ ...sessionState, sales_bot: session }),
@@ -490,7 +506,9 @@ export class SalesBotEngineService implements OnModuleInit {
       .where('m.conversation_id = :conversationId', { conversationId })
       .andWhere('m.id < :beforeId', { beforeId })
       .orderBy('m.id', 'DESC')
-      .limit(20)
+      // the last 14 messages (history is not cached – every message pays for it); older facts live in CHAT MEMORY,
+      // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
+      .limit(14)
       .getMany();
     return rows.reverse().map((row) => {
       const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;

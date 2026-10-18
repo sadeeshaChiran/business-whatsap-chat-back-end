@@ -144,7 +144,10 @@ async function testShop(db, shop, log) {
     check('Lists real services with prices', services.filter((s) => list.text.toLowerCase().includes(words(s.name))).length >= 2, `${services.length} services`);
     const price = await step(`price: ${svc.name}`, [[`${svc.name} kiyada?`]]);
     check('Exact service price', money(price.text).includes(Math.round(Number(svc.price))), `Rs ${Number(svc.price)}`);
-    const book = await step('booking', [[`heta udee 10ta ${svc.name} ekak book karanna puluwanda? mage nama Sunil, 0771234567`], ['ow hari'], ['ok']]);
+    // earlier test runs booked times too – cancel those test bookings so the same time is free again
+    await db.query(`UPDATE bot_booking SET status = 'cancelled' WHERE company_id = $1 AND bot_channel_user_id IN
+      (SELECT id FROM bot_channel_user WHERE company_id = $1 AND external_user_id LIKE '999%')`, [companyId]).catch(() => undefined);
+    const book = await step('booking', [[`heta udee 10ta ${svc.name} ekak book karanna puluwanda? mage nama Sunil, 0771234567`], ['ow hari, confirm karanna'], ['ok']]);
     const { rows: [booked] } = await db.query(`SELECT COUNT(*)::int AS n FROM bot_booking WHERE conversation_id = $1`, [book.conversationId]);
     check('Takes a booking', booked.n >= 1, `${booked.n} booking(s)`);
     const sinhala = await step('Sinhala script', [['ඔයාලා ඉරිදා විවෘතද?']]);
