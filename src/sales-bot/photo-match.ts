@@ -150,10 +150,6 @@ export class PhotoMatchService {
   async match(companyId: number, media: { mime_type: string; data_b64: string }): Promise<{ match: PhotoMatch; usage: PhotoMatchUsage[] } | null> {
     if (!this.base() || !media.mime_type.startsWith('image/')) return null;
     const usage: PhotoMatchUsage[] = [];
-    const analyzed = await this.post<{ analysis: Analysis; hashes: Hash[]; usage: PhotoMatchUsage }>(
-      '/photos/analyze', { image_b64: media.data_b64, mime_type: media.mime_type });
-    if (analyzed.usage) usage.push(analyzed.usage);
-    const analysis = analyzed.analysis;
     const products = await this.productRepository.createQueryBuilder('p')
       .leftJoinAndSelect('p.category', 'category')
       .leftJoinAndSelect('p.variants', 'variants')
@@ -163,13 +159,18 @@ export class PhotoMatchService {
       .andWhere('COALESCE(p.show_to_bot, true) = true')
       .getMany();
     const withPhotos = products.filter((product) => productImages(product).length > 0);
-    const base = { item: analysis.item, description: analysis.description };
 
-    // 1. our own photo (sure)
+    // 1. our own photo (sure) – fingerprints only, no AI cost
+    let customerHashes: Hash[] = [];
+    if (withPhotos.some((product) => product.image_hashes?.length)) {
+      const printed = await this.post<{ hashes: Hash[][] }>('/photos/fingerprint',
+        { images: [{ image_b64: media.data_b64, mime_type: media.mime_type }], customer: true }).catch(() => null);
+      customerHashes = printed?.hashes?.[0] ?? [];
+    }
     const exact: Array<{ product: Product; url: string; shape: number; colour: number }> = [];
     for (const product of withPhotos) {
       for (const photo of product.image_hashes ?? []) {
-        const distance = photoDistance(photo.hashes ?? [], analyzed.hashes ?? []);
+        const distance = photoDistance(photo.hashes ?? [], customerHashes);
         if (distance.shape <= SHAPE_MAX && distance.colour <= COLOUR_MAX) exact.push({ product, url: photo.url, ...distance });
       }
     }
@@ -178,21 +179,30 @@ export class PhotoMatchService {
       const top = exact[0];
       const sameScore = exact.filter((e) => e.shape <= top.shape + 1 && Number(e.product.id) !== Number(top.product.id));
       const toEntry = (e: (typeof exact)[number]) => this.entry(e.product, 100 - e.shape, this.variantOf(e.product, absoluteProductImage(e.url)));
+      const found = { item: '', description: '' };
       if (!sameScore.length) {
-        return { match: { status: 'exact', method: 'fingerprint', ...base, products: [toEntry(top)] }, usage };
+        return { match: { status: 'exact', method: 'fingerprint', ...found, products: [toEntry(top)] }, usage };
       }
       // the same photo is used for two products (e.g. two sizes) – the customer has to say which
       const unique = [top, ...sameScore].filter((e, i, list) => list.findIndex((x) => x.product.id === e.product.id) === i).slice(0, 3);
-      return { match: { status: 'unsure', method: 'fingerprint', ...base, products: unique.map(toEntry) }, usage };
+      return { match: { status: 'unsure', method: 'fingerprint', ...found, products: unique.map(toEntry) }, usage };
     }
+
+    // 2. not our photo: the AI looks at it
+    const analyzed = await this.post<{ analysis: Analysis; hashes: Hash[]; usage: PhotoMatchUsage }>(
+      '/photos/analyze', { image_b64: media.data_b64, mime_type: media.mime_type });
+    if (analyzed.usage) usage.push(analyzed.usage);
+    const analysis = analyzed.analysis;
+    if (!customerHashes.length) customerHashes = analyzed.hashes ?? [];
+    const base = { item: analysis.item, description: analysis.description };
     if (!analysis.is_product) return { match: { status: 'not_product', method: 'ai', ...base, products: [] }, usage };
     if (!withPhotos.length) return { match: { status: 'none', method: 'ai', ...base, products: [] }, usage };
 
     // 2. closest products by words (+ products whose photos look a bit alike), then the AI compares real photos
     const ranked = withPhotos.map((product) => {
-      const text = [product.name, product.category?.name, String(product.description ?? '').slice(0, 300), product.image_notes,
+      const text = [product.name, product.brand, product.brand, product.category?.name, String(product.description ?? '').slice(0, 300), product.image_notes,
         productOptions(product).map(variantLabel).join(' ')].join(' ');
-      const near = Math.min(64, ...(product.image_hashes ?? []).map((photo) => photoDistance(photo.hashes ?? [], analyzed.hashes ?? []).shape));
+      const near = Math.min(64, ...(product.image_hashes ?? []).map((photo) => photoDistance(photo.hashes ?? [], customerHashes).shape));
       return { product, score: wordScore(analysis, text) + (near <= 16 ? 4 : 0) };
     }).sort((a, b) => b.score - a.score);
     let candidates = ranked.filter((r) => r.score > 0).slice(0, 6);

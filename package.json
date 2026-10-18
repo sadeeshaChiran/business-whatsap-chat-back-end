@@ -23,7 +23,7 @@
     "test:meta": "node --test test/meta-health.test.mjs && node --test --test-concurrency=1 test/flows-meta.test.mjs test/ads-report.test.mjs test/messenger-ad-card.test.mjs",
     "test:flows": "node --test --test-concurrency=1 test/flows-forms.test.mjs",
     "test:trials": "node --test --test-concurrency=1 test/trials.test.mjs",
-    "test:photos": "node --test --test-concurrency=1 test/photo-match.test.mjs",
+    "test:photos": "node --test --test-concurrency=1 test/photo-match.test.mjs test/brand.test.mjs",
     "test:team": "node --test --test-concurrency=1 test/team-orders.test.mjs test/agent-work.test.mjs",
     "test:api": "node --test --test-concurrency=1 test/*.test.mjs",
     "test:perf": "node test/performance.mjs",

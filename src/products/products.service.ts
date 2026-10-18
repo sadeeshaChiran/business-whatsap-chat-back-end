@@ -43,6 +43,7 @@ type ImportLine = {
   weight: number;
   gallery: string[];
   coverImageUrl: string;
+  brand?: string;
   sellingPoints?: string;
   showToBot?: boolean;
   available?: boolean;
@@ -63,11 +64,18 @@ type ImportProductGroup = {
   weight: number;
   gallery: string[];
   coverImageUrl: string;
+  brand?: string;
   sellingPoints?: string;
   showToBot?: boolean;
   available?: boolean;
   variants: ImportVariant[];
 };
+
+/** "  casio " → "Casio"-as-typed (trimmed, single spaces); empty → null. */
+export function cleanBrand(value: string | null | undefined): string | null {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  return text || null;
+}
 
 @Injectable()
 export class ProductsService implements OnModuleInit {
@@ -655,6 +663,7 @@ export class ProductsService implements OnModuleInit {
       gallery,
       weight: createProductDto.weight != null ? Number(createProductDto.weight) : null,
       selling_points: createProductDto.selling_points?.trim() ?? '',
+      brand: cleanBrand(createProductDto.brand),
       related_product_ids: await this.normalizeRelatedProductIds(createProductDto.related_product_ids, user.company_id),
       show_to_bot: createProductDto.show_to_bot ?? true,
       is_available: createProductDto.is_available ?? true,
@@ -680,6 +689,13 @@ export class ProductsService implements OnModuleInit {
 
     this.describePhotosLater(savedProduct.id);
     return this.findOwnedProduct(savedProduct.id, user.company_id);
+  }
+
+  async brands(companyId: number): Promise<Array<{ brand: string; products: number }>> {
+    return this.productRepository.query(`
+      SELECT MIN(brand) AS brand, COUNT(*)::int AS products FROM product
+       WHERE company_id = $1 AND COALESCE(is_deleted, FALSE) = FALSE AND COALESCE(brand, '') <> ''
+       GROUP BY LOWER(brand) ORDER BY LOWER(MIN(brand))`, [companyId]);
   }
 
   async findAll(user: AuthenticatedUser, categoryId?: number) {
@@ -741,6 +757,7 @@ export class ProductsService implements OnModuleInit {
     if (updateProductDto.status !== undefined) {
       product.status = updateProductDto.status?.trim() || 'In Stock';
     }
+    if (updateProductDto.brand !== undefined) product.brand = cleanBrand(updateProductDto.brand);
     if (updateProductDto.selling_points !== undefined) {
       product.selling_points = updateProductDto.selling_points?.trim() ?? '';
     }
@@ -1119,6 +1136,7 @@ export class ProductsService implements OnModuleInit {
     const sellingPoints = String(
       this.getRowValue(row, [/selling[_\s-]?points?/, /^usp$/]) ?? '',
     ).trim();
+    const brand = String(this.getRowValue(row, [/^brand$/, /^brand[_\s-]?name$/, /^make$/]) ?? '').trim().slice(0, 120);
     const showToBotRaw = this.getRowValue(row, [/show[_\s-]?to[_\s-]?bot/]);
     const availableRaw = this.getRowValue(row, [/^available$/, /^is[_\s-]?available$/, /^availability$/]);
     const parsedQuantity = Number(String(quantityRaw ?? '').trim() || 0);
@@ -1145,6 +1163,7 @@ export class ProductsService implements OnModuleInit {
       gallery,
       coverImageUrl,
       ...(sellingPoints ? { sellingPoints } : {}),
+      ...(brand ? { brand } : {}),
       ...(showToBotRaw !== undefined && String(showToBotRaw).trim() !== '' ? { showToBot: this.normalizeBoolean(showToBotRaw) } : {}),
       ...(availableRaw !== undefined && String(availableRaw).trim() !== '' ? { available: this.normalizeBoolean(availableRaw) } : {}),
       ...(variant ? { variant } : {}),
@@ -1181,6 +1200,7 @@ export class ProductsService implements OnModuleInit {
           gallery: [...line.gallery],
           coverImageUrl: line.coverImageUrl,
           sellingPoints: line.sellingPoints,
+          brand: line.brand,
           showToBot: line.showToBot,
           available: line.available,
           variants: [],
@@ -1199,6 +1219,7 @@ export class ProductsService implements OnModuleInit {
         }
         if (line.coverImageUrl) existing.coverImageUrl = line.coverImageUrl;
         if (line.sellingPoints) existing.sellingPoints = line.sellingPoints;
+        if (line.brand) existing.brand = line.brand;
         if (line.showToBot !== undefined) existing.showToBot = line.showToBot;
       }
 
@@ -1302,6 +1323,7 @@ export class ProductsService implements OnModuleInit {
         ...(Number.isFinite(group.weight) ? { weight: group.weight } : {}),
         ...(group.gallery.length ? { gallery: group.gallery, image_url: group.coverImageUrl || group.gallery[0] } : {}),
         ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
+        ...(group.brand ? { brand: group.brand } : {}),
         ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
         ...(group.available !== undefined ? { is_available: group.available } : {}),
         ...(group.sku ? { sku: group.sku } : {}),
@@ -1351,6 +1373,7 @@ export class ProductsService implements OnModuleInit {
         gallery,
         weight: Number.isFinite(group.weight) ? Number(group.weight) : null,
         ...(group.sellingPoints !== undefined ? { selling_points: group.sellingPoints } : {}),
+        ...(group.brand ? { brand: group.brand } : {}),
         ...(group.showToBot !== undefined ? { show_to_bot: group.showToBot } : {}),
         ...(group.available !== undefined ? { is_available: group.available } : {}),
         is_deleted: false,
@@ -1369,20 +1392,21 @@ export class ProductsService implements OnModuleInit {
 
   /** Sample Excel file for the import: the columns, three filled examples (one with variants) and how to fill it. */
   importTemplate(): Buffer {
-    const head = ['name', 'sku', 'category', 'price', 'description', 'weight', 'available', 'show_to_bot', 'selling_points', 'image_urls',
+    const head = ['name', 'sku', 'brand', 'category', 'price', 'description', 'weight', 'available', 'show_to_bot', 'selling_points', 'image_urls',
       'variant_name', 'variant_value', 'variant_price', 'variant_sku', 'variant_available', 'variant_weight', 'variant_image_url'];
     const rows = [
-      ['Cotton Romper Set (3 pcs)', 'ROMP-001', 'Baby clothes', 2450, 'Soft cotton rompers for 0-12 months', 0.3, 'yes', 'yes', 'Soft, breathable, easy snaps',
+      ['Cotton Romper Set (3 pcs)', 'ROMP-001', 'Carter\'s', 'Baby clothes', 2450, 'Soft cotton rompers for 0-12 months', 0.3, 'yes', 'yes', 'Soft, breathable, easy snaps',
         'https://example.com/romper-1.jpg, https://example.com/romper-2.jpg', '', '', '', '', '', '', ''],
-      ['Baby Shoes', 'SHOE-01', 'Shoes', 1800, 'Non-slip soft sole', '', 'yes', 'yes', '', 'https://example.com/shoes.jpg',
+      ['Baby Shoes', 'SHOE-01', 'Bata', 'Shoes', 1800, 'Non-slip soft sole', '', 'yes', 'yes', '', 'https://example.com/shoes.jpg',
         'Size', '0-6 months', 1800, 'SHOE-01-S', 'yes', '', ''],
-      ['Baby Shoes', 'SHOE-01', 'Shoes', 1800, '', '', '', '', '', '', 'Size', '6-12 months', 1950, 'SHOE-01-M', 'yes', '', ''],
-      ['Gift Pack', '', 'Gifts', 5500, 'Diapers, wipes and a towel in a gift box', 2.5, 'no', 'yes', 'Perfect for baby showers', '', '', '', '', '', '', '', ''],
+      ['Baby Shoes', 'SHOE-01', 'Bata', 'Shoes', 1800, '', '', '', '', '', '', 'Size', '6-12 months', 1950, 'SHOE-01-M', 'yes', '', ''],
+      ['Gift Pack', '', '', 'Gifts', 5500, 'Diapers, wipes and a towel in a gift box', 2.5, 'no', 'yes', 'Perfect for baby showers', '', '', '', '', '', '', '', ''],
     ];
     const help = [
       ['Column', 'What to write'],
       ['name', 'Product name (required). Several rows with the same name = one product with variants.'],
       ['sku', 'Your product code (optional). If a product with this code – or this name – already exists it is UPDATED, not added again.'],
+      ['brand', 'Brand (optional), e.g. Casio, Nike, Bata. Customers and the AI bot can find products by brand.'],
       ['category', 'Category name (optional – "General" when empty). New categories are created.'],
       ['price', 'Price in Rs (numbers only).'],
       ['description', 'Short description (optional).'],

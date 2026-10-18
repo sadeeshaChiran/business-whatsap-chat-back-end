@@ -64,6 +64,12 @@ export class ProductsController {
     return this.productsService.import(file, user);
   }
 
+  /** Brands already used in this shop (for the brand field suggestions and the filter). */
+  @Get('brands')
+  brands(@CurrentUser() user: AuthenticatedUser) {
+    return this.productsService.brands(Number(user.company_id));
+  }
+
   @AdminOnly()
   @Get('import/template')
   @ApiOperation({ summary: 'Sample Excel file for the product import' })
