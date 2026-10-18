@@ -62,7 +62,17 @@ export function askedPhotoOptions(product: Product, text: string): string[] {
     if (valueWords.length && valueWords.every((word) => words.has(word) || words.has(COLOUR_WORDS[word] ?? '\u0000'))) found.push(value);
   }
   // "sky blue" named → drop the plain "blue" it also matched (the longer, more exact name wins)
-  return found.filter((value) => !found.some((other) => other !== value && ` ${other} `.includes(` ${value} `)));
+  return mainFirst(product, found.filter((value) => !found.some((other) => other !== value && ` ${other} `.includes(` ${value} `))));
+}
+
+/**
+ * A photo shows mainly its FIRST option (the colour). When the customer named a colour, a size word ("S", "M") must not
+ * pull in other photos – sizes only count when no colour was named.
+ */
+function mainFirst(product: Product, values: string[]): string[] {
+  const main = new Set(photoParts(product).map((photo) => photo.parts[0]).filter(Boolean));
+  const mains = values.filter((value) => main.has(value));
+  return mains.length ? mains : values;
 }
 
 /** The photo option values of one variant (by the AI's variant_id), e.g. variant "White / M" → ["white"]. */
@@ -71,7 +81,7 @@ export function variantPhotoOptions(product: Product, variantId?: number | null,
   const label = option ? variantLabel(option) : String(variantName ?? '');
   if (!label.trim()) return [];
   const values = new Set(photoParts(product).flatMap((photo) => photo.parts));
-  return labelParts(label).filter((part) => values.has(part));
+  return mainFirst(product, labelParts(label).filter((part) => values.has(part)));
 }
 
 /** The customer wants every photo / every colour ("all photos", "other colours", "okkoma paata", "anith colours"). */
