@@ -1,3 +1,4 @@
+import { InvoiceDoc, renderInvoicePdf } from './invoice-pdf';
 import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
 import { isTestPhone, testSendResult } from '../common/test-phone';
 import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
@@ -3917,7 +3918,7 @@ export class BotAdminService {
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
 
-    const invoice = this.writeInvoicePdf(order, company);
+    const invoice = await this.writeInvoicePdf(order, company);
     order.invoice_url = invoice.url;
     const saved = await this.orderRepository.save(order);
 
@@ -3968,7 +3969,8 @@ export class BotAdminService {
     }
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     const fileName = `booking-${booking.id}.pdf`;
-    const buffer = Buffer.from(this.buildSimplePdf(this.buildBookingInvoiceLines(booking, company, channelUser)));
+    const buffer = await renderInvoicePdf(this.bookingInvoiceDoc(booking, company, channelUser))
+      .catch(() => Buffer.from(this.buildSimplePdf(this.buildBookingInvoiceLines(booking, company, channelUser))));
     const key = saveChatMedia(companyId, buffer, 'application/pdf', fileName);
     const url = publicChatMediaUrl(key, 90 * 24 * 3600) ?? '';
     booking.invoice_url = url || null;
@@ -4074,9 +4076,10 @@ export class BotAdminService {
    * Builds the invoice PDF and stores it with the chat media (served by this API at
    * /public/chat-media/… with a signed link, valid 90 days – needs PUBLIC_API_BASE_URL).
    */
-  private writeInvoicePdf(order: BotOrder, company: Company | null): { url: string; buffer: Buffer; fileName: string } {
+  private async writeInvoicePdf(order: BotOrder, company: Company | null): Promise<{ url: string; buffer: Buffer; fileName: string }> {
     const fileName = `invoice-order-${order.id}.pdf`;
-    const buffer = Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company)));
+    const buffer = await renderInvoicePdf(this.orderInvoiceDoc(order, company))
+      .catch(() => Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company))));
     const key = saveChatMedia(Number(order.company_id), buffer, 'application/pdf', fileName);
     const publicUrl = publicChatMediaUrl(key, 90 * 24 * 3600);
     if (!publicUrl) console.warn('[invoice] PUBLIC_API_BASE_URL is not set – the invoice is sent as a file without a download link.');
@@ -4084,6 +4087,66 @@ export class BotAdminService {
   }
 
 
+
+  private shopLines(company: Company | null): string[] {
+    return [
+      company?.address?.trim(),
+      company?.phone?.trim() ? `Phone: ${company.phone.trim()}` : '',
+      company?.email?.trim() ? company.email.trim() : '',
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  private shortDate(value: Date | string | undefined) {
+    const date = value ? new Date(value) : new Date();
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Colombo' });
+  }
+
+  /** The order invoice as a clean A4 page (see invoice-pdf.ts). */
+  orderInvoiceDoc(order: BotOrder, company: Company | null): InvoiceDoc {
+    const items = order.items ?? [];
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
+    const fee = order.delivery_fee == null ? null : Number(order.delivery_fee);
+    return {
+      title: 'INVOICE',
+      number: `#${order.id}`,
+      date: this.shortDate(order.created_at),
+      status: String(order.status || '').trim() || undefined,
+      shop: { name: company?.name?.trim() || 'Invoice', lines: this.shopLines(company) },
+      billTo: { label: 'Bill to', lines: [order.customer_name || '-', order.customer_phone || order.channelUser?.external_user_id || '', order.address || ''].filter(Boolean) },
+      side: { label: 'Payment & delivery', lines: [order.payment_method || 'Cash on delivery', order.delivery_area && order.delivery_area !== '*' ? `Delivery: ${order.delivery_area}` : ''].filter(Boolean) },
+      columns: ['ITEM', 'QTY', 'UNIT PRICE', 'AMOUNT'],
+      rows: items.map((item) => ({
+        name: item.product_name, detail: item.variant_text || undefined, qty: String(item.quantity),
+        unit: this.formatMoney(item.unit_price), amount: this.formatMoney(item.total_price),
+      })),
+      totals: [
+        { label: 'Subtotal', value: this.formatMoney(subtotal) },
+        ...(fee != null ? [{ label: 'Delivery', value: fee === 0 ? 'Free' : this.formatMoney(fee) }] : [{ label: 'Delivery', value: 'To be confirmed' }]),
+      ],
+      total: { label: 'Total', value: this.formatMoney(order.total_amount) },
+      footer: 'Thank you for your order!',
+    };
+  }
+
+  private bookingInvoiceDoc(booking: BotBooking, company: Company | null, channelUser: BotChannelUser | null): InvoiceDoc {
+    const status = { requested: 'Requested', confirmed: 'Confirmed', done: 'Done', cancelled: 'Cancelled' }[booking.status] ?? booking.status;
+    const price = booking.price != null ? this.formatMoney(booking.price) : 'To be confirmed';
+    return {
+      title: 'BOOKING',
+      number: `#${booking.id}`,
+      date: this.shortDate(new Date()),
+      status,
+      shop: { name: company?.name?.trim() || 'Booking', lines: this.shopLines(company) },
+      billTo: { label: 'Customer', lines: [booking.customer_name || channelUser?.display_name || '-', booking.customer_phone || ''].filter(Boolean) },
+      side: { label: 'Appointment', lines: [`${booking.date || '-'}  ·  ${booking.time || '-'}`, booking.duration_min ? `${booking.duration_min} minutes` : ''].filter(Boolean) },
+      columns: ['SERVICE', '', '', 'PRICE'],
+      rows: [{ name: booking.service_name, detail: `${booking.date || ''} ${booking.time || ''}`.trim() || undefined, qty: '', unit: '', amount: price }],
+      totals: [],
+      total: { label: 'Total', value: price },
+      note: booking.status === 'requested' ? 'The team will confirm the time with you.' : undefined,
+      footer: 'Thank you for your booking!',
+    };
+  }
 
   private buildInvoiceLines(order: BotOrder, company: Company | null) {
     const companyName = company?.name?.trim() || 'Invoice';

@@ -1,4 +1,4 @@
-import { SalesBotEngineService } from './sales-bot-engine.service';
+import { SalesBotEngineService, SUMMARY_WORDS } from './sales-bot-engine.service';
 
 /** The AI says "here is the summary 👇" but a detail is missing: the customer must be asked, never left without a summary. */
 function engine() {
@@ -42,5 +42,15 @@ describe('summary turn with missing details', () => {
     const out = await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true, customer_name: 'Sunil' }, session);
     expect(out).toBe('saved:77');
     expect(saved[0]).toMatchObject({ address: '22 Lake Road, Colombo', customer_name: 'Sunil', total_amount: 6400 + 550 });
+  });
+
+  it('the AI says "here is the summary" without the flag: the summary still comes in the same reply', async () => {
+    const session: any = {};
+    const out = await engine().handleOrder(16, { id: 1 }, whatsappUser,
+      { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Sadeesha', address: '462 Thorava', delivery_area: '*' }, session, true);
+    expect(out).toBe('summary_shown');
+    expect(session.pending_order.summary_shown).toBe(true);
+    for (const said of ['මෙන්න order summary එක', 'Here is your order summary', 'Hari Nimal, order eka mehemai.']) expect(SUMMARY_WORDS.test(said)).toBe(true);
+    expect(SUMMARY_WORDS.test('Order එක දාන්නද?')).toBe(false);
   });
 });

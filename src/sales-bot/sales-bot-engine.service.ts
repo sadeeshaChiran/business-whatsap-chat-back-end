@@ -128,8 +128,23 @@ export function asksForPhotos(text: string): boolean {
 }
 
 /** Removes "👇" / "me thiyenne 👇" pointers when no photo was sent with the reply. */
-export function withoutPhotoPointer(text: string): string {
-  return text.replace(/[ \t]*[👇⬇️👉]+/gu, '').replace(/[ \t]+\n/g, '\n').trim();
+const PHOTO_WORD = /photo|pic|image|ෆොටෝ|ඡායාරූප|පින්තූර|படம்|போட்டோ/i;
+const SENT_WORD = /එවන්නම්|එව්වා|එවලා|එවුවා|යවන්නම්|ewannam|evannam|ewwa|ewala|sending|sent|send you|here (?:is|are)|මෙන්න|අනுப்பு|அனுப்பி/i;
+
+/** No photo went out: no "👇", and no sentence that says photos are sent / coming ("photos දැන් එවන්නම්"). */
+export function withoutPhotoPointer(text: string, language = ''): string {
+  const plain = text.replace(/[ \t]*[👇⬇️👉]+/gu, '').replace(/[ \t]+\n/g, '\n').trim();
+  let removed = false;
+  const left = plain.split('\n').map((line) => line.split(/(?<=[.!?])\s+/).filter((part) => {
+    const promise = PHOTO_WORD.test(part) && SENT_WORD.test(part);
+    removed ||= promise;
+    return !promise;
+  }).join(' ')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (!removed) return plain;
+  const none = language === 'english' ? 'Sorry, there is no photo of it in our system right now.'
+    : language === 'tamil' ? 'மன்னிக்கவும், இதன் படம் இப்போது எங்கள் system-ல் இல்லை.'
+    : 'අනේ sorry, ඒකේ photo එකක් දැනට system එකේ නෑ.';
+  return left ? `${none} ${left}` : none;
 }
 
 export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: string | null, optionPrice?: number | null): string {
@@ -164,6 +179,9 @@ function changeHoldMessage(language: string): string {
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 const rs = (value: number) => `Rs ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
+
+/** The AI's text says "here is the order summary" (any language): the real summary must come with it. */
+export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்/i;
 
 /** Asks for the details an order still needs (instead of switching the bot off). */
 function askMissingMessage(language: string, missing: string[]): string {
@@ -467,7 +485,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []), simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
     // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
-    if (text && !outcome.replyOverride && !photosSent) text = withoutPhotoPointer(text);
+    if (text && !outcome.replyOverride && !photosSent) text = withoutPhotoPointer(text, result.language);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -923,8 +941,17 @@ export class SalesBotEngineService implements OnModuleInit {
       intents.add('lead');
     }
 
-    if (result.order?.items?.length) {
-      const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, result.order, session);
+    // the AI talks about the summary but sent no order: show the summary of the order in progress
+    const pendingNow = session.pending_order;
+    const order = result.order?.items?.length ? result.order
+      : SUMMARY_WORDS.test(String(result.reply ?? '')) && pendingNow?.items?.length && !result.order?.confirm_order
+        ? { items: pendingNow.items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, variant_name: item.variant_name, quantity: item.quantity })),
+          customer_name: pendingNow.customer_name, customer_phone: pendingNow.customer_phone, address: pendingNow.address,
+          delivery_area: pendingNow.delivery_area, payment_method: pendingNow.payment_method, summary_shown: true } as SalesBotOrder
+        : null;
+    if (order) {
+      const wantSummary = SUMMARY_WORDS.test(String(result.reply ?? '')) || (!String(pendingNow?.address ?? '').trim() && Boolean(String(order.address ?? '').trim()));
+      const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, order, session, wantSummary);
       if (orderOutcome.startsWith('saved:')) {
         savedOrderId = Number(orderOutcome.slice(6));
         invoiceOrderIds.push(savedOrderId);
@@ -1518,7 +1545,7 @@ export class SalesBotEngineService implements OnModuleInit {
   }
 
   private async handleOrder(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    order: SalesBotOrder, session: BotSession): Promise<string> {
+    order: SalesBotOrder, session: BotSession, wantSummary = false): Promise<string> {
     // "ok" after the summary: the AI (often the small model) may send the order without the items / name / address it
     // already gave - the customer agreed to the summary they saw, so the missing parts come from that summary
     const shown = session.pending_order?.summary_shown ? session.pending_order : null;
@@ -1569,7 +1596,12 @@ export class SalesBotEngineService implements OnModuleInit {
       // the summary turn: the customer sees the EXACT summary from the server (real prices, delivery fee, total) –
       // the AI only writes a short line before it (saves its output tokens and never shows a wrong total)
       const complete = !problem && subtotal > 0 && name && address && (!isSocial || phone.replace(/\D/g, '').length >= 9);
-      if (order.summary_shown === true && complete) return 'summary_shown';
+      if ((order.summary_shown === true || wantSummary) && complete) {
+        // the AI said "here is your order" without the flag, or the customer just sent the last missing details:
+        // the summary comes right now, in this same reply (not one message later)
+        session.pending_order = { ...pending, summary_shown: true };
+        return 'summary_shown';
+      }
       if (order.summary_shown === true) {
         // The AI wanted to show the summary ("meka thamai order eka 👇") but something is missing: the customer would get
         // that line WITHOUT a summary, and a later "?" was taken as "summary seen". Ask for what is missing instead.

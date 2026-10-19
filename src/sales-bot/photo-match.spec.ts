@@ -1,4 +1,4 @@
-import { PhotoMatchService, photoMatchNote, wordScore, colourDiff } from './photo-match';
+import { PhotoMatchService, photoMatchNote, wordScore, colourDiff, matchByText } from './photo-match';
 import { photoLabel, photoPicks } from './sales-bot-engine.service';
 
 const product = (id: number, name: string, hashes: Array<{ p: string; d: string; c: string }> = [], extra: Record<string, unknown> = {}) => ({
@@ -144,5 +144,28 @@ describe('photo helpers', () => {
     expect(photoMatchNote({ ...base, status: 'exact', products: [{ product_id: 3, name: 'Blue Watch', price: 1, variant: null, confidence: 100, available: true }] }))
       .toBe('customer photo = our product Blue Watch #3 (our own photo)');
     expect(photoMatchNote({ ...base, status: 'none', products: [] })).toBe('customer photo (blue watch) – no matching product photo (may still be sold – ask the name)');
+  });
+});
+
+describe('our own ad / poster: item code, name and price on the photo', () => {
+  const p = (id: number, name: string, price: number, sku = '') => ({ id, name, price, sku, has_variants: false, variants: [] } as any);
+  const shop = [p(1, 'Water Mat Round', 695, '94272410'), p(2, 'Water Mat', 695, '100421'), p(3, 'Washable Diappers Insert Pack', 695, '100054'),
+    p(4, 'Washable Diapper PLAIN (two Inserts)', 595, '100122'), p(5, 'Washable Diapers Print With Inserts', 595, '896327'),
+    p(6, 'Washable Diapers (print)', 575, '5700'), p(7, 'Sunmy Teether', 325, '100446')];
+  it('the item code finds the product, also without a photo', () => {
+    const hit = matchByText(shop, { item_code: '100421', product_name: 'Water Mat', price_shown: 695 });
+    expect(hit?.status).toBe('exact');
+    expect(hit?.hits[0].product.id).toBe(2);
+  });
+  it('an unknown code: name + price give the few products it can be', () => {
+    const hit = matchByText(shop, { item_code: '100112', product_name: 'Washable Diapers', price_shown: 595 });
+    expect(hit?.status).toBe('unsure');
+    expect(hit?.hits.map((h) => h.product.id).sort()).toEqual([4, 5]);
+  });
+  it('one product with that name and price', () => {
+    const hit = matchByText(shop, { item_code: '', product_name: 'Sunmy Teeth', price_shown: 325 });
+    expect(hit?.status).toBe('likely');
+    expect(hit?.hits[0].product.id).toBe(7);
+    expect(matchByText(shop, { item_code: '', product_name: 'Sunmy Teeth', price_shown: 0 })).toBeNull();   // no price: the photo decides
   });
 });
