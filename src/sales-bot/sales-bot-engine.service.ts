@@ -1561,7 +1561,7 @@ export class SalesBotEngineService implements OnModuleInit {
         // that line WITHOUT a summary, and a later "?" was taken as "summary seen". Ask for what is missing instead.
         session.pending_order = { ...pending, summary_shown: false };
         if (problem.startsWith('unavailable:')) return problem;
-        if (problem.startsWith('choose_variant_for_')) return `ask:size / colour for ${problem.slice('choose_variant_for_'.length)}`;
+        if (problem.startsWith('choose_variant_for_')) return `ask:size / colour (${problem.slice('choose_variant_for_'.length)})`;
         if (problem || subtotal <= 0) return `blocked:${problem || 'total is zero'}`;
         const missingNow = [!name ? 'name' : '', !address ? 'address' : '',
           isSocial && phone.replace(/\D/g, '').length < 9 ? 'phone number' : ''].filter(Boolean);
