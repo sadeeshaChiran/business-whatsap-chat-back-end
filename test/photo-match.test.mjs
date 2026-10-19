@@ -104,11 +104,11 @@ test('a cut-out of the romper photo → the romper', async () => {
   assert.ok(['exact', 'likely'].includes(inbound.media_match.status));
 });
 
-test('a watch we do not sell → "not in our shop" (never claims it is ours)', async () => {
+test('a watch we do not sell → "no matching product photo" (never claims it is ours)', async () => {
   const rows = await customer({ file: 'customer_green_other.jpg' });
   const inbound = rows.find((r) => r.direction === 'inbound');
   assert.equal(inbound.media_match.status, 'none', JSON.stringify(inbound.media_match));
-  assert.match(inbound.media_note, /not in our shop/);
+  assert.match(inbound.media_note, /no matching product photo/);
   assert.ok(lastRequest().context.photo_matches[0].status === 'none');
 });
 
@@ -137,5 +137,5 @@ test('chat history tells the AI what every photo was', async () => {
   const history = lastRequest().history.map((turn) => turn.text).join('\n');
   assert.match(history, /\[photo: customer photo = our product (Red|Blue) Classic Watch #\d+ \(our own photo\)\]/);
   assert.match(history, /\[photo\] 📷 (Red|Blue) Classic Watch – Rs 4,500/);
-  assert.match(history, /\[photo: customer photo \(.*\) – not in our shop/);
+  assert.match(history, /\[photo: customer photo \(.*\) – no matching product photo/);
 });

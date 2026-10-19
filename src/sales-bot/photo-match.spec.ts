@@ -143,6 +143,6 @@ describe('photo helpers', () => {
     const base = { method: 'ai' as const, item: 'watch', description: 'blue watch' };
     expect(photoMatchNote({ ...base, status: 'exact', products: [{ product_id: 3, name: 'Blue Watch', price: 1, variant: null, confidence: 100, available: true }] }))
       .toBe('customer photo = our product Blue Watch #3 (our own photo)');
-    expect(photoMatchNote({ ...base, status: 'none', products: [] })).toBe('customer photo (blue watch) – not in our shop');
+    expect(photoMatchNote({ ...base, status: 'none', products: [] })).toBe('customer photo (blue watch) – no matching product photo (may still be sold – ask the name)');
   });
 });
