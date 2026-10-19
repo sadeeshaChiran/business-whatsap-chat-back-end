@@ -197,7 +197,9 @@ export class ProductsService implements OnModuleInit {
       body: JSON.stringify({ image_b64: file.buffer.toString('base64'), mime_type: file.mimetype, name: row.name }),
       signal: AbortSignal.timeout(60000),
     });
-    if (!reply.ok) throw new Error(`describe service answered ${reply.status}`);   // AI down / key problem: try again later
+    // photo too large / not readable (4xx except auth and rate limit): skip THIS product; AI down / key / rate limit: try later
+    if (!reply.ok && reply.status >= 400 && reply.status < 500 && ![401, 403, 429].includes(reply.status)) return null;
+    if (!reply.ok) throw new Error(`describe service answered ${reply.status}`);
     const notes = String(((await reply.json()) as { description?: string }).description ?? '').trim().slice(0, 300);
     if (!notes) return null;
     await this.productRepository.query(`UPDATE product SET image_notes = $2, image_notes_src = $3 WHERE id = $1`, [productId, notes, url]);
