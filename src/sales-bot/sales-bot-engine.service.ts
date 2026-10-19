@@ -1,7 +1,7 @@
 import { withQuote } from '../common/message-reply';
 import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { AgentRoutingService } from '../agent-routing/agent-routing.service';
 import { readChatMedia, isChatMediaKey } from '../bot-admin/chat-media.store';
 import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
@@ -646,18 +646,26 @@ export class SalesBotEngineService implements OnModuleInit {
     const isPhotoLink = (url: string) =>
       /placehold\.co|\/public\/product-images\/|\.(jpe?g|png|webp|gif)(\?|#|$)/i.test(url);
     const photoLinks = links.filter(isPhotoLink);
-    const products = await this.productRepository.find({ where: { company_id: companyId, is_deleted: false }, relations: ['variants'], take: 500 });
-    const withPhotos = products.filter((product) => productImages(product).length > 0);
+    // photo links in the text: only then load the products (every product – big shops have thousands)
+    const withPhotos = photoLinks.length
+      ? (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false }, relations: ['variants'] }))
+        .filter((product) => productImages(product).length > 0)
+      : [];
     for (const link of photoLinks) {
       const owner = withPhotos.find((product) => productImages(product).some((url) => url === link || absoluteProductImage(link) === url
         || decodeURIComponent(url).toLowerCase() === decodeURIComponent(link).toLowerCase()));
       if (owner) ids.add(Number(owner.id));
     }
     if (!ids.size) {
-      const lower = reply.toLowerCase();
-      const named = withPhotos
-        .filter((product) => String(product.name ?? '').trim().length >= 4 && lower.includes(String(product.name).trim().toLowerCase()))
-        .sort((a, b) => String(b.name).length - String(a.name).length);
+      // products the reply names (searched in the database over ALL products, not only the first 500), longest name first
+      const rows: Array<{ id: number }> = await this.productRepository.query(
+        `SELECT id FROM product WHERE company_id = $1 AND is_deleted = false AND length(trim(name)) >= 4
+           AND strpos(lower($2), lower(trim(name))) > 0 ORDER BY length(name) DESC LIMIT 10`, [companyId, reply]);
+      const named = rows.length
+        ? (await this.productRepository.find({ where: { id: In(rows.map((row) => Number(row.id))), company_id: companyId }, relations: ['variants'] }))
+          .filter((product) => productImages(product).length > 0)
+          .sort((a, b) => String(b.name).length - String(a.name).length)
+        : [];
       for (const product of named.slice(0, 2)) { ids.add(Number(product.id)); autoIds.add(Number(product.id)); }
     }
     // a line that only held a photo link disappears completely (empty lines split the reply into messages)
