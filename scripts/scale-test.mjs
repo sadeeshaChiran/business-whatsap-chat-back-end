@@ -223,6 +223,13 @@ async function testShop(db, shop, log) {
     const sinhala = await step('Sinhala script', [['ඔයාලා cash on delivery කරනවද?']]);
     check('Answers in Sinhala script', /[඀-෿]/.test(sinhala.text));
 
+    // 7b) the customer switches language: English -> Sinhala letters -> English (the reply follows every time)
+    const sw = await step('language switch', [['Hi, do you deliver to Kandy?'], ['ඔයාලගේ ලඟ මොනවද තියෙන්නේ?'], ['ok, how much is delivery?']]);
+    const [en1, si, en2] = sw.turns.map((t) => t.filter((r) => r.message_type !== 'image').map((r) => String(r.content)).join(' '));
+    const isEnglish = (t) => !/[\u0D80-\u0DFF]/.test(t ?? '') && /\b(the|is|we|you|to|for|delivery|yes)\b/i.test(t ?? '');
+    check('Follows English, then Sinhala letters, then English', isEnglish(en1) && /[\u0D80-\u0DFF]/.test(si ?? '') && isEnglish(en2),
+      `${(en1 ?? '').slice(0, 25)} | ${(si ?? '').slice(0, 25)} | ${(en2 ?? '').slice(0, 25)}`);
+
     // 8) order: an option product when there is one (exact variant + total), else a simple product; then "ok"
     const orderProduct = (priced?.p) ?? products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available);
     const orderOption = priced?.v ?? null;
