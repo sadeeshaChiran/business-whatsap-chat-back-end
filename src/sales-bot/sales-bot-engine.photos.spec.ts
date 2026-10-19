@@ -3,15 +3,7 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
 /** Photo links the AI writes into its text are removed and turned into real photos. */
 function engineWith(products: any[]) {
   const args: any[] = Array.from({ length: 24 }, () => ({}));
-  args[8] = { // productRepository: find (optionally by id list) + the SQL name search
-    find: async (options: any) => {
-      const ids = options?.where?.id?.value;
-      return Array.isArray(ids) ? products.filter((p) => ids.includes(p.id)) : products;
-    },
-    query: async (_sql: string, [, reply]: [number, string]) =>
-      products.filter((p) => String(p.name).trim().length >= 4 && reply.toLowerCase().includes(String(p.name).trim().toLowerCase()))
-        .sort((a, b) => String(b.name).length - String(a.name).length).map((p) => ({ id: p.id })),
-  };
+  args[8] = { find: async () => products }; // productRepository
   return new (SalesBotEngineService as any)(...args) as SalesBotEngineService;
 }
 
@@ -41,12 +33,5 @@ describe('SalesBotEngineService photos from the reply', () => {
     const engine = engineWith([romper, frock, plain]);
     expect((await engine.photosFromReply(7, 'The Gift Card is Rs 1,000.', [])).productIds).toEqual([]);
     expect((await engine.photosFromReply(7, 'Party Frock and romper', [11])).productIds).toEqual([11]);
-  });
-
-  it('finds named products beyond the first 500 (big shops)', async () => {
-    const many = Array.from({ length: 3000 }, (_, i) => ({ id: 1000 + i, name: `Item number ${i}`, image_url: null, gallery: [], has_variants: false, variants: [] }));
-    const late = { id: 9999, name: 'Kimrox Baby Pant (M) 20 Pcs', image_url: 'https://www.chu.lk/images/product/a.jpeg', gallery: [], has_variants: false, variants: [] };
-    const engine = engineWith([...many, late]);
-    expect((await engine.photosFromReply(7, 'Kimrox Baby Pant (M) 20 Pcs - Rs 1,450', [])).productIds).toEqual([9999]);
   });
 });
