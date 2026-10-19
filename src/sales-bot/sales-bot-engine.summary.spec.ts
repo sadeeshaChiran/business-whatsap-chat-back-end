@@ -1,0 +1,31 @@
+import { SalesBotEngineService } from './sales-bot-engine.service';
+
+/** The AI says "here is the summary 👇" but a detail is missing: the customer must be asked, never left without a summary. */
+function engine() {
+  const args: any[] = Array.from({ length: 24 }, () => ({}));
+  args[8] = { findOne: async () => ({ id: 5, name: 'Vacuum Cleaner', price: 3200, is_available: true, variants: [], weight: 1 }) }; // products
+  args[10] = { find: async () => [{ area: '*', fee: 350, included_kg: 1, per_extra_kg: 200, weight_rounding: 'up' }] };       // zones
+  args[14] = { getSettings: async () => ({ free_delivery_over: null }) };                                                    // context
+  const service = new (SalesBotEngineService as any)(...args);
+  service.advanceLead = async () => undefined;
+  return service as any;
+}
+const whatsappUser = { platform: 'whatsapp', external_user_id: '94771234567' };
+
+describe('summary turn with missing details', () => {
+  it('asks for the address instead of sending the summary line alone', async () => {
+    const session: any = {};
+    const out = await engine().handleOrder(16, { id: 1 }, whatsappUser,
+      { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Sadisha', address: '', summary_shown: true }, session);
+    expect(out).toBe('ask:address');
+    expect(session.pending_order.summary_shown).toBe(false);
+  });
+
+  it('shows the summary when everything is there', async () => {
+    const session: any = {};
+    const out = await engine().handleOrder(16, { id: 1 }, whatsappUser,
+      { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Sadisha', address: '12 Galle Road, Colombo', delivery_area: '*', summary_shown: true }, session);
+    expect(out).toBe('summary_shown');
+    expect(session.pending_order.summary_shown).toBe(true);
+  });
+});

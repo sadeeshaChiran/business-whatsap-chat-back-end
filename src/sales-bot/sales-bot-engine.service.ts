@@ -254,12 +254,12 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /**
    * Waits until the customer stops typing, so "hi" + "price?" + "blue one" + "Colombo ta" get ONE reply:
-   * every new message restarts the wait (SALES_BOT_DEBOUNCE_MS, default 4 s), but never longer than
-   * SALES_BOT_DEBOUNCE_MAX_MS (default 15 s) after the first message.
+   * every new message restarts the wait (SALES_BOT_DEBOUNCE_MS, default 6 s), but never longer than
+   * SALES_BOT_DEBOUNCE_MAX_MS (default 20 s) after the first message.
    */
   private schedule(companyId: number, conversationId: number, delayMs?: number) {
-    const base = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 4000) || 4000;
-    const max = Math.max(base, Number(process.env.SALES_BOT_DEBOUNCE_MAX_MS ?? 15000) || 15000);
+    const base = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 6000) || 6000;
+    const max = Math.max(base, Number(process.env.SALES_BOT_DEBOUNCE_MAX_MS ?? 20000) || 20000);
     const now = Date.now();
     if (!this.burstStart.has(conversationId)) this.burstStart.set(conversationId, now);
     const waited = now - (this.burstStart.get(conversationId) ?? now);
@@ -400,6 +400,21 @@ export class SalesBotEngineService implements OnModuleInit {
     const freshUser = await this.channelUserRepository.findOne({ where: { id: channelUser.id } });
     if (!fresh || fresh.status === 'closed' || !freshUser?.bot_enabled) return;
 
+    // The customer sent more messages while the AI was thinking ("Kandy ta" right after "price?"): this answer would
+    // miss them. Throw it away and answer ALL messages together (at most twice in a row, so a chatty customer still
+    // gets a reply). The thrown-away call is still counted in the AI cost.
+    const [arrived] = await this.messageRepository.query(
+      `SELECT MAX(id) AS id FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' AND id > $2`, [conversationId, answeredUpTo]);
+    const redone = this.redone.get(conversationId) ?? 0;
+    if (arrived?.id && redone < 2 && !simulated) {
+      this.redone.set(conversationId, redone + 1);
+      await this.saveUsage(companyId, conversationId, result);
+      this.logger.log(`conv ${conversationId}: new customer message while answering - answering all together`);
+      this.schedule(companyId, conversationId, 800);
+      return;
+    }
+    this.redone.delete(conversationId);
+
     // Save first, so a blocked order never gets a "confirmed!" message
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
     session.language = result.language;
@@ -480,6 +495,14 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
 
+    await this.saveUsage(companyId, conversationId, result);
+    this.logger.log(`conv ${conversationId}: ${result.usage.calls ?? 1} AI calls, ${result.usage.latency_ms} ms, $${result.usage.cost_usd.toFixed(5)}, intent ${outcome.intent ?? '-'}`);
+  }
+
+  /** how many times in a row a reply was thrown away because the customer kept writing (per conversation) */
+  private readonly redone = new Map<number, number>();
+
+  private async saveUsage(companyId: number, conversationId: number, result: SalesBotResult) {
     await this.usageRepository.save(this.usageRepository.create({
       company_id: companyId, conversation_id: conversationId, model: result.usage.model,
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens,
@@ -487,7 +510,6 @@ export class SalesBotEngineService implements OnModuleInit {
       cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: false,
       thinking_tokens: result.usage.thinking_tokens ?? 0, tools_used: usageTools(result.tools_used),
     }));
-    this.logger.log(`conv ${conversationId}: ${result.usage.calls ?? 1} AI calls, ${result.usage.latency_ms} ms, $${result.usage.cost_usd.toFixed(5)}, intent ${outcome.intent ?? '-'}`);
   }
 
   private readSessionState(raw: string | null): Record<string, unknown> {
@@ -1504,6 +1526,17 @@ export class SalesBotEngineService implements OnModuleInit {
       // the AI only writes a short line before it (saves its output tokens and never shows a wrong total)
       const complete = !problem && subtotal > 0 && name && address && (!isSocial || phone.replace(/\D/g, '').length >= 9);
       if (order.summary_shown === true && complete) return 'summary_shown';
+      if (order.summary_shown === true) {
+        // The AI wanted to show the summary ("meka thamai order eka 👇") but something is missing: the customer would get
+        // that line WITHOUT a summary, and a later "?" was taken as "summary seen". Ask for what is missing instead.
+        session.pending_order = { ...pending, summary_shown: false };
+        if (problem.startsWith('unavailable:')) return problem;
+        if (problem.startsWith('choose_variant_for_')) return `ask:size / colour for ${problem.slice('choose_variant_for_'.length)}`;
+        if (problem || subtotal <= 0) return `blocked:${problem || 'total is zero'}`;
+        const missingNow = [!name ? 'name' : '', !address ? 'address' : '',
+          isSocial && phone.replace(/\D/g, '').length < 9 ? 'phone number' : ''].filter(Boolean);
+        if (missingNow.length) return `ask:${missingNow.join(',')}`;
+      }
       return 'pending';
     }
 
