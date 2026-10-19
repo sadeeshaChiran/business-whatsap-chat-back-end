@@ -1566,7 +1566,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // The fee is always calculated here (zone + order weight) – never taken from the AI.
     const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
     const area = String(order.delivery_area ?? '').trim();
-    let zone = area ? findZone(zones, area) : null;
+    let zone = findZone(zones, area);   // no area from the AI: the "everywhere" (*) zone still gives the fee
     if (!zone && order.delivery_fee != null) {
       // older bot replies without delivery_area: accept only a flat zone with exactly that fee
       zone = zones.find((row) => !hasWeightRule(row) && Number(row.fee) === Number(order.delivery_fee)) ?? null;
