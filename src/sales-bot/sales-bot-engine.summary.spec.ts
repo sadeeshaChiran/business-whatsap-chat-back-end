@@ -54,3 +54,11 @@ describe('summary turn with missing details', () => {
     expect(SUMMARY_WORDS.test('Order එක දාන්නද?')).toBe(false);
   });
 });
+
+describe('products of this chat', () => {
+  it('keeps the newest 15, newest last, no repeats', () => {
+    const { talkedProducts } = require('./sales-bot-engine.service');
+    expect(talkedProducts([1, 2, 3], [2, 4, null, 0])).toEqual([1, 3, 2, 4]);
+    expect(talkedProducts([], Array.from({ length: 20 }, (_, i) => i + 1))).toHaveLength(15);
+  });
+});
