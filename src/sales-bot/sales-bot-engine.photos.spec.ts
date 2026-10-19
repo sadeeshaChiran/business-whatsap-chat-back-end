@@ -60,6 +60,8 @@ describe('photo requests and pointers', () => {
     expect(asksForPhotos('price kiyada')).toBe(false);
   });
   it('drops the pointing hand when no photo came', () => {
+    expect(withoutPhotoPointer('අනේ sorry, Washable Diaper (printed) වල photos දැන් එවන්නම්.\n\nමේ තියෙන්නේ Rs 595 ඒවා.', 'sinhala'))
+      .toBe('අනේ sorry, ඒකේ photo එකක් දැනට system එකේ නෑ. මේ තියෙන්නේ Rs 595 ඒවා.');
     expect(withoutPhotoPointer('Sure Madam, Navy saha Maroon ewa me thiyenne 👇 Polo eka dannada?'))
       .toBe('Sure Madam, Navy saha Maroon ewa me thiyenne Polo eka dannada?');
   });

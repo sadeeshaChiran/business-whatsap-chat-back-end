@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Product } from '../products/entities/product.entity';
 import { absoluteProductImage, readOwnProductImage } from '../products/product-images';
-import { photoOption, productImages, productOptions, toNumber, variantLabel } from './sales-bot-context.service';
+import { photoOption, productImages, productOptions, toNumber, variantLabel, variantPrice } from './sales-bot-context.service';
 
 /**
  * Customer photo → the right product of THIS shop.
@@ -24,12 +24,14 @@ export type PhotoMatchProduct = {
   confidence: number;
   available: boolean;
   differences?: string;
+  /** false: this product has no photo in the system (found by the code / name / price written on the customer's photo) */
+  has_photo?: boolean;
 };
 
 export type PhotoMatch = {
   /** exact = our own photo · likely = AI: same item · unsure = close options · none = not in the shop · not_product = slip, selfie… */
   status: 'exact' | 'likely' | 'unsure' | 'none' | 'not_product';
-  method: 'fingerprint' | 'ai';
+  method: 'fingerprint' | 'ai' | 'code' | 'name';
   item: string;
   description: string;
   products: PhotoMatchProduct[];
@@ -41,7 +43,48 @@ type Hash = { p: string; d: string; c: string };
 type Analysis = {
   is_product: boolean; item: string; colours: string[]; pattern: string; material: string; text_on_item: string;
   pieces: number; screenshot: boolean; search_words: string[]; description: string;
+  item_code?: string; product_name?: string; price_shown?: number;
 };
+
+/** "Diapper" = "diapers" = "diaper": doubled letters and plural endings don't matter for names on ads / posters. */
+const nameWord = (w: string) => w.replace(/(.)\1+/g, '$1').replace(/(?<=..)(es|s)$/, '');
+const nameWords = (text: string) => [...new Set(words(text).map(nameWord))];
+const plainCode = (code: unknown) => String(code ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * The customer sent our own ad / poster (or a screenshot of it): the item code, name and price written on it find the
+ * product, also when the product has NO photo in the system. Returns null when the text says nothing useful.
+ */
+export function matchByText(products: Product[], analysis: Pick<Analysis, 'item_code' | 'product_name' | 'price_shown'>):
+  { status: 'exact' | 'likely' | 'unsure'; method: 'code' | 'name'; hits: Array<{ product: Product; variant: string | null; confidence: number }> } | null {
+  const code = plainCode(analysis.item_code);
+  if (code.length >= 3) {
+    for (const product of products) {
+      if (plainCode(product.sku) === code) return { status: 'exact', method: 'code', hits: [{ product, variant: null, confidence: 100 }] };
+      const option = productOptions(product).find((v) => plainCode(v.sku) === code);
+      if (option) return { status: 'exact', method: 'code', hits: [{ product, variant: variantLabel(option), confidence: 100 }] };
+    }
+  }
+  const wanted = nameWords(String(analysis.product_name ?? ''));
+  if (!wanted.length) return null;
+  const price = Number(analysis.price_shown) || 0;
+  const prices = (product: Product) => [Number(product.price), ...productOptions(product).map((o) => variantPrice(product, o))].filter((n) => n > 0);
+  const scored = products.map((product) => {
+    const have = nameWords(product.name);
+    const shared = wanted.filter((w) => have.includes(w)).length;
+    const samePrice = price > 0 && prices(product).some((n) => Math.abs(n - price) < 1);
+    return { product, cover: shared / wanted.length, extra: have.length - shared, samePrice };
+  }).filter((row) => row.cover >= 0.99 || (row.cover >= 0.5 && row.samePrice))   // "Sunmy Teeth" Rs 325 = Sunmy Teether Rs 325
+    .sort((a, b) => Number(b.samePrice) - Number(a.samePrice) || b.cover - a.cover || a.extra - b.extra);
+  if (!scored.length) return null;
+  const priced = scored.filter((row) => row.samePrice);
+  const pool = priced.length ? priced : price > 0 ? [] : scored;
+  if (!pool.length) return null;
+  const hits = pool.slice(0, 3).map((row) => ({ product: row.product, variant: null, confidence: row.samePrice ? 90 : 70 }));
+  // one product with that name and price, or an exact name with that price
+  const sure = pool.length === 1 || (pool[0].extra === 0 && pool[1].extra > 0 && pool[0].samePrice);
+  return { status: sure && pool[0].samePrice ? 'likely' : 'unsure', method: 'name', hits: sure && pool[0].samePrice ? hits.slice(0, 1) : hits };
+}
 
 /** Thresholds for "this is our photo": shape bits that differ (of 64) and average colour difference (0-255). */
 const SHAPE_MAX = 9;
@@ -138,6 +181,7 @@ export class PhotoMatchService {
     return {
       product_id: Number(product.id), name: product.name, price: toNumber(product.price), variant, confidence,
       available: product.is_available !== false, ...(differences ? { differences } : {}),
+      ...(productImages(product).length ? {} : { has_photo: false }),
     };
   }
 
@@ -190,7 +234,20 @@ export class PhotoMatchService {
     if (!customerHashes.length) customerHashes = analyzed.hashes ?? [];
     const base = { item: analysis.item, description: analysis.description };
     if (!analysis.is_product) return { match: { status: 'not_product', method: 'ai', ...base, products: [] }, usage };
-    if (!withPhotos.length) return { match: { status: 'none', method: 'ai', ...base, products: [] }, usage };
+    // our own ad / poster: the item code, name and price written on it (works for products without a photo too)
+    const byText = matchByText(products, analysis);
+    if (byText && byText.status !== 'unsure') {
+      return { match: { status: byText.status, method: byText.method, ...base, products: byText.hits.map((h) => this.entry(h.product, h.confidence, h.variant)) }, usage };
+    }
+    const textUnsure = byText?.hits ?? [];
+    const withText = (match: PhotoMatch): PhotoMatch => {
+      // the photo comparison found nothing sure: the products named on the photo are the best guess
+      if (!textUnsure.length || match.status === 'exact' || match.status === 'likely') return match;
+      const seen = new Set(match.products.map((p) => p.product_id));
+      const extra = textUnsure.filter((h) => !seen.has(Number(h.product.id))).map((h) => this.entry(h.product, h.confidence, h.variant));
+      return { ...match, status: 'unsure', products: [...extra, ...match.products].slice(0, 4) };
+    };
+    if (!withPhotos.length) return { match: withText({ status: 'none', method: 'ai', ...base, products: [] }), usage };
 
     // 2. closest products by words (+ products whose photos look a bit alike), then the AI compares real photos
     const ranked = withPhotos.map((product) => {
@@ -212,7 +269,7 @@ export class PhotoMatchService {
     }
     candidates = candidates.slice(0, 8);
     if (!candidates.length && withPhotos.length <= 8) candidates = ranked.slice(0, 8);
-    if (!candidates.length) return { match: { status: 'none', method: 'ai', ...base, products: [] }, usage };
+    if (!candidates.length) return { match: withText({ status: 'none', method: 'ai', ...base, products: [] }), usage };
 
     const images: Array<{ key: string; image_b64: string; name: string; variant: string; notes: string }> = [];
     const byKey = new Map<string, { product: Product; variant: string | null }>();
@@ -231,7 +288,7 @@ export class PhotoMatchService {
         images.push({ key, image_b64: b64, name: product.name, variant: variant ?? '', notes: String(product.image_notes ?? '').slice(0, 160) });
       }
     }
-    if (!images.length) return { match: { status: 'none', method: 'ai', ...base, products: [] }, usage };
+    if (!images.length) return { match: withText({ status: 'none', method: 'ai', ...base, products: [] }), usage };
     const compared = await this.post<{ results: Array<{ key: string; same_item: boolean; similarity: number; differences: string }>; usage: PhotoMatchUsage | null }>(
       '/photos/compare', { image_b64: media.data_b64, mime_type: media.mime_type, candidates: images }, 90000);
     if (compared.usage) usage.push(compared.usage);
@@ -256,10 +313,10 @@ export class PhotoMatchService {
     }
     const close = list.filter((row) => row.same || row.similarity >= CLOSE).slice(0, 3);
     if (close.length) {
-      return { match: { status: 'unsure', method: 'ai', ...base, products: close.map((row) => this.entry(row.product, row.similarity, row.variant, row.differences)) }, usage };
+      return { match: withText({ status: 'unsure', method: 'ai', ...base, products: close.map((row) => this.entry(row.product, row.similarity, row.variant, row.differences)) }), usage };
     }
     const nearest = list.filter((row) => row.similarity >= 35).slice(0, 2);
-    return { match: { status: 'none', method: 'ai', ...base, products: nearest.map((row) => this.entry(row.product, row.similarity, row.variant, row.differences)) }, usage };
+    return { match: withText({ status: 'none', method: 'ai', ...base, products: nearest.map((row) => this.entry(row.product, row.similarity, row.variant, row.differences)) }), usage };
   }
 }
 
@@ -268,7 +325,7 @@ export function photoMatchNote(match: PhotoMatch): string {
   const name = (p: PhotoMatchProduct) => `${p.name}${p.variant ? ` (${p.variant})` : ''} #${p.product_id}`;
   const looks = match.description || match.item;
   switch (match.status) {
-    case 'exact': return `customer photo = our product ${name(match.products[0])} (our own photo)`;
+    case 'exact': return `customer photo = our product ${name(match.products[0])} (${match.method === 'code' ? 'item code on the photo' : 'our own photo'})`;
     case 'likely': return `customer photo = our product ${name(match.products[0])} (${match.products[0].confidence}% sure)`;
     case 'unsure': return `customer photo (${looks}) – could be: ${match.products.map(name).join(' / ')} – not sure which`;
     case 'not_product': return `customer photo, not a product: ${looks}`;
