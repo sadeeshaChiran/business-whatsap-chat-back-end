@@ -50,21 +50,7 @@ type PendingOrder = {
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
 };
 /** memory = short notes the bot keeps about this customer (older parts of the chat). handoff_at = last hand-over (unix s). */
-type BotSession = { language?: string; pending_order?: PendingOrder | null; memory?: string; handoff_at?: number; talked?: number[] };
-
-/** Products this chat is about (newest last, max 15): matched customer photos, products the bot showed, order items.
- *  The bot gets them every turn with their real ids, so "meka" / "teether eka" is never mapped to a look-alike product. */
-export function talkedProducts(before: number[] | undefined, add: Array<number | null | undefined>): number[] {
-  const list = [...(before ?? [])];
-  for (const raw of add) {
-    const id = Number(raw);
-    if (!Number.isFinite(id) || id <= 0) continue;
-    const at = list.indexOf(id);
-    if (at >= 0) list.splice(at, 1);
-    list.push(id);
-  }
-  return list.slice(-15);
-}
+type BotSession = { language?: string; pending_order?: PendingOrder | null; memory?: string; handoff_at?: number };
 /** Splits a bot reply into at most 3 WhatsApp messages at empty lines (extra parts join the last one). */
 export function splitReply(text: string, maxParts = 3): string[] {
   const parts = String(text ?? '').split(/\n[ \t]*\n+/).map((part) => part.trim()).filter(Boolean);
@@ -438,7 +424,6 @@ export class SalesBotEngineService implements OnModuleInit {
         session: {
           language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp',
           memory: session.memory ?? '', handoff_at: session.handoff_at ?? 0, profile_name: channelUser.display_name ?? '',
-          talked: talkedProducts(session.talked, photoMatches.flatMap((m) => (m.status === 'exact' || m.status === 'likely' ? m.products.slice(0, 1) : m.products).map((p) => p.product_id))),
         },
         media, context,
       });
@@ -476,11 +461,6 @@ export class SalesBotEngineService implements OnModuleInit {
     // Save first, so a blocked order never gets a "confirmed!" message
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
     session.language = result.language;
-    session.talked = talkedProducts(session.talked, [
-      ...photoMatches.flatMap((m) => (m.status === 'exact' || m.status === 'likely' ? m.products.slice(0, 1) : m.products).map((p) => p.product_id)),
-      ...(result.photo_product_ids ?? []), ...(result.photo_variants ?? []).map((v) => v.product_id),
-      ...(session.pending_order?.items ?? []).map((item) => item.product_id),
-    ]);
     if (result.memory) session.memory = mergeMemory(session.memory, String(result.memory));
     if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
     await this.channelUserRepository.update(channelUser.id, {
