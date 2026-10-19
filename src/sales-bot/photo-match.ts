@@ -272,6 +272,6 @@ export function photoMatchNote(match: PhotoMatch): string {
     case 'likely': return `customer photo = our product ${name(match.products[0])} (${match.products[0].confidence}% sure)`;
     case 'unsure': return `customer photo (${looks}) – could be: ${match.products.map(name).join(' / ')} – not sure which`;
     case 'not_product': return `customer photo, not a product: ${looks}`;
-    default: return `customer photo (${looks}) – not in our shop${match.products.length ? `; closest: ${match.products.map(name).join(' / ')}` : ''}`;
+    default: return `customer photo (${looks}) – no matching product photo (may still be sold – ask the name)${match.products.length ? `; closest: ${match.products.map(name).join(' / ')}` : ''}`;
   }
 }

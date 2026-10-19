@@ -28,4 +28,19 @@ describe('summary turn with missing details', () => {
     expect(out).toBe('summary_shown');
     expect(session.pending_order.summary_shown).toBe(true);
   });
+
+  it('"ok" after the summary saves the order the customer saw, even when the AI left out the address', async () => {
+    const service = engine();
+    const saved: any[] = [];
+    const repo = { create: (row: any) => row, save: async (row: any) => { saved.push(row); return { id: 77, ...row }; } };
+    Object.assign(service, { orderRepository: repo, orderItemRepository: repo, orderHistoryRepository: repo,
+      channelUserRepository: { update: async () => undefined }, pusherService: { trigger: () => undefined },
+      notifyTeam: async () => undefined, customerAgent: async () => null });
+    const session: any = {};
+    await service.handleOrder(16, { id: 1 }, whatsappUser,
+      { items: [{ product_id: 5, quantity: 2 }], customer_name: 'Sunil', address: '22 Lake Road, Colombo', delivery_area: '*', summary_shown: true }, session);
+    const out = await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true, customer_name: 'Sunil' }, session);
+    expect(out).toBe('saved:77');
+    expect(saved[0]).toMatchObject({ address: '22 Lake Road, Colombo', customer_name: 'Sunil', total_amount: 6400 + 550 });
+  });
 });

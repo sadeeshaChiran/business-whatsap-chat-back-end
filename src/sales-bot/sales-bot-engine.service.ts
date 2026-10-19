@@ -1519,6 +1519,20 @@ export class SalesBotEngineService implements OnModuleInit {
 
   private async handleOrder(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     order: SalesBotOrder, session: BotSession): Promise<string> {
+    // "ok" after the summary: the AI (often the small model) may send the order without the items / name / address it
+    // already gave - the customer agreed to the summary they saw, so the missing parts come from that summary
+    const shown = session.pending_order?.summary_shown ? session.pending_order : null;
+    if (order.confirm_order && shown) {
+      order = {
+        ...order,
+        items: order.items?.length ? order.items : shown.items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, variant_name: item.variant_name, quantity: item.quantity })),
+        customer_name: String(order.customer_name ?? '').trim() || shown.customer_name,
+        customer_phone: String(order.customer_phone ?? '').trim() || shown.customer_phone,
+        address: String(order.address ?? '').trim() || shown.address,
+        delivery_area: String(order.delivery_area ?? '').trim() || shown.delivery_area || undefined,
+        payment_method: order.payment_method || shown.payment_method,
+      };
+    }
     const { items, problem } = await this.priceItems(companyId, order.items ?? []);
     const subtotal = items.reduce((sum, item) => sum + item.total_price, 0);
     const totalWeight = Math.round(items.reduce((sum, item) => sum + item.weight_kg * item.quantity, 0) * 1000) / 1000;

@@ -255,6 +255,23 @@ async function testShop(db, shop, log) {
       const summaryTotal = money(order.text.match(/Total:[^\n]*/i)?.[0] ?? '')[0];
       check('Summary total = saved order total', summaryTotal === Math.round(Number(saved.total_amount)), `summary Rs ${summaryTotal ?? '?'} / saved Rs ${Number(saved.total_amount)}`);
     }
+
+    // 8b) after the summary the customer asks about ANOTHER product, then says "ok" to that answer:
+    //     no order yet (that "ok" was not a yes to the summary), the other product is not added; then a clear yes saves it
+    const other = products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available && p.category !== orderProduct.category)
+      ?? products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available);
+    if (other) {
+      const browse = await step(`asks about another product after the summary: ${other.name}`,
+        [[`${what} 1k ona. Nimal Perera, 10 Temple Road, ${areaWord}. COD`], [`${other.name} kiyada?`], ['ok'], ['ow confirm karanna']]);
+      const orderRows = async () => (await db.query(
+        `SELECT o.id, o.created_at FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1 ORDER BY o.id`, [browse.conversationId])).rows;
+      const rows = await orderRows();
+      const okTurn = (browse.turns[2] ?? []).map((r) => String(r.content)).join(' ');
+      check('"ok" to another answer does not confirm the order', !/invoice for order/i.test(okTurn), okTurn.slice(0, 50));
+      check('Asked-about product is not added to the order', rows.length === 1 && !(await db.query(
+        `SELECT 1 FROM bot_order_item WHERE order_id = $1 AND product_id = $2`, [rows[0].id, other.id])).rows.length,
+        rows.length ? `order #${rows[0].id}` : 'no order after the clear yes');
+    }
   }
 
   const { rows: usage } = await db.query(
@@ -275,7 +292,7 @@ async function testShop(db, shop, log) {
     callsPerReply: ai.length ? sum('calls', ai) / ai.length : 0, oneCall: ai.length ? ai.filter((u) => Number(u.calls) === 1).length / ai.length : 0,
     input: avg('input_tokens'), cached: avg('cached_tokens'), output: avg('output_tokens'), thinking: avg('thinking_tokens'),
     cost: sum('cost_usd'), perReply, latency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0,
-    slowest: latencies.at(-1) ?? 0, lookups, checks,
+    slowest: latencies.at(-1) ?? 0, lookups, checks, conversations: conversations.filter(Boolean),
   };
 }
 
@@ -300,9 +317,12 @@ async function main() {
     }
   }
   // 2027: only Gemini 3.6 / 3.7 / 3.8 Flash have a promotional price that doubles on 1 Jan 2027; other models keep their price
-  const { rows: [usedModel] } = await db.query(`SELECT model FROM bot_ai_usage ORDER BY id DESC LIMIT 1`).catch(() => ({ rows: [] }));
-  const model = String(usedModel?.model ?? '');
-  const y2027 = /gemini-3\.[678]-flash/.test(model) ? 2 : 1;
+  // the models this test used (main model + the small one for "ok" / address turns)
+  const { rows: usedModels } = await db.query(
+    `SELECT model, COUNT(*)::int AS n FROM bot_ai_usage WHERE conversation_id = ANY($1::int[]) GROUP BY model ORDER BY n DESC`,
+    [results.flatMap((r) => r.conversations)]).catch(() => ({ rows: [] }));
+  const model = usedModels.map((row) => row.model).join(' + ') || 'unknown model';
+  const y2027 = usedModels.some((row) => /gemini-3\.[678]-flash/.test(String(row.model))) ? 2 : 1;
   await db.end();
 
   console.log('\n\n=================== PERFORMANCE & COST ===================');
