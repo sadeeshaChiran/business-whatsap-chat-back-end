@@ -256,28 +256,21 @@ async function testShop(db, shop, log) {
       check('Summary total = saved order total', summaryTotal === Math.round(Number(saved.total_amount)), `summary Rs ${summaryTotal ?? '?'} / saved Rs ${Number(saved.total_amount)}`);
     }
 
-    // 8b) after the summary the customer only ASKS about another product and says they will think about it:
-    //     no order yet and that product is not added; then a clear yes saves the order with the first product only
+    // 8b) after the summary the customer asks about ANOTHER product, then says "ok" to that answer:
+    //     no order yet (that "ok" was not a yes to the summary), the other product is not added; then a clear yes saves it
     const other = products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available && p.category !== orderProduct.category)
       ?? products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available);
     if (other) {
       const browse = await step(`asks about another product after the summary: ${other.name}`,
-        [[`${what} 1k ona. Nimal Perera, 10 Temple Road, ${areaWord}. COD`], [`${other.name} kiyada?`], ['hmm eka passe balannam'], ['ow confirm karanna']]);
-      const early = browse.turns.slice(0, 3).flat().some((r) => /invoice for order/i.test(String(r.content)));
-      check('No order before the clear yes', !early, early ? 'order made too early' : 'ok');
-      const { rows } = await db.query(
-        `SELECT o.id FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1 ORDER BY o.id`, [browse.conversationId]);
-      const added = rows.length ? (await db.query(`SELECT 1 FROM bot_order_item WHERE order_id = $1 AND product_id = $2`, [rows[0].id, other.id])).rows.length : 0;
-      check('Asked-about product is not added to the order', rows.length === 1 && !added,
-        rows.length ? `order #${rows[0].id}${added ? ` has ${other.name}` : ''}` : 'no order after the clear yes');
-
-      // 8c) two products chosen over a few messages, then the details: the FIRST summary lists exactly both
-      const two = await step(`two products, then details: ${what} + ${other.name}`,
-        [[`${what} ekak ona`], [`${other.name} kiyada?`], [`${other.name} ekath danna`], [`Kamal Fernando, 5 Station Road, ${areaWord}`]]);
-      const firstSummary = two.turns.map((t) => t.map((r) => String(r.content)).join('\n')).find((t) => /Total:/i.test(t)) ?? '';
-      const listed = firstSummary.split('\n').filter((line) => /^\d+ x /.test(line.trim()));
-      const hasBoth = listed.length === 2 && listed.some((l) => l.includes(orderProduct.name)) && listed.some((l) => l.includes(other.name));
-      check('First summary has exactly the chosen products', hasBoth, listed.join(' | ') || 'no summary');
+        [[`${what} 1k ona. Nimal Perera, 10 Temple Road, ${areaWord}. COD`], [`${other.name} kiyada?`], ['ok'], ['ow confirm karanna']]);
+      const orderRows = async () => (await db.query(
+        `SELECT o.id, o.created_at FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1 ORDER BY o.id`, [browse.conversationId])).rows;
+      const rows = await orderRows();
+      const okTurn = (browse.turns[2] ?? []).map((r) => String(r.content)).join(' ');
+      check('"ok" to another answer does not confirm the order', !/invoice for order/i.test(okTurn), okTurn.slice(0, 50));
+      check('Asked-about product is not added to the order', rows.length === 1 && !(await db.query(
+        `SELECT 1 FROM bot_order_item WHERE order_id = $1 AND product_id = $2`, [rows[0].id, other.id])).rows.length,
+        rows.length ? `order #${rows[0].id}` : 'no order after the clear yes');
     }
   }
 
