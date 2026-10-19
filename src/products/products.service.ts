@@ -98,6 +98,15 @@ export class ProductsService implements OnModuleInit {
       .catch((error: unknown) => this.logger.warn(`moving inline product photos failed: ${error instanceof Error ? error.message : String(error)}`))
       .then(() => this.describeMissingPhotos())
       .catch(() => undefined), 5000).unref();
+    // keep going until every product photo has its fingerprint + AI description (big imports have thousands)
+    setInterval(() => void this.describeMissingPhotos().catch(() => undefined), 10 * 60 * 1000).unref();
+  }
+
+  private photoJobRunning = false;
+
+  /** After an import: start fingerprinting / describing the new photos now instead of waiting for the next round. */
+  photoJobSoon() {
+    setTimeout(() => void this.describeMissingPhotos().catch(() => undefined), 3000).unref();
   }
 
   /**
@@ -188,7 +197,7 @@ export class ProductsService implements OnModuleInit {
       body: JSON.stringify({ image_b64: file.buffer.toString('base64'), mime_type: file.mimetype, name: row.name }),
       signal: AbortSignal.timeout(60000),
     });
-    if (!reply.ok) return null;
+    if (!reply.ok) throw new Error(`describe service answered ${reply.status}`);   // AI down / key problem: try again later
     const notes = String(((await reply.json()) as { description?: string }).description ?? '').trim().slice(0, 300);
     if (!notes) return null;
     await this.productRepository.query(`UPDATE product SET image_notes = $2, image_notes_src = $3 WHERE id = $1`, [productId, notes, url]);
@@ -197,7 +206,16 @@ export class ProductsService implements OnModuleInit {
 
   /** Products with photos but no AI photo description yet (a few per start, so the cost stays small). */
   private async describeMissingPhotos() {
-    if (!String(process.env.SALES_BOT_URL ?? '').trim()) return;
+    if (!String(process.env.SALES_BOT_URL ?? '').trim() || this.photoJobRunning) return;
+    this.photoJobRunning = true;
+    try {
+      await this.describeMissingPhotosOnce();
+    } finally {
+      this.photoJobRunning = false;
+    }
+  }
+
+  private async describeMissingPhotosOnce() {
     // fingerprints first (no AI cost): every product with photos, 50 at a time
     for (let round = 0; round < 60; round++) {
       const pending: Array<{ id: number }> = await this.productRepository.query(`
@@ -210,11 +228,24 @@ export class ProductsService implements OnModuleInit {
         if (done < 0) await this.productRepository.query(`UPDATE product SET image_hashes = '[]'::jsonb WHERE id = $1`, [item.id]).catch(() => undefined);
       }
     }
+    // AI descriptions (what the photo shows - used to find the product when a customer sends a photo): 200 per round,
+    // every 10 minutes, so a big import is fully described within a few hours (one small AI call per product, once)
     const rows: Array<{ id: number }> = await this.productRepository.query(`
       SELECT id FROM product WHERE COALESCE(is_deleted, FALSE) = FALSE AND image_notes IS NULL
          AND (COALESCE(image_url, '') <> '' OR jsonb_array_length(COALESCE(gallery, '[]'::jsonb)) > 0)
-       ORDER BY id DESC LIMIT 30`).catch(() => []);
-    for (const row of rows) await this.describePhotos(row.id).catch(() => null);
+       ORDER BY id DESC LIMIT 200`).catch(() => []);
+    for (const row of rows) {
+      let notes: string | null;
+      try {
+        notes = await this.describePhotos(row.id);
+      } catch (error) {
+        // the AI service failed (down, key problem): stop this round, the next round tries again - no endless retries now
+        this.logger.warn(`describing product photos paused: ${error instanceof Error ? error.message : String(error)}`);
+        break;
+      }
+      // the photo itself could not be read: mark it, so it is not tried again every round (a new photo resets it)
+      if (notes === null) await this.productRepository.query(`UPDATE product SET image_notes = '' WHERE id = $1 AND image_notes IS NULL`, [row.id]).catch(() => undefined);
+    }
   }
 
   async moveInlinePhotos(): Promise<number> {
@@ -1458,6 +1489,7 @@ export class ProductsService implements OnModuleInit {
       }
     }
 
+    if (createdProducts.length) this.photoJobSoon();
     return {
       imported_count: createdProducts.length,
       created_count: createdProducts.length - updated,
