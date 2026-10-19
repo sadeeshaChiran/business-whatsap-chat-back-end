@@ -223,6 +223,12 @@ async function testShop(db, shop, log) {
     const sinhala = await step('Sinhala script', [['ඔයාලා cash on delivery කරනවද?']]);
     check('Answers in Sinhala script', /[඀-෿]/.test(sinhala.text));
 
+    // 7a) Sinhala / Tamil written in English letters → the reply comes in Sinhala / Tamil letters
+    const singlish = await step('Singlish → Sinhala letters', [['cash on delivery puluwanda? kochchara dawasin enawada?']]);
+    check('Singlish gets Sinhala letters', /[඀-෿]{4}/.test(singlish.text), singlish.text.slice(0, 40));
+    const tanglish = await step('Tanglish → Tamil letters', [['cash on delivery irukka? evlo naal aagum?']]);
+    check('Tanglish gets Tamil letters', /[஀-௿]{4}/.test(tanglish.text), tanglish.text.slice(0, 40));
+
     // 7b) the customer switches language: English -> Sinhala letters -> English (the reply follows every time)
     const sw = await step('language switch', [['Hi, do you deliver to Kandy?'], ['ඔයාලගේ ලඟ මොනවද තියෙන්නේ?'], ['ok, how much is delivery?']]);
     const [en1, si, en2] = sw.turns.map((t) => t.filter((r) => r.message_type !== 'image').map((r) => String(r.content)).join(' '));
@@ -293,13 +299,17 @@ async function main() {
       console.log(`  ERROR in ${shop.label}: ${error.message}`);
     }
   }
+  // 2027: only Gemini 3.6 / 3.7 / 3.8 Flash have a promotional price that doubles on 1 Jan 2027; other models keep their price
+  const { rows: [usedModel] } = await db.query(`SELECT model FROM bot_ai_usage ORDER BY id DESC LIMIT 1`).catch(() => ({ rows: [] }));
+  const model = String(usedModel?.model ?? '');
+  const y2027 = /gemini-3\.[678]-flash/.test(model) ? 2 : 1;
   await db.end();
 
   console.log('\n\n=================== PERFORMANCE & COST ===================');
   console.table(results.map((r) => ({
     Shop: r.shop, Products: r.products, Replies: r.replies, 'AI calls/reply': r.callsPerReply.toFixed(2), '1-call replies': `${Math.round(r.oneCall * 100)}%`,
     'Cached tok': Math.round(r.cached), 'Fresh tok': Math.round(r.input - r.cached), 'Output tok': Math.round(r.output), 'Thinking tok': Math.round(r.thinking),
-    'Rs/reply 2026': rs(r.perReply), 'Rs/reply 2027': rs(r.perReply * 2), Budget: Number(rs(r.perReply)) <= BUDGET_RS ? 'OK' : 'OVER',
+    'Rs/reply 2026': rs(r.perReply), 'Rs/reply 2027': rs(r.perReply * y2027), Budget: Number(rs(r.perReply)) <= BUDGET_RS ? 'OK' : 'OVER',
     'Avg sec': r.latency.toFixed(1), 'Slowest sec': r.slowest.toFixed(1),
   })));
   console.log('\nLookups (each = one more AI call):');
@@ -313,10 +323,10 @@ async function main() {
     for (const [name, good, detail] of r.checks) console.log(`  ${good ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
   }
   const all = results.reduce((s, r) => s + r.cost, 0) / Math.max(1, results.reduce((s, r) => s + r.replies, 0));
-  console.log(`\nTOTAL: quality ${pass}/${total} · average Rs ${rs(all)} per reply (2026), Rs ${rs(all * 2)} (2027) · budget Rs ${BUDGET_RS}`);
+  console.log(`\nTOTAL: quality ${pass}/${total} · average Rs ${rs(all)} per reply (2026), Rs ${rs(all * y2027)} (2027${y2027 === 1 ? ', no price change announced for ' + model : ', promo price doubles'}) · budget Rs ${BUDGET_RS}`);
   const csv = ['shop,products,replies,ai_calls_per_reply,one_call_pct,cached_tokens,fresh_tokens,output_tokens,thinking_tokens,rs_per_reply_2026,rs_per_reply_2027,avg_seconds,slowest_seconds,quality',
     ...results.map((r) => [r.shop, r.products, r.replies, r.callsPerReply.toFixed(2), Math.round(r.oneCall * 100), Math.round(r.cached), Math.round(r.input - r.cached),
-      Math.round(r.output), Math.round(r.thinking), rs(r.perReply), rs(r.perReply * 2), r.latency.toFixed(1), r.slowest.toFixed(1),
+      Math.round(r.output), Math.round(r.thinking), rs(r.perReply), rs(r.perReply * y2027), r.latency.toFixed(1), r.slowest.toFixed(1),
       `${r.checks.filter((c) => c[1]).length}/${r.checks.length}`].join(','))].join('\n');
   writeFileSync('scale-test-results.csv', csv);
   console.log('\nSaved scale-test-results.csv. Send this whole output to Claude for the review.');
