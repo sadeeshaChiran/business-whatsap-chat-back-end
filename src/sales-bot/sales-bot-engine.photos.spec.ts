@@ -64,3 +64,15 @@ describe('photo requests and pointers', () => {
       .toBe('Sure Madam, Navy saha Maroon ewa me thiyenne Polo eka dannada?');
   });
 });
+
+import { looksFinished } from './sales-bot-engine.service';
+
+describe('answer sooner when the message looks finished', () => {
+  it('questions, photos and full sentences are finished; short pieces are not', () => {
+    expect(looksFinished('Kimrox M size kiyada?')).toBe(true);
+    expect(looksFinished('', 'image')).toBe(true);
+    expect(looksFinished('mata baby ta diapers pack ekak one 6kg')).toBe(true);
+    expect(looksFinished('hi')).toBe(false);
+    expect(looksFinished('price')).toBe(false);
+  });
+});
