@@ -200,6 +200,17 @@ export class PhotoMatchService {
       return { product, score: wordScore(analysis, text) + (near <= 16 ? 4 : 0) };
     }).sort((a, b) => b.score - a.score);
     let candidates = ranked.filter((r) => r.score > 0).slice(0, 6);
+    // products whose photos LOOK closest (fingerprint shape), even without a shared word: a cropped / compressed /
+    // re-photographed shop photo, or a product with a short name ("Tolo Car (888)") the words cannot find
+    const lookAlike = withPhotos
+      .map((product) => ({ product, near: Math.min(64, ...(product.image_hashes ?? []).map((photo) => photoDistance(photo.hashes ?? [], customerHashes).shape)) }))
+      .filter((r) => r.near <= 22)
+      .sort((a, b) => a.near - b.near)
+      .slice(0, 3);
+    for (const near of lookAlike) {
+      if (!candidates.some((c) => c.product.id === near.product.id)) candidates.push({ product: near.product, score: 0 });
+    }
+    candidates = candidates.slice(0, 8);
     if (!candidates.length && withPhotos.length <= 8) candidates = ranked.slice(0, 8);
     if (!candidates.length) return { match: { status: 'none', method: 'ai', ...base, products: [] }, usage };
 

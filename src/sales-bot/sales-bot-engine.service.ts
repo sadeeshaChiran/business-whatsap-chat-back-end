@@ -625,7 +625,8 @@ export class SalesBotEngineService implements OnModuleInit {
           })).catch(() => undefined);
         }
         await this.messageRepository.query(`UPDATE bot_message SET media_note = $2, media_match = $3::jsonb WHERE id = $1`, [row.id, photoMatchNote(match), JSON.stringify(match)]);
-        this.logger.log(`conv ${conversationId}: customer photo → ${match.status} (${match.method}) ${match.products.map((p) => `#${p.product_id} ${p.confidence}%`).join(', ')}`);
+        this.logger.log(`conv ${conversationId}: customer photo → ${match.status} (${match.method}) ${match.products.map((p) => `#${p.product_id} ${p.confidence}%`).join(', ')}`
+          + (match.item ? ` | AI saw: ${String(match.item).slice(0, 80)}` : ''));
       }
       out.push(match);
     }
