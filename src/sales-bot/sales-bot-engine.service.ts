@@ -115,6 +115,14 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
 }
 
 /** The customer asks to see photos now ("ewanna", "photo ekak", "pennanna", "send pics"). */
+/** A customer message that is probably complete: a question, a photo / voice note, or a full sentence (6+ words). */
+export function looksFinished(text: string, type = ''): boolean {
+  if (['image', 'voice', 'audio', 'video', 'document'].includes(type)) return true;
+  const t = text.trim();
+  if (!t) return false;
+  return /[?？]\s*$/.test(t) || t.split(/\s+/).length >= 6;
+}
+
 export function asksForPhotos(text: string): boolean {
   return /\b(photos?|pics?|pictures?|images?|ewanna|evanna|ewannako|evannako|pennanna|pennannako|balanna|send)\b|(ෆොටෝ|පින්තූර|එවන්න|පෙන්නන්න|படம்|அனுப்பு)/i.test(text);
 }
@@ -255,7 +263,12 @@ export class SalesBotEngineService implements OnModuleInit {
     if (event.provider === 'simulator') this.simulated.add(event.conversationId);
     // a new customer message cancels the planned follow-up (the reply to it plans a new one)
     await this.cancelPlannedFollowUp(event.conversationId).catch(() => undefined);
-    this.schedule(event.companyId, event.conversationId);
+    // a message that looks finished ("Kimrox M size kiyada?", a photo, a long sentence) is answered sooner;
+    // a short piece ("hi", "price", "M") waits a little longer for the rest of what they are typing
+    const [last] = await this.messageRepository.query(
+      `SELECT content, message_type FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' ORDER BY id DESC LIMIT 1`,
+      [event.conversationId]).catch(() => []);
+    this.schedule(event.companyId, event.conversationId, undefined, looksFinished(String(last?.content ?? ''), String(last?.message_type ?? '')));
     return true;
   }
 
@@ -267,8 +280,10 @@ export class SalesBotEngineService implements OnModuleInit {
    * every new message restarts the wait (SALES_BOT_DEBOUNCE_MS, default 6 s), but never longer than
    * SALES_BOT_DEBOUNCE_MAX_MS (default 20 s) after the first message.
    */
-  private schedule(companyId: number, conversationId: number, delayMs?: number) {
-    const base = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 6000) || 6000;
+  private schedule(companyId: number, conversationId: number, delayMs?: number, finished = false) {
+    const slow = Number(process.env.SALES_BOT_DEBOUNCE_MS ?? 6000) || 6000;
+    const fast = Math.min(slow, Number(process.env.SALES_BOT_DEBOUNCE_FAST_MS ?? 2500) || 2500);
+    const base = finished ? fast : slow;
     const max = Math.max(base, Number(process.env.SALES_BOT_DEBOUNCE_MAX_MS ?? 20000) || 20000);
     const now = Date.now();
     if (!this.burstStart.has(conversationId)) this.burstStart.set(conversationId, now);
@@ -390,7 +405,7 @@ export class SalesBotEngineService implements OnModuleInit {
         company_id: companyId, customer_id: channelUser.id, message, history,
         session: {
           language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp',
-          memory: session.memory ?? '', handoff_at: session.handoff_at ?? 0,
+          memory: session.memory ?? '', handoff_at: session.handoff_at ?? 0, profile_name: channelUser.display_name ?? '',
         },
         media, context,
       });
@@ -1258,7 +1273,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const result = await this.client.reply({
       company_id: companyId, customer_id: channelUser.id, message: '', history: await this.history(conversationId, last.id + 1),
       session: {
-        language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp', memory: session.memory ?? '',
+        language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp', memory: session.memory ?? '', profile_name: channelUser.display_name ?? '',
         followup: { number, max, note: conversation.followup_note ?? '', hours_quiet: Math.round((Date.now() - quietSince.getTime()) / 3_600_000) },
       },
       media: null, context,
