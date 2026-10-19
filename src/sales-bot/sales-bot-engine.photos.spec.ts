@@ -50,3 +50,17 @@ describe('SalesBotEngineService photos from the reply', () => {
     expect((await engine.photosFromReply(7, 'Kimrox Baby Pant (M) 20 Pcs - Rs 1,450', [])).productIds).toEqual([9999]);
   });
 });
+
+import { asksForPhotos, withoutPhotoPointer } from './sales-bot-engine.service';
+
+describe('photo requests and pointers', () => {
+  it('knows when the customer asks for photos', () => {
+    expect(asksForPhotos('Ewanna')).toBe(true);
+    expect(asksForPhotos('photo ekak dannako')).toBe(true);
+    expect(asksForPhotos('price kiyada')).toBe(false);
+  });
+  it('drops the pointing hand when no photo came', () => {
+    expect(withoutPhotoPointer('Sure Madam, Navy saha Maroon ewa me thiyenne 👇 Polo eka dannada?'))
+      .toBe('Sure Madam, Navy saha Maroon ewa me thiyenne Polo eka dannada?');
+  });
+});

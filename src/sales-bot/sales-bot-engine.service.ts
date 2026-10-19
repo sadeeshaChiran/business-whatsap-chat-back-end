@@ -114,6 +114,16 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
   return picks;
 }
 
+/** The customer asks to see photos now ("ewanna", "photo ekak", "pennanna", "send pics"). */
+export function asksForPhotos(text: string): boolean {
+  return /\b(photos?|pics?|pictures?|images?|ewanna|evanna|ewannako|evannako|pennanna|pennannako|balanna|send)\b|(ෆොටෝ|පින්තූර|එවන්න|පෙන්නන්න|படம்|அனுப்பு)/i.test(text);
+}
+
+/** Removes "👇" / "me thiyenne 👇" pointers when no photo was sent with the reply. */
+export function withoutPhotoPointer(text: string): string {
+  return text.replace(/[ \t]*[👇⬇️👉]+/gu, '').replace(/[ \t]+\n/g, '\n').trim();
+}
+
 export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: string | null, optionPrice?: number | null): string {
   const price = Number(optionPrice ?? product.price);
   return `📷 ${product.name}${variant ? ` – ${variant}` : ''}${Number.isFinite(price) && price > 0 ? ` – Rs ${price.toLocaleString('en-US')}` : ''}`;
@@ -439,8 +449,10 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []), simulated,
+    const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []), simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
+    // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
+    if (text && !outcome.replyOverride && !photosSent) text = withoutPhotoPointer(text);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -736,7 +748,10 @@ export class SalesBotEngineService implements OnModuleInit {
       const named = askedPhotoOptions(product, ask.customerText ?? '');
       const wanted = named.length ? named : variantPhotoOptions(product, pick.variantId, pick.variant);
       // asked again for all photos → send them even if some went out a few minutes ago
-      const urls = choosePhotos(product, wanted, all).map((photo) => photo.url).filter((url) => !sentWithin(url, all ? 2 : pick.skipIfSentWithinMin));
+      // the customer ASKED for photos ("ewanna", "photo", "pennanna") → send again even if it went out a few minutes ago
+      const askedNow = asksForPhotos(ask.customerText ?? '');
+      const urls = choosePhotos(product, wanted, all).map((photo) => photo.url)
+        .filter((url) => !sentWithin(url, all || askedNow ? 2 : pick.skipIfSentWithinMin));
       let lastLabel = '';
       for (const url of urls) {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
