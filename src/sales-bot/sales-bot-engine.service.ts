@@ -180,6 +180,17 @@ function changeHoldMessage(language: string): string {
 const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 const rs = (value: number) => `Rs ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
 
+/** Words of a product name ("Kimrox Baby Pant (M) 20 Pcs" → kimrox, baby, pant, m, 20, pcs). */
+export function nameWords(name: string): string[] {
+  return [...new Set(String(name ?? '').toLowerCase().split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF]+/).filter(Boolean))];
+}
+/** Share of the words of `a` that are also in `b` (0-1). */
+export function nameMatch(a: string, b: string): number {
+  const wa = nameWords(a);
+  const wb = new Set(nameWords(b));
+  return wa.length ? wa.filter((w) => wb.has(w)).length / wa.length : 0;
+}
+
 /** The AI's text says "here is the order summary" (any language): the real summary must come with it. */
 export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்/i;
 
@@ -575,7 +586,7 @@ export class SalesBotEngineService implements OnModuleInit {
       .orderBy('m.id', 'DESC')
       // the last 14 messages (history is not cached – every message pays for it); older facts live in CHAT MEMORY,
       // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
-      .limit(14)
+      .limit(20)
       .getMany();
     return rows.reverse().map((row) => {
       const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
@@ -1511,15 +1522,41 @@ export class SalesBotEngineService implements OnModuleInit {
 
 
   /** Prices always come from the products table – never from the AI. */
+  /** The company's product with this name (the best unique match of its words), or null. */
+  private async productByName(companyId: number, name: string, anyProduct: boolean): Promise<Product | null> {
+    const words = nameWords(name).sort((a, b) => b.length - a.length);
+    if (!words.length) return null;
+    const rows = await this.productRepository.createQueryBuilder('p')
+      .leftJoinAndSelect('p.variants', 'v')
+      .where('p.company_id = :companyId AND p.is_deleted = false', { companyId })
+      .andWhere(anyProduct ? '1=1' : 'p.show_to_bot = true')
+      .andWhere('p.name ILIKE :w', { w: `%${words[0]}%` })
+      .take(200).getMany();
+    const scored = rows.map((row) => ({ row, score: Math.min(nameMatch(name, row.name), nameMatch(row.name, name)) }))
+      .sort((a, b) => b.score - a.score);
+    if (!scored.length || scored[0].score < 0.75) return null;
+    if (scored[1] && scored[1].score === scored[0].score) return null;   // two products fit the name equally: keep the id
+    return scored[0].row;
+  }
+
   async priceItems(companyId: number, items: NonNullable<SalesBotOrder['items']>, pricing: { anyProduct?: boolean } = {}): Promise<{ items: PricedItem[]; problem: string }> {
     const priced: PricedItem[] = [];
     for (const item of items) {
-      const product = await this.productRepository.findOne({
+      const byId = await this.productRepository.findOne({
         // the team may sell products hidden from the bot; the bot only sells products shown to it
         where: { id: Number(item.product_id), company_id: companyId, is_deleted: false, ...(pricing.anyProduct ? {} : { show_to_bot: true }) },
         relations: ['variants'],
       });
-      if (!product) return { items: priced, problem: `unknown_product_${item.product_id}` };
+      let found = byId;
+      // the AI also writes the product name it means: when the id points to another product (a look-alike from the
+      // search), the product with that name is used – the customer gets what was talked about
+      const named = String(item.product_name ?? '').trim();
+      if (named && (!found || nameMatch(named, found.name) < 0.6)) {
+        const byName = await this.productByName(companyId, named, pricing.anyProduct === true);
+        if (byName) found = byName;
+      }
+      if (!found) return { items: priced, problem: `unknown_product_${item.product_id}` };
+      const product = found;
       if (product.is_available === false) return { items: priced, problem: `unavailable:${product.name}` };
       const options = productOptions(product);
       let unit = Number(product.price) || 0;
