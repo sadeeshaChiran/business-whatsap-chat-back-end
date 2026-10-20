@@ -211,6 +211,19 @@ function askMissingMessage(language: string, missing: string[]): string {
   return `To confirm your order, please send your ${want}.`;
 }
 
+/** The order so far (before the customer's details are in): items, prices, total, and what is still needed. */
+function cartMessage(language: string, order: { items: Array<{ quantity: number; product_name: string; variant_name: string; total_price: number }>;
+  delivery_area: string | null; delivery_fee: number | null; subtotal: number; total: number }, missing: string[]): string {
+  const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''} – ${rs(item.total_price)}`);
+  if (order.delivery_fee != null) lines.push(`Delivery${order.delivery_area && order.delivery_area !== '*' ? ` (${order.delivery_area})` : ''}: ${rs(order.delivery_fee)}`);
+  lines.push(`Total: ${rs(order.delivery_fee != null ? order.total : order.subtotal)}${order.delivery_fee == null ? ' + delivery' : ''}`);
+  const want = missing.join(', ');
+  const ask = language === 'sinhala' ? `Order එක එවන්න ඔයාගේ ${want} එවන්නකෝ.`
+    : language === 'tamil' ? `ஆர்டரை அனுப்ப உங்கள் ${want} அனுப்புங்கள்.`
+    : language === 'sinhala_latin' ? `Order eka ewanna oyage ${want} ewannako.` : `To send the order, please share your ${want}.`;
+  return `${lines.join('\n')}\n\n${ask}`;
+}
+
 /** The order summary written by the backend (real prices): on every summary turn, and when the bot skipped it. */
 function summaryMessage(language: string, order: { items: Array<{ quantity: number; product_name: string; variant_name: string; total_price: number }>;
   delivery_area: string | null; delivery_fee: number | null; total: number; customer_name: string; address: string; customer_phone: string; payment_method: string }): string {
@@ -982,6 +995,13 @@ export class SalesBotEngineService implements OnModuleInit {
         invoiceOrderIds.push(savedOrderId);
         intents.add('order');
       }
+      if (orderOutcome.startsWith('cart:') && session.pending_order) {
+        // "order eke mokada thiyenne?" / "total eka?" before the address is in: the items so far + the total,
+        // then one line asking for what is still missing – never a "here is your order" line with nothing below it
+        const lead = String(result.reply ?? '').trim();
+        const keep = lead && lead.length <= 260 && !/total|එකතුව|மொத்தம்/i.test(lead) && !/^\d+ x /m.test(lead);
+        replyOverride = `${keep ? `${lead}\n\n` : ''}${cartMessage(result.language, session.pending_order, orderOutcome.slice(5).split(','))}`;
+      }
       if (orderOutcome.startsWith('ask:')) {
         // a detail is missing (address, name …). The customer's question comes first: the AI's own answer goes out
         // (it asks for the details itself when it is time). Only a "yes" to confirm, an empty answer or a "here is your
@@ -1673,7 +1693,7 @@ export class SalesBotEngineService implements OnModuleInit {
         session.pending_order = { ...pending, summary_shown: true };
         return 'summary_shown';
       }
-      if (order.summary_shown === true) {
+      if (order.summary_shown === true || wantSummary) {
         // The AI wanted to show the summary ("meka thamai order eka 👇") but something is missing: the customer would get
         // that line WITHOUT a summary, and a later "?" was taken as "summary seen". Ask for what is missing instead.
         session.pending_order = { ...pending, summary_shown: false };
@@ -1682,7 +1702,8 @@ export class SalesBotEngineService implements OnModuleInit {
         if (problem || subtotal <= 0) return `blocked:${problem || 'total is zero'}`;
         const missingNow = [!name ? 'name' : '', !address ? 'address' : '',
           isSocial && phone.replace(/\D/g, '').length < 9 ? 'phone number' : ''].filter(Boolean);
-        if (missingNow.length) return `ask:${missingNow.join(',')}`;
+        // the customer still sees what is in the order so far (items + total), and what is needed to send it
+        if (missingNow.length) return `cart:${missingNow.join(',')}`;
       }
       return 'pending';
     }
