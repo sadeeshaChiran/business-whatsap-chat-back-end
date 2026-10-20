@@ -18,6 +18,8 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import pg from 'pg';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const API = (process.env.API_URL || 'http://localhost:3001/v1/api').replace(/\/+$/, '');
 const USD_LKR = Number(process.env.USD_LKR || 330.33);
@@ -360,4 +362,8 @@ async function main() {
   console.log('Afterwards set SALES_BOT_TEST_MODE=false again.');
 }
 
-main().catch((error) => { console.error(`ERROR: ${error.message}`); process.exit(1); });
+// run as a script (node scripts/scale-test.mjs); scripts/client-test.mjs imports testShop / chat / call
+export { testShop, chat, call, DATABASE_URL };
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => { console.error(`ERROR: ${error.message}`); process.exit(1); });
+}
