@@ -22,3 +22,4 @@ logs/
 test-results/
 scale-test-results.csv
 __pycache__/
+scripts/bot-training/clients/.credentials

@@ -79,8 +79,10 @@ export function sriLankaNow(now = new Date()) {
 }
 
 /** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
- * bot finds products by meaning (vector search), so every product is visible. */
-const MAX_PRODUCTS = 2500;
+ * bot finds products by meaning (vector search), so every product is visible. This cap must stay above the
+ * biggest shop: with 2,500 a 3,636-product shop lost every product after "S…" (sorted by name) – the bot said
+ * "not available" for products the shop has. */
+const MAX_PRODUCTS = 20000;
 /** above this many products, descriptions are shortened (keeps the request small) */
 const LONG_TEXT_LIMIT = 400;
 
@@ -292,6 +294,9 @@ export class SalesBotContextService {
       relations: ['category', 'variants'],
       order: { name: 'ASC' },
       take: MAX_PRODUCTS,
+    }).then((rows) => {
+      if (rows.length >= MAX_PRODUCTS) console.warn(`[sales bot] company ${companyId} has more than ${MAX_PRODUCTS} products – the bot does not see the rest`);
+      return rows;
     });
   }
 
