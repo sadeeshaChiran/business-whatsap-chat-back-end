@@ -17,7 +17,7 @@ describe('summary turn with missing details', () => {
     const session: any = {};
     const out = await engine().handleOrder(16, { id: 1 }, whatsappUser,
       { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Sadisha', address: '', summary_shown: true }, session);
-    expect(out).toBe('ask:address');
+    expect(out).toBe('cart:address');   // the items so far + total, then 'please send your address'
     expect(session.pending_order.summary_shown).toBe(false);
   });
 
