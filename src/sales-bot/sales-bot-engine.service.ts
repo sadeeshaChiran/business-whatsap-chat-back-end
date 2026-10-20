@@ -1636,6 +1636,19 @@ export class SalesBotEngineService implements OnModuleInit {
     order: SalesBotOrder, session: BotSession, wantSummary = false): Promise<string> {
     // "ok" after the summary: the AI (often the small model) may send the order without the items / name / address it
     // already gave - the customer agreed to the summary they saw, so the missing parts come from that summary
+    // name / phone / address / area the customer already gave stay in the order when the AI leaves them out
+    // (it often sends only the items when one more product is added)
+    const before = session.pending_order;
+    if (before) {
+      order = {
+        ...order,
+        customer_name: String(order.customer_name ?? '').trim() || before.customer_name,
+        customer_phone: String(order.customer_phone ?? '').trim() || before.customer_phone,
+        address: String(order.address ?? '').trim() || before.address,
+        delivery_area: String(order.delivery_area ?? '').trim() || before.delivery_area || undefined,
+        payment_method: order.payment_method || before.payment_method,
+      };
+    }
     const shown = session.pending_order?.summary_shown ? session.pending_order : null;
     if (order.confirm_order && shown) {
       order = {
