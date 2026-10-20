@@ -33,3 +33,11 @@ Only a FAIL that happens for every shop is a code problem.
               "price": 350, "order": false, "photo": false } }
 ```
 Each message in `send` is answered before the next one is sent. All `expect` keys are optional.
+
+## Full project test
+```
+bash scripts/full-test.sh          # code tests: API jest + type check, bot pytest + guards, web type check, training files
+bash scripts/full-test.sh --live   # + bot health, scale test (6 test shops), client test for every line in clients/.credentials
+```
+`clients/.credentials` (not in git): `chu-lk.json  owner@chu.lk  'password'` – one client per line.
+Live tests need `SALES_BOT_TEST_MODE=true` on the API (restart), and `false` again afterwards.

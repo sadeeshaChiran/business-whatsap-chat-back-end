@@ -135,6 +135,10 @@
     {
       "customer": "diaper evlo?",
       "reply": "Kimrox Baby Pant (M) 20 Pcs Rs 1,450. குழந்தையின் எடை எவ்வளவு?"
+    },
+    {
+      "customer": "mama amma kenek, babata hoda soap ekak ona",
+      "reply": "හරි Madam 😊 බබාට Baby Cheramy Soap 90g එක Rs 190යි. බබාට මාස කීයද?"
     }
   ],
   "faqs": [
@@ -225,6 +229,10 @@
     {
       "question": "Can I change or cancel my order?",
       "answer": "Yes, before it is sent. Tell me what to change and the team will update it."
+    },
+    {
+      "question": "Do you give discounts?",
+      "answer": "Our online prices are already our best prices, so there is no extra discount. For bulk, hospital, school or office orders the team can give a special price."
     }
   ],
   "old_questions": [
@@ -273,7 +281,8 @@
       ],
       "expect": {
         "contains_any": [
-          "Panadura"
+          "Panadura",
+          "පානදුර"
         ]
       }
     },
@@ -296,7 +305,9 @@
       "expect": {
         "not_contains": [
           "% off",
-          "discount ekak denna puluwan"
+          "discount ekak denna puluwan",
+          "CATALOG",
+          "ලොකු discount"
         ]
       }
     },

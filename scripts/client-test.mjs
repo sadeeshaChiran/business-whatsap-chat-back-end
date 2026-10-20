@@ -99,6 +99,7 @@ async function main() {
   const out = `client-test-${String(name).replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.csv`;
   writeFileSync(out, ['check,result,detail', ...checks.map(([l, g, d]) => [l, g ? 'PASS' : 'FAIL', String(d ?? '')].map((x) => `"${String(x).replace(/"/g, '""')}"`).join(','))].join('\n'));
   console.log(`Saved ${out}. Afterwards set SALES_BOT_TEST_MODE=false again.`);
+  if (pct < 85) process.exitCode = 2;   // full-test.sh shows it as FAIL
 }
 
 main().catch((error) => { console.error(`ERROR: ${error.message}`); process.exit(1); });
