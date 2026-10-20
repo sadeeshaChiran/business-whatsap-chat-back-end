@@ -180,7 +180,7 @@ function changeHoldMessage(language: string): string {
 const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 const rs = (value: number) => `Rs ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
 
-/** Words of a product name ("Kimrox Baby Pant (M) 20 Pcs" → kimrox, baby, pant, m, 20, pcs). */
+/** Words of a product name ("Brand X Cotton Shirt (L) 2 Pcs" → brand, x, cotton, shirt, l, 2, pcs). */
 export function nameWords(name: string): string[] {
   return [...new Set(String(name ?? '').toLowerCase().split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF]+/).filter(Boolean))];
 }
@@ -292,7 +292,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (event.provider === 'simulator') this.simulated.add(event.conversationId);
     // a new customer message cancels the planned follow-up (the reply to it plans a new one)
     await this.cancelPlannedFollowUp(event.conversationId).catch(() => undefined);
-    // a message that looks finished ("Kimrox M size kiyada?", a photo, a long sentence) is answered sooner;
+    // a message that looks finished ("<product> M size kiyada?", a photo, a long sentence) is answered sooner;
     // a short piece ("hi", "price", "M") waits a little longer for the rest of what they are typing
     const [last] = await this.messageRepository.query(
       `SELECT content, message_type FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' ORDER BY id DESC LIMIT 1`,
@@ -977,7 +977,12 @@ export class SalesBotEngineService implements OnModuleInit {
       if (orderOutcome === 'summary_shown' && session.pending_order) {
         // the AI's short lead line ("Hari, meka thamai order eka:") + the exact summary; a long AI summary is replaced
         const lead = String(result.reply ?? '').trim();
-        replyOverride = `${lead && lead.length <= 160 && !/\d{3}/.test(lead) ? `${lead}\n\n` : ''}${summaryMessage(result.language, session.pending_order)}`;
+        replyOverride = `${lead && lead.length <= 260 && !/total|එකතුව|மொத்தம்/i.test(lead) ? `${lead}\n\n` : ''}${summaryMessage(result.language, session.pending_order)}`;
+      }
+      if (orderOutcome === 'unchanged' && session.pending_order) {
+        // nothing changed: only when the customer asked to see the summary again ("summary eka ewanna") it comes again
+        const lead = String(result.reply ?? '').trim();
+        if (!lead || (lead.length <= 90 && SUMMARY_WORDS.test(lead))) replyOverride = summaryMessage(result.language, session.pending_order);
       }
       if (orderOutcome.startsWith('unavailable:')) {
         replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
@@ -1551,7 +1556,7 @@ export class SalesBotEngineService implements OnModuleInit {
       // the AI also writes the product name it means: when the id points to another product (a look-alike from the
       // search), the product with that name is used – the customer gets what was talked about
       const named = String(item.product_name ?? '').trim();
-      if (named && (!found || nameMatch(named, found.name) < 0.6)) {
+      if (named && (!found || Math.min(nameMatch(named, found.name), nameMatch(found.name, named)) < 0.85)) {
         const byName = await this.productByName(companyId, named, pricing.anyProduct === true);
         if (byName) found = byName;
       }
@@ -1633,6 +1638,9 @@ export class SalesBotEngineService implements OnModuleInit {
       // the summary turn: the customer sees the EXACT summary from the server (real prices, delivery fee, total) –
       // the AI only writes a short line before it (saves its output tokens and never shows a wrong total)
       const complete = !problem && subtotal > 0 && name && address && (!isSocial || phone.replace(/\D/g, '').length >= 9);
+      // the same order the customer already saw: no second summary – the AI's answer to their message goes out instead
+      // (a question like "Bc shampoo kiyanne mokakda" got the whole summary again and no answer)
+      if (previousShown && signature(previous) === signature({ items, address }) && complete) return 'unchanged';
       if ((order.summary_shown === true || wantSummary) && complete) {
         // the AI said "here is your order" without the flag, or the customer just sent the last missing details:
         // the summary comes right now, in this same reply (not one message later)
