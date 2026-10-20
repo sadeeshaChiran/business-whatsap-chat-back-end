@@ -983,7 +983,13 @@ export class SalesBotEngineService implements OnModuleInit {
         intents.add('order');
       }
       if (orderOutcome.startsWith('ask:')) {
-        replyOverride = askMissingMessage(result.language, orderOutcome.slice(4).split(','));
+        // a detail is missing (address, name …). The customer's question comes first: the AI's own answer goes out
+        // (it asks for the details itself when it is time). Only a "yes" to confirm, an empty answer or a "here is your
+        // summary" line (with no summary to show) is replaced by the short "please send your …" message.
+        const said = String(result.reply ?? '').trim();
+        if (order.confirm_order || !said || SUMMARY_WORDS.test(said)) {
+          replyOverride = askMissingMessage(result.language, orderOutcome.slice(4).split(','));
+        }
       }
       if (orderOutcome === 'summary' && session.pending_order) {
         replyOverride = summaryMessage(result.language, session.pending_order);
