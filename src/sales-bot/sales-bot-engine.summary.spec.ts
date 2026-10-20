@@ -54,3 +54,22 @@ describe('summary turn with missing details', () => {
     expect(SUMMARY_WORDS.test('Order එක දාන්නද?')).toBe(false);
   });
 });
+
+describe('order item names double-check the product id', () => {
+  it('a look-alike id is replaced by the product with the name the AI wrote', async () => {
+    const { nameMatch } = require('./sales-bot-engine.service');
+    expect(nameMatch('Water Mat', '2 CUP Juicer')).toBe(0);
+    expect(nameMatch('Kimrox Baby Pant (M) 20 Pcs', 'Kimrox Baby Pant (M) 20 Pcs')).toBe(1);
+    const juicer = { id: 9, name: '2 CUP Juicer', price: 1495, is_available: true, variants: [], weight: 1 };
+    const mat = { id: 2, name: 'Water Mat', price: 695, is_available: true, variants: [], weight: 1 };
+    const round = { id: 3, name: 'Water Mat Round', price: 695, is_available: true, variants: [], weight: 1 };
+    const qb: any = { leftJoinAndSelect: () => qb, where: () => qb, andWhere: () => qb, take: () => qb, getMany: async () => [round, mat] };
+    const service = new (SalesBotEngineService as any)(...Array.from({ length: 24 }, () => ({})));
+    service.productRepository = { findOne: async () => juicer, createQueryBuilder: () => qb };
+    const out = await service.priceItems(16, [{ product_id: 9, product_name: 'Water Mat', quantity: 3 }]);
+    expect(out.problem).toBe('');
+    expect(out.items[0]).toMatchObject({ product_id: 2, product_name: 'Water Mat', quantity: 3, total_price: 2085 });
+    const same = await service.priceItems(16, [{ product_id: 9, product_name: '2 CUP Juicer', quantity: 1 }]);
+    expect(same.items[0].product_id).toBe(9);   // the name fits the id: nothing changes
+  });
+});
