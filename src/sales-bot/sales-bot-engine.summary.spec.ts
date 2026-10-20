@@ -44,6 +44,15 @@ describe('summary turn with missing details', () => {
     expect(saved[0]).toMatchObject({ address: '22 Lake Road, Colombo', customer_name: 'Sunil', total_amount: 6400 + 550 });
   });
 
+  it('the same order again (the customer asked a question): no second summary', async () => {
+    const service = engine();
+    const session: any = {};
+    const order = { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Sadee', address: 'No. 07, Kurunegala', delivery_area: '*', summary_shown: true };
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, order, session)).toBe('summary_shown');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, order, session)).toBe('unchanged');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { ...order, items: [{ product_id: 5, quantity: 2 }] }, session)).toBe('summary_shown');
+  });
+
   it('the AI says "here is the summary" without the flag: the summary still comes in the same reply', async () => {
     const session: any = {};
     const out = await engine().handleOrder(16, { id: 1 }, whatsappUser,
@@ -69,6 +78,14 @@ describe('order item names double-check the product id', () => {
     const out = await service.priceItems(16, [{ product_id: 9, product_name: 'Water Mat', quantity: 3 }]);
     expect(out.problem).toBe('');
     expect(out.items[0]).toMatchObject({ product_id: 2, product_name: 'Water Mat', quantity: 3, total_price: 2085 });
+    // a premium product named, a normal one's id: the premium one is used
+    const normal = { id: 20, name: 'Farlin Baby Diaper Pants (L) 24 Pcs', price: 1725, is_available: true, variants: [], weight: 1 };
+    const premium = { id: 21, name: 'Farlin Baby Premium Diaper Pants (M) 80 Pcs', price: 5750, is_available: true, variants: [], weight: 1 };
+    const qb2: any = { leftJoinAndSelect: () => qb2, where: () => qb2, andWhere: () => qb2, take: () => qb2, getMany: async () => [premium] };
+    service.productRepository = { findOne: async () => normal, createQueryBuilder: () => qb2 };
+    const fixed = await service.priceItems(16, [{ product_id: 20, product_name: 'Farlin Baby Premium Diaper Pants (M) 80 Pcs', quantity: 1 }]);
+    expect(fixed.items[0].product_id).toBe(21);
+    service.productRepository = { findOne: async () => juicer, createQueryBuilder: () => qb };
     const same = await service.priceItems(16, [{ product_id: 9, product_name: '2 CUP Juicer', quantity: 1 }]);
     expect(same.items[0].product_id).toBe(9);   // the name fits the id: nothing changes
   });

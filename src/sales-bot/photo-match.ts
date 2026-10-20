@@ -74,7 +74,7 @@ export function matchByText(products: Product[], analysis: Pick<Analysis, 'item_
     const shared = wanted.filter((w) => have.includes(w)).length;
     const samePrice = price > 0 && prices(product).some((n) => Math.abs(n - price) < 1);
     return { product, cover: shared / wanted.length, extra: have.length - shared, samePrice };
-  }).filter((row) => row.cover >= 0.99 || (row.cover >= 0.5 && row.samePrice))   // "Sunmy Teeth" Rs 325 = Sunmy Teether Rs 325
+  }).filter((row) => row.cover >= 0.99 || (row.cover >= 0.5 && row.samePrice))   // a shortened name on an ad + the same price = that product
     .sort((a, b) => Number(b.samePrice) - Number(a.samePrice) || b.cover - a.cover || a.extra - b.extra);
   if (!scored.length) return null;
   const priced = scored.filter((row) => row.samePrice);
