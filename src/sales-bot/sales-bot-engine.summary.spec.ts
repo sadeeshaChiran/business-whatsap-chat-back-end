@@ -90,3 +90,13 @@ describe('order item names double-check the product id', () => {
     expect(same.items[0].product_id).toBe(9);   // the name fits the id: nothing changes
   });
 });
+
+describe('general matching rules', () => {
+  it('option names match in any word order, product names despite typos / plurals', () => {
+    const { optionKey, nameMatch } = require('./sales-bot-engine.service');
+    expect(optionKey('XL / White')).toBe(optionKey('white xl'));
+    expect(optionKey('Colour: White / Size: XL')).toBe(optionKey('XL White'));
+    expect(optionKey('XL / Pink')).not.toBe(optionKey('XL White'));
+    expect(nameMatch('Washable Diaper Plain', 'Washable Diapper PLAIN (two Inserts)')).toBe(1);
+  });
+});

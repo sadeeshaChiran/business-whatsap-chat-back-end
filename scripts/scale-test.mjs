@@ -268,9 +268,16 @@ async function testShop(db, shop, log) {
       const rows = await orderRows();
       const okTurn = (browse.turns[2] ?? []).map((r) => String(r.content)).join(' ');
       check('"ok" to another answer does not confirm the order', !/invoice for order/i.test(okTurn), okTurn.slice(0, 50));
-      check('Asked-about product is not added to the order', rows.length === 1 && !(await db.query(
-        `SELECT 1 FROM bot_order_item WHERE order_id = $1 AND product_id = $2`, [rows[0].id, other.id])).rows.length,
-        rows.length ? `order #${rows[0].id}` : 'no order after the clear yes');
+      check('Order saved after the clear yes', rows.length === 1, rows.length ? `order #${rows[0].id}` : 'no order');
+
+      // 8c) the customer only ASKS about another product and says they will think about it: it is not added
+      const think = await step(`asks about another product, does not take it: ${other.name}`,
+        [[`${what} 1k ona. Kamal Fernando, 5 Station Road, ${areaWord}. COD`], [`${other.name} kiyada?`], ['hmm eka passe balannam'], ['ow confirm karanna']]);
+      const { rows: mine } = await db.query(
+        `SELECT o.id FROM bot_order o JOIN bot_conversation c ON c.bot_channel_user_id = o.bot_channel_user_id WHERE c.id = $1 ORDER BY o.id`, [think.conversationId]);
+      const added = mine.length ? (await db.query(`SELECT 1 FROM bot_order_item WHERE order_id = $1 AND product_id = $2`, [mine[0].id, other.id])).rows.length : 0;
+      check('Asked-about product is not added to the order', mine.length === 1 && !added,
+        mine.length ? `order #${mine[0].id}${added ? ` has ${other.name}` : ''}` : 'no order after the clear yes');
     }
   }
 
