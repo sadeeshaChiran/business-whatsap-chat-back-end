@@ -180,9 +180,17 @@ function changeHoldMessage(language: string): string {
 const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
 const rs = (value: number) => `Rs ${Number(value || 0).toLocaleString('en-LK', { maximumFractionDigits: 2 })}`;
 
+/** An option name as a sorted word set: "XL / White" = "white xl" (the label part "Colour:" / "Size:" ignored). */
+export function optionKey(text: string): string {
+  return String(text ?? '').toLowerCase().replace(/\b(colou?r|size|pack|type|style)\s*:/g, ' ')
+    .split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF.]+/).filter(Boolean).sort().join(' ');
+}
+
 /** Words of a product name ("Brand X Cotton Shirt (L) 2 Pcs" → brand, x, cotton, shirt, l, 2, pcs). */
 export function nameWords(name: string): string[] {
-  return [...new Set(String(name ?? '').toLowerCase().split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF]+/).filter(Boolean))];
+  // "Diapper" = "diaper", "pants" = "pant": typos and plurals in shop product names don't matter
+  return [...new Set(String(name ?? '').toLowerCase().split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF]+/).filter(Boolean)
+    .map((w) => w.replace(/([a-z])\1+/g, '$1').replace(/(?<=[a-z]{3})(es|s)$/, '')))];
 }
 /** Share of the words of `a` that are also in `b` (0-1). */
 export function nameMatch(a: string, b: string): number {
@@ -909,8 +917,12 @@ export class SalesBotEngineService implements OnModuleInit {
         duration_min: service?.duration_min ?? null,
         created_by: 'bot', agent_id: await this.customerAgent(conversation),
       });
-      // the time must still be free (two customers can ask for the same time at once: lock that day while checking)
-      const taken = await this.bookingRepository.manager.transaction(async (manager) => {
+      // the same booking again (the AI sent confirm once more on the customer's "ok" / "thanks"): it is already saved –
+      // never answer "that time is taken" because of the customer's own booking
+      const same = await this.bookingRepository.findOne({ where: {
+        company_id: companyId, bot_channel_user_id: channelUser.id, date, time, service_name: row.service_name,
+        status: In(['requested', 'confirmed']) } });
+      const taken = same ? null : await this.bookingRepository.manager.transaction(async (manager) => {
         if (start != null && normalizeBookingDate(date)) {
           await manager.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [companyId, date]);
           const day = await this.contextService.bookingDay(companyId, date);
@@ -922,7 +934,9 @@ export class SalesBotEngineService implements OnModuleInit {
         await manager.save(row);
         return null;
       });
-      if (taken) {
+      if (same) {
+        // already booked: the AI's own answer goes out, nothing new is saved or sent
+      } else if (taken) {
         replyOverride = slotTakenMessage(result.language, date, start as number, taken);
         await this.advanceLead(conversation.id, 'proposal', { booking: `${booking.service_name} ${date} ${time} (time taken)`.trim() });
       } else {
@@ -1535,7 +1549,7 @@ export class SalesBotEngineService implements OnModuleInit {
       .leftJoinAndSelect('p.variants', 'v')
       .where('p.company_id = :companyId AND p.is_deleted = false', { companyId })
       .andWhere(anyProduct ? '1=1' : 'p.show_to_bot = true')
-      .andWhere('p.name ILIKE :w', { w: `%${words[0]}%` })
+      .andWhere('p.name ILIKE :w', { w: `%${words[0].slice(0, Math.max(4, words[0].length - 2))}%` })   // "diap" finds Diaper and Diapper
       .take(200).getMany();
     const scored = rows.map((row) => ({ row, score: Math.min(nameMatch(name, row.name), nameMatch(row.name, name)) }))
       .sort((a, b) => b.score - a.score);
@@ -1571,8 +1585,14 @@ export class SalesBotEngineService implements OnModuleInit {
       if (options.length) {
         const byId = item.variant_id ? options[Number(item.variant_id) - 1] : undefined;
         const wanted = String(item.variant_name ?? '').trim().toLowerCase();
-        const byName = options.findIndex((option) => variantLabel(option).toLowerCase() === wanted || String(option.variant_value ?? '').trim().toLowerCase() === wanted);
-        const index = byId && (!wanted || variantLabel(byId).toLowerCase() === wanted) ? Number(item.variant_id) - 1 : byName;
+        // "White XL", "XL / White", "xl white" are the same option (word order and separators don't matter)
+        const sameOption = (option: (typeof options)[number]) => {
+          const label = variantLabel(option).toLowerCase();
+          return label === wanted || String(option.variant_value ?? '').trim().toLowerCase() === wanted || optionKey(label) === optionKey(wanted)
+            || optionKey(String(option.variant_value ?? '')) === optionKey(wanted);
+        };
+        const byName = wanted ? options.findIndex(sameOption) : -1;
+        const index = byId && (!wanted || sameOption(byId)) ? Number(item.variant_id) - 1 : byName;
         if (index < 0) return { items: priced, problem: `choose_variant_for_${product.name}` };
         if (options[index].available === false) return { items: priced, problem: `unavailable:${product.name} (${variantLabel(options[index])})` };
         unit = variantPrice(product, options[index]);
