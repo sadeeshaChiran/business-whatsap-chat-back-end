@@ -20,9 +20,13 @@ run() {   # run "label" command...
 # ---------- 1) code tests ----------
 run "API unit tests (jest)" npx jest --silent
 run "API type check" npx tsc --noEmit -p tsconfig.build.json
+# the bot's own Python (its virtualenv has numpy, google-genai …); pytest is installed there once if missing
+PY=python3
+for p in "$BOT_DIR/.venv/bin/python" "$BOT_DIR/venv/bin/python" "$BOT_DIR/env/bin/python"; do [ -x "$p" ] && PY=$p && break; done
 if [ -d "$BOT_DIR" ]; then
-  run "Bot unit tests (pytest)" bash -c "cd '$BOT_DIR' && python3 -m pytest -q"
-  run "Bot guard checks" bash -c "cd '$BOT_DIR' && GEMINI_API_KEY=test python3 tests/test_quality_guards.py"
+  "$PY" -c "import pytest" 2>/dev/null || "$PY" -m pip install -q pytest 2>/dev/null || "$PY" -m pip install -q --break-system-packages pytest
+  run "Bot unit tests (pytest)" bash -c "cd '$BOT_DIR' && '$PY' -m pytest -q"
+  run "Bot guard checks" bash -c "cd '$BOT_DIR' && GEMINI_API_KEY=test '$PY' tests/test_quality_guards.py"
 fi
 if [ -d "$WEB_DIR" ]; then
   run "Web app type check" bash -c "cd '$WEB_DIR' && npx tsc -b"

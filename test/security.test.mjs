@@ -257,12 +257,17 @@ describe('2. Company admin vs agent permissions', () => {
     assert.equal(r.status, 400);
   });
 
-  test('Free package agent limit (3) is enforced', async () => {
+  test('Free package agent limit (from the package settings) is enforced', async () => {
     const ws = await createWorkspace('sec-limit');
-    for (let i = 0; i < 3; i += 1) await createAgent(ws, `sec-limit-${i}`);
-    const fourth = await api('POST', '/users/agents', { token: ws.token, body: { name: 'Fourth', email: `fourth-${RUN}@x.lk`, password: PASSWORD } });
-    assert.equal(fourth.status, 400);
-    assert.match(fourth.json.message, /allows 3 agents/);
+    const [{ max_agents: max }] = await sql(`SELECT max_agents FROM platform_package WHERE code = 'free'`);
+    assert.ok(max != null && max >= 1, 'Free has an agent limit');
+    for (let i = 0; i < max; i += 1) {
+      const r = await api('POST', '/users/agents', { token: ws.token, body: { name: `Agent ${i}`, email: `sec-limit-${i}-${RUN}@x.lk`, password: PASSWORD } });
+      assert.equal(r.status, 201, JSON.stringify(r.json));
+    }
+    const extra = await api('POST', '/users/agents', { token: ws.token, body: { name: 'One too many', email: `extra-${RUN}@x.lk`, password: PASSWORD } });
+    assert.equal(extra.status, 400);
+    assert.match(extra.json.message, new RegExp(`allows ${max} agents`));
   });
 });
 

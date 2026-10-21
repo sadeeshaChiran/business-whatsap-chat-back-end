@@ -54,6 +54,8 @@ ON CONFLICT (key) DO NOTHING;
 -- credit top-ups come from the packages section below.
 EOF
 grep -v -E '^\s*--' "$HERE/migrations/manual/packages-2026-10-final.sql" | sed '/^\s*$/d'
+# Free: the AI bot only for the first 30 days (as the trials migration sets on an existing database)
+echo "UPDATE platform_package SET bot_days = 30 WHERE code = 'free' AND bot_days IS NULL;"
 echo "COMMIT;"
 
 HASH="$(python3 - "$PASS" <<'PY'

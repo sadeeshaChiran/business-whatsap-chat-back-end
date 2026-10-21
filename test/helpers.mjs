@@ -90,7 +90,13 @@ export async function login(email, password = PASSWORD) {
 
 export async function createAgent(admin, label, { teamRole } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
-  const r = await api('POST', '/users/agents', { token: admin.token, body: { name: `${label} Agent`, email, password: PASSWORD, ...(teamRole ? { team_role: teamRole } : {}) } });
+  const body = { name: `${label} Agent`, email, password: PASSWORD, ...(teamRole ? { team_role: teamRole } : {}) };
+  let r = await api('POST', '/users/agents', { token: admin.token, body });
+  // Free allows only 1 agent: tests that need a team move the shop to Starter (3 agents) and try again
+  if (r.status === 400 && /package allows \d+ agents/.test(String(r.json?.message)) && admin.user?.company_id) {
+    await sql(`UPDATE companies SET plan = 'starter' WHERE id = $1 AND plan = 'free'`, [admin.user.company_id]);
+    r = await api('POST', '/users/agents', { token: admin.token, body });
+  }
   if (r.status !== 201) throw new Error(`create agent failed: ${r.status} ${JSON.stringify(r.json)}`);
   const session = await login(email);
   return { email, id: r.data.id, token: session.data.access_token, user: session.data.user };

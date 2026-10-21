@@ -32,5 +32,6 @@ test('summary turn: short AI line + exact server summary', async () => {
   assert.match(text, /2 x Red Shoe – Rs 5,000/);
   assert.match(text, /Delivery \(Colombo\): Rs 350/);
   assert.match(text, /Total: Rs 5,350/);
-  assert.match(text, /Order eka confirm karannada\?$/);
+  // Singlish customers get the replies in Sinhala letters, the server's confirm question too
+  assert.match(text, /Order එක confirm කරන්නද\?$/);
 });
