@@ -146,7 +146,8 @@ fi
 if [ "$RUN_UI" = 1 ] && [ -d "$WEB_DIR" ]; then
   echo "== 5) UI tests in a real browser (desktop + mobile) – details in staging-ui.log"
   (cd "$WEB_DIR" && npx playwright install chromium > /dev/null 2>&1 || npx playwright install --with-deps chromium > /dev/null 2>&1
-   VITE_API_BASE_URL=http://127.0.0.1:$API_PORT/v1/api npx vite build --outDir "$WORK/web" > /dev/null 2>&1) || echo "web build failed"
+   # the web app's own .env may hold live settings (Pusher, Google sign-in): the test build talks only to the test API
+   VITE_API_BASE_URL=http://127.0.0.1:$API_PORT/v1/api VITE_PUSHER_KEY= VITE_PUSHER_HOST= VITE_PUSHER_PORT= VITE_GOOGLE_CLIENT_ID= npx vite build --outDir "$WORK/web" > /dev/null 2>&1) || echo "web build failed"
   (cd "$WEB_DIR" && exec ./node_modules/.bin/vite preview --outDir "$WORK/web" --port "$WEB_PORT" --strictPort > "$WORK-web.log" 2>&1) &
   PIDS+=($!)
   wait_for "http://127.0.0.1:$WEB_PORT" || { tail -20 "$WORK-web.log"; exit 1; }
