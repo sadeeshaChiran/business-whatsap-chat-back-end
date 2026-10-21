@@ -16,7 +16,7 @@ set -u
 BACKEND=$(cd "$(dirname "$0")/.." && pwd)
 BOT_DIR=${BOT_DIR:-/var/www/business-whatsap-chat-bot}
 WEB_DIR=${WEB_DIR:-/var/www/business-whatsap-chat-front-end}
-API_PORT=${API_PORT:-3901}; BOT_PORT=${BOT_PORT:-8901}; WEB_PORT=${WEB_PORT:-5901}
+API_PORT=${API_PORT:-6001}; BOT_PORT=${BOT_PORT:-6002}; WEB_PORT=${WEB_PORT:-6000}
 RUN_API=1; RUN_UI=1; KEEP=0
 for a in "$@"; do case $a in --api) RUN_UI=0 ;; --ui) RUN_API=0 ;; --keep) KEEP=1 ;; esac; done
 
