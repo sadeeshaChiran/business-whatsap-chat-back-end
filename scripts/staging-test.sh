@@ -52,8 +52,30 @@ SUPER_ADMIN_EMAIL=e2e-admin@agentmetra.test SUPER_ADMIN_PASSWORD=Test1234pass \
 psql "$TEST_DB" -q -v ON_ERROR_STOP=1 -f "$WORK.sql" > /dev/null || { echo "loading the test database failed"; exit 1; }
 
 echo "== 2) fake sales bot on :$BOT_PORT (real bot code, fake Gemini)"
-PY=python3
-for p in "$BOT_DIR/.venv/bin/python" "$BOT_DIR/venv/bin/python" "$BOT_DIR/env/bin/python"; do [ -x "$p" ] && PY=$p && break; done
+# the Python the real bot runs with: its venv, else the interpreter pm2 uses for it, else python3
+PY="${BOT_PY:-}"
+[ -z "$PY" ] && for p in "$BOT_DIR/.venv/bin/python" "$BOT_DIR/venv/bin/python" "$BOT_DIR/env/bin/python"; do [ -x "$p" ] && PY=$p && break; done
+if [ -z "$PY" ] && command -v pm2 > /dev/null; then
+  PY=$(pm2 jlist 2>/dev/null | python3 -c '
+import json, os, sys
+bot = os.path.realpath(sys.argv[1])
+for p in json.load(sys.stdin):
+    e = p.get("pm2_env", {})
+    if os.path.realpath(e.get("pm_cwd", "")) != bot: continue
+    interp, script = e.get("exec_interpreter", ""), e.get("pm_exec_path", "")
+    for c in (interp, os.path.join(os.path.dirname(script), "python"), os.path.join(os.path.dirname(script), "python3")):
+        if c and "python" in os.path.basename(c) and os.access(c, os.X_OK): print(c); sys.exit()
+' "$BOT_DIR" 2>/dev/null)
+fi
+PY=${PY:-python3}
+echo "   bot folder: $BOT_DIR   python: $PY"
+if ! grep -q CONTRACT_PORT "$BOT_DIR/tests/contract_server.py" 2>/dev/null; then
+  echo "The bot code in $BOT_DIR is older than this test (tests/contract_server.py). Unzip the new agent-metra-sales-bot.zip there first."; exit 1
+fi
+if ! (cd "$BOT_DIR" && "$PY" -c "import fastapi, uvicorn, numpy, google.genai" 2>/dev/null); then
+  echo "$PY cannot load the bot's packages. Use the Python the bot runs with:  BOT_PY=/path/to/python bash scripts/staging-test.sh"
+  echo "or install them:  $PY -m pip install -r $BOT_DIR/requirements.txt"; exit 1
+fi
 rm -rf "$WORK-captured" && mkdir -p "$WORK-captured"
 (cd "$BOT_DIR" && CONTRACT_PORT=$BOT_PORT CAPTURE_DIR="$WORK-captured" BOT_DIR=. GEMINI_API_KEY=fake BOT_API_KEY=test-key BOT_MODEL=gemini-3-flash-preview \
   exec "$PY" tests/contract_server.py > "$WORK-bot.log" 2>&1) &
@@ -101,7 +123,7 @@ EOF
 (cd "$WORK" && set -a && . ./.env && set +a && exec node dist/main.js > "$WORK-api.log" 2>&1) &
 PIDS+=($!)
 wait_for "http://127.0.0.1:$API_PORT/v1/api/auth/me" || { tail -30 "$WORK-api.log"; exit 1; }
-wait_for "http://127.0.0.1:$BOT_PORT/health" || { tail -30 "$WORK-bot.log"; exit 1; }
+wait_for "http://127.0.0.1:$BOT_PORT/health" || { echo "fake bot log:"; tail -30 "$WORK-bot.log"; exit 1; }
 
 API_RESULT=skipped; UI_RESULT=skipped
 if [ "$RUN_API" = 1 ]; then
