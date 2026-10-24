@@ -162,14 +162,14 @@ am = {
         "free_delivery_over": None,
     },
     "services": [
-        {"name": "Free package", "price": 0, "price_note": "per month", "description": "WhatsApp AI agent, about 300 AI replies a month, 1 agent, 20 products, 10 services, 7 days of reports. No card needed."},
-        {"name": "Starter package", "price": 6500, "price_note": "per month (offer Rs 4,990 till 31 Dec)", "description": "Launch offer Rs 4,990 a month until 31 Dec 2026; yearly Rs 65,000 (2 months free). About 2,500 AI replies a month (about 25-30 customers a day), 3 agents, 100 products, 30 services. For small shops and Facebook pages."},
-        {"name": "Growth package", "price": 12000, "price_note": "per month (offer Rs 8,990 till 31 Dec)", "description": "Launch offer Rs 8,990 a month until 31 Dec 2026; yearly Rs 120,000 (2 months free). About 5,500 AI replies a month (about 55-65 customers a day), 5 agents, 500 products, 100 services, Instagram and Messenger, CRM, leads, broadcasts (2,000 a month) and Meta ad results. For online shops with daily orders."},
-        {"name": "Business package", "price": 20000, "price_note": "per month (offer Rs 14,990 till 31 Dec)", "description": "Launch offer Rs 14,990 a month until 31 Dec 2026; yearly Rs 200,000 (2 months free). About 10,000 AI replies a month (about 100-120 customers a day), 10 agents, 2,000 products, 300 services, all channels and marketing tools. For busy shops and brands running ads."},
-        {"name": "Pro package", "price": 32000, "price_note": "per month (offer Rs 23,990 till 31 Dec)", "description": "Launch offer Rs 23,990 a month until 31 Dec 2026; yearly Rs 320,000 (2 months free). About 17,500 AI replies a month (about 180-200 customers a day), unlimited agents, products and services, everything in Business. For big brands with ads every day."},
-        {"name": "AI credit top-up 500", "price": 1500, "price_note": "one time, valid 30 days", "description": "500 extra AI credits (about 500 AI replies)."},
-        {"name": "AI credit top-up 1,500", "price": 4000, "price_note": "one time, valid 30 days", "description": "1,500 extra AI credits (about 1,500 AI replies)."},
-        {"name": "AI credit top-up 5,000", "price": 12000, "price_note": "one time, valid 30 days", "description": "5,000 extra AI credits (about 5,000 AI replies)."},
+        {"name": "Free package", "price": 0, "price_note": "per month", "description": "About 30 customer chats a month on WhatsApp, 1 agent, 20 products, 10 services, 7 days of reports. No card needed."},
+        {"name": "Starter package", "price": 6500, "price_note": "per month (offer Rs 4,990 till 31 Dec)", "description": "About 250 customer chats a month (≈ 8 a day), 3 agents, 150 products, 40 services, WhatsApp + Messenger + Instagram, comment replies. Launch offer Rs 4,990 until 31 Dec 2026; yearly Rs 65,000 (2 months free)."},
+        {"name": "Growth package", "price": 12000, "price_note": "per month (offer Rs 8,990 till 31 Dec)", "description": "About 550 customer chats a month (≈ 18 a day), 5 agents, 1,000 products, 150 services, CRM pipeline, follow-ups, broadcasts, ad results. Launch offer Rs 8,990 until 31 Dec 2026; yearly Rs 120,000."},
+        {"name": "Business package", "price": 20000, "price_note": "per month (offer Rs 14,990 till 31 Dec)", "description": "About 1,000 customer chats a month (≈ 33 a day), 10 agents, 3,000 products, 400 services, Meta ads, audiences and Conversions API. Launch offer Rs 14,990 until 31 Dec 2026; yearly Rs 200,000."},
+        {"name": "Pro package", "price": 32000, "price_note": "per month (offer Rs 23,990 till 31 Dec)", "description": "About 1,600 customer chats a month (≈ 53 a day), unlimited agents, products and services, everything in Business. Launch offer Rs 23,990 until 31 Dec 2026; yearly Rs 320,000."},
+        {"name": "Top-up 100 chats", "price": 1500, "price_note": "one time, valid 30 days", "description": "100 extra credits (about 100 customer chats)."},
+        {"name": "Top-up 300 chats", "price": 3900, "price_note": "one time, valid 30 days", "description": "300 extra credits (about 300 customer chats)."},
+        {"name": "Top-up 1,000 chats", "price": 12900, "price_note": "one time, valid 30 days", "description": "1,000 extra credits (about 1,000 customer chats)."},
         {"name": "Live demo call", "price": 0, "price_note": "free", "duration_min": 30, "description": "30-minute online demo with our team: we show Agent Metra with a business like yours and answer questions."},
     ],
     "policies": [
@@ -186,9 +186,9 @@ am = {
           "date and a good time to call – and passes it to the sales team in the CRM pipeline."),
         P("Businesses that do both", "Restaurants, beauty studios, pharmacies, solar companies and similar can sell products AND book services in the same chat: e.g. order food for delivery and book a table, "
           "or buy a serum and book a facial. Set the business type to 'both' in Settings."),
-        P("Recommend a package", "Use the customer counts: Free to try (about 300 AI replies a month, WhatsApp only), Starter about 25-30 customers a day, Growth about 55-65 a day, "
-          "Business about 100-120 a day, Pro about 180-200 a day. One AI credit is about one AI reply and a customer chat usually needs 2-3. Recommend ONE package with the reason, "
-          "mention the launch offer price, and say they can start on Free and upgrade any time. Instagram, Messenger, CRM and broadcasts need a paid package."),
+        P("Recommend a package", "Use customer chats a day: Free to try (about 30 chats a month, WhatsApp only), Starter ≈ 8 chats a day, Growth ≈ 18, Business ≈ 33, Pro ≈ 53. "
+          "1 credit ≈ 1 customer chat (from the first question to the order); quick questions use only part of a credit. Recommend ONE package with the reason and its launch "
+          "offer price, and say they can start on Free, upgrade any time or add a top-up in a busy month. Instagram, Messenger and comment replies need a paid package."),
         P("Honesty", "Only give the prices, features and limits written here. Never promise a feature, discount, custom development, result or sales number that is not written here. "
           "If you are not sure (special integrations, custom features, very large companies), say a team member will confirm and offer the free live demo call."),
         P("WhatsApp number", "Agent Metra uses the official WhatsApp Business Cloud API from Meta. The owner connects with 'Connect with Meta' in Channels and verifies the number with a code. "
@@ -204,15 +204,15 @@ am = {
     ],
     "style_examples": [
         S("Hi", "Hi 👋 I'm Metra from Agent Metra. What does your business sell?"),
-        S("mage online clothing shop ekak", "Niyamai 😊 Clothing shops walata AI eka products photos ekka pennanawa, size/colour check karanawa, delivery fee eka area eken hadala order eka save karanawa. Dawasakata chats kiyak witharada enne?"),
-        S("mata salon ekak thiyenne", "Lassanai! Salon ekakata AI eka services saha ganan kiyala, free times balala appointment book karanawa – time eka gihin nam langama free times 3k offer karanawa. Dawasakata messages kiyak enawada?"),
-        S("price kiyada?", "Free package ekak thiyenawa (card ona na). Paid packages Rs 4,990 (launch offer) idan patan gannawa. Dawasakata customers kiyadenek message karanawada? Ekata hariyana eka kiyannam."),
-        S("40 ta witharai daily", "Dawasakata 40k nam Growth package eka hariyanawa – customers 55-65 ta withara. Launch offer Rs 8,990/month. Instagram, Messenger, CRM saha broadcasts include. Free eken patan aran passe upgrade karannath puluwan."),
+        S("mage online clothing shop ekak", "Niyamai 😊 AI eka photos ekka products pennala, size check karala, delivery ekath ekka order eka save karanawa.\n\nDawasakata chats kiyak enawada?"),
+        S("mata salon ekak thiyenne", "Lassanai! AI eka ganan kiyala, free time balala appointment book karanawa.\n\nDawasakata messages kiyak enawada?"),
+        S("price kiyada?", "Free package ekak thiyenawa, paid ewa Rs 4,990 idan (chats 250k).\n\nDawasakata customers kiyadenek message karanawada?"),
+        S("40 ta witharai daily", "40k ta Business hondai – Rs 14,990/month, chats 1,000k withara.\n\nFree eken patan gannath puluwan. Account ekak hadannada?"),
         S("Will it work in Sinhala?", "Yes 😊 It replies in Sinhala, Singlish, Tamil or English – in the same style the customer writes."),
-        S("mage whatsapp number ekama danna puluwanda?", "Puluwan 😊 Eth e number eka Cloud API ekata maru karama phone eke WhatsApp app eken wada karanne na – chats okkoma Agent Metra web/app eken answer karanna one. Phone app eka thiyaganna one nam aluth number ekak danna."),
-        S("can the bot make mistakes with prices?", "It only uses the prices you add in products and services. If something is missing it says a team member will confirm – it never invents prices or discounts."),
+        S("mage whatsapp number ekama danna puluwanda?", "Puluwan 😊 Eth ita passe e number eka WhatsApp app eke wada na – Agent Metra app eken reply karanna one.\n\nApp eka thiyaganna ona nam aluth number ekak hondai."),
+        S("can the bot make mistakes with prices?", "No – it only uses your own prices. If something is missing, it says your team will confirm."),
         S("demo ekak balanna puluwanda", "Ow! Free 30-minute live demo call ekak book karannam 😊 Oyata hondai dawasa saha welawa kiyannako."),
-        S("I have a real estate company", "Great fit 😊 For real estate the AI answers about listings, then collects the buyer's need, budget, area and a good time to call, and passes the lead to your sales team. How many enquiries do you get a day?"),
+        S("I have a real estate company", "Great fit 😊 It answers buyers, then collects budget, area and a time to call for your sales team.\n\nHow many enquiries a day?"),
         S("hmm passe balannam", "Hari, no problem 😊 Free account ekak hadala test chat eken try karannath puluwan, card ona na."),
         S("உங்க package விலை என்ன?", "Free package இருக்கு (card தேவையில்லை). Paid packages Rs 4,990 (launch offer) முதல். ஒரு நாளைக்கு எத்தனை customers message பண்றாங்க?"),
     ],
@@ -223,10 +223,12 @@ am = {
         F("Do I need the WhatsApp Business API?", "Yes, Agent Metra uses the official WhatsApp Cloud API from Meta. You connect it yourself inside Agent Metra with your Facebook login – no developer needed."),
         F("Can I keep using my WhatsApp phone app?", "Not on the same number. Once a number moves to the Cloud API it works only in Agent Metra (web and mobile app). Use a new number if you want to keep the phone app."),
         F("Is there a mobile app?", "Yes, the Agent Metra app for Android and iPhone with push notifications, so your team can reply from anywhere."),
-        F("What are AI credits?", "One AI credit is about one AI reply. A typical customer chat needs 2-3 credits. Each package includes credits every month, and top-ups are available any time."),
-        F("What happens when credits finish?", "The bot stops AI replies until next month or until you buy a top-up (500 credits Rs 1,500; 1,500 credits Rs 4,000; 5,000 credits Rs 12,000). Your team can still reply manually."),
+        F("What are AI credits?", "1 credit ≈ 1 customer chat, from the first question to the order. A quick price question or a comment reply uses only part of a credit. Every package includes credits every month."),
+        F("What happens when credits finish?", "The AI pauses until next month or a top-up (100 chats Rs 1,500; 300 chats Rs 3,900; 1,000 chats Rs 12,900, valid 30 days). Your team can still reply."),
+        F("How much does one customer chat cost?", "About Rs 15-20 a chat on paid packages (Starter Rs 4,990 for ≈ 250 chats) – less than a minute of a staff member's time, day and night."),
+        F("Can I try the AI before signing up?", "Yes – the Live demo on our website lets you chat with a real demo business and see how the AI decides each reply."),
         F("How do I pay?", "By card through PayHere (monthly or yearly, auto-renew optional) or by bank transfer. Yearly costs 10 months' price – 2 months free."),
-        F("Is there a free trial?", "Yes – the Free package, no card needed, about 300 AI replies a month on WhatsApp. Upgrade any time."),
+        F("Is there a free trial?", "Yes – the Free package, no card needed, about 30 customer chats a month on WhatsApp. Upgrade any time."),
         F("Will the bot invent prices or discounts?", "No. Prices come from your products and services, delivery fees from your delivery zones. If something is missing it asks your team."),
         F("What if a customer wants a real person?", "The chat goes to an online agent – the customer's own agent or the one with the fewest open chats. If nobody is online, it waits in the queue."),
         F("Can it answer Facebook and Instagram comments?", "Yes. It replies to comments in public, sends the details in a private message and hides spam. You can approve replies first or let it reply automatically."),
@@ -241,7 +243,7 @@ am = {
     ],
     "tests": [
         T("asks business type", "Hi", contains_any=["business", "sell", "ව්‍යාපාර"]),
-        T("package for 40 a day", ["I run an online shop", "about 40 customers a day"], contains_any=["Growth"]),
+        T("package for 15 a day", ["I run an online shop", "about 15 customers a day"], contains_any=["Growth"]),
         T("free package", "is there a free plan?", contains_any=["Free"]),
         T("whatsapp number warning", "can I use my current whatsapp number and keep the app?", contains_any=["new number", "Cloud API", "app"]),
         T("languages", "does it reply in sinhala and tamil?", contains_any=["Sinhala", "Tamil"]),
@@ -344,11 +346,11 @@ bright = {
         P("Parents", "Speak politely and reassuringly to parents. For students under 18, the parent or guardian completes registration."),
     ],
     "style_examples": [
-        S("IELTS class thiyenawada?", "Ow 😊 IELTS 10-week weekend course eka Rs 48,000, mock tests 6k ekka. Next intake Nov 9. Oyata Academic da General da ona?"),
+        S("IELTS class thiyenawada?", "Ow 😊 IELTS weekend course – Rs 48,000, Nov 9 patan gannawa.\n\nAcademic da General da?"),
         S("mage duwa grade 10, maths class ekak", "O/L Maths group class eka Saturday udeta, masekata Rs 3,000. Sinhala da English medium da?"),
-        S("I want to learn web development but I'm a beginner", "Perfect start: Web Development Bootcamp (4 months) – Rs 85,000, from HTML to React with a portfolio project. Shall I book a free counselling chat to plan it with you?"),
+        S("I want to learn web development but I'm a beginner", "Web Development Bootcamp is perfect – 4 months, Rs 85,000.\n\nShall I book a free counselling chat?"),
         S("fees kotas walata gewanna puluwanda", "Ow 😊 Course fee eka 2 or 3 instalments walata gewanna puluwan."),
-        S("band 7 ganna puluwanda sure da?", "Band eka depend wenne practice eka mata 😊 Api full guidance saha mock tests 6k denawa. Level test ekak karala start karamu da?"),
+        S("band 7 ganna puluwanda sure da?", "Band eka practice eka mata depend wenawa 😊 Mock tests 6k thiyenawa.\n\nFree level test ekak karamu da?"),
         S("online da?", "Ow, Zoom walin online classes thiyenawa, physical classes Nugegoda. Monawada oyata hondai?"),
     ],
     "faqs": [
@@ -417,7 +419,7 @@ glow = {
         S("acne thiyenawa", "Acne Clear Facial eka hondai – Rs 6,500, minithu 60. Kawadada enna hondai?"),
         S("heta 4ta puluwanda", "Heta 4.00 PM free 😊 Acne Clear Facial heta 4.00 PM ta book karannada? Oyage nama?"),
         S("oily skin ekata serum ekak", "Oily skin ekata Niacinamide 10% + Zinc Serum – Rs 4,500 hondai. Udeta sunscreen ekath ona nam SPF 50 – Rs 3,200."),
-        S("wedding eka march wala", "Congratulations! 🎉 Bridal package Rs 55,000 idan, trial ekak ekka. Date eka confirm karanna Rs 10,000 advance ekak. Bridal team eka call karannada?"),
+        S("wedding eka march wala", "Congratulations! 🎉 Bridal package Rs 55,000 idan, trial ekak ekka.\n\nBridal team eka call karannada?"),
         S("I'm pregnant, can I do keratin?", "Congratulations 😊 For keratin during pregnancy please check with your doctor first. A gentle facial or pedicure is a nice option meanwhile."),
     ],
     "faqs": [
@@ -586,7 +588,7 @@ vows = {
     "style_examples": [
         S("wedding ekak thiyenawa", "Congratulations! 💍 Wedding date eka monawada?"),
         S("2027 feb 14", "Lassanai dawasak 😊 Venue eka koheda, guests kiidenek withara enawada?"),
-        S("negombo hotel ekaka 250", "250 guests ta Gold package eka hondatama hariyanawa – Rs 850,000 idan (planning, decor, photo+video, DJ). Free consultation ekak book karamuda past work balanna?"),
+        S("negombo hotel ekaka 250", "250 ta Gold package hondai – Rs 850,000 idan.\n\nFree consultation ekak book karamuda?"),
         S("ganan wadi", "Therenawa 😊 Budget eka kiyannako – ekata hariyana widiyata package eka hadanna puluwan."),
         S("Is Feb 14 still free?", "Feb 14 is very popular 😊 Let me ask our team to check the calendar right away. Which venue is it?"),
     ],
@@ -640,11 +642,11 @@ apex = {
     ],
     "style_examples": [
         S("solar danna ona", "Niyamai ☀️ Oyage masika light bill eka kiyada witharada?"),
-        S("20000 witharai", "Rs 20,000 bill ekakata 5 kW On-Grid System eka hariyanawa – Rs 1,150,000, masekata units 600k withara. Power cut welawata backup ona da?"),
-        S("ow backup ona", "Ehenam 5 kW Hybrid + 5 kWh Battery – Rs 1,950,000. Lights, fans, fridge, TV, WiFi power cut ekedi wada. Free site inspection ekak book karannada? Town eka koheda?"),
-        S("loan ekak ganna puluwanda", "Ow 😊 HNB, Sampath saha Commercial Bank solar loans thiyenawa, 0% card plans 12 months dakwa. Sales engineer eka details ekka call karannada?"),
-        S("bill eka zero wenawada", "Godak welawata bill eka godak adu wenawa 😊 Eth exact amount eka usage, ira eliya saha tariff eka mata depend wenawa – zero kiyala promise karanna ba."),
-        S("I have a factory with a 400,000 bill", "That's a great fit for a commercial system 🏭 A sales engineer will design it after a free site visit. Which town is the factory in, and is it 3-phase?"),
+        S("20000 witharai", "Ekata 5 kW On-Grid hariyanawa – Rs 1,150,000, units 600k withara.\n\nPower cut welawata backup ona da?"),
+        S("ow backup ona", "Ehenam 5 kW Hybrid + 5 kWh Battery – Rs 1,950,000.\n\nFree site inspection ekak book karannada? Town eka koheda?"),
+        S("loan ekak ganna puluwanda", "Ow 😊 Bank solar loans saha 0% card plans thiyenawa.\n\nEngineer kenek call karannada?"),
+        S("bill eka zero wenawada", "Bill eka godak adu wenawa 😊 Eth zero wenawa kiyala promise karanna ba – usage eka mata depend wenawa."),
+        S("I have a factory with a 400,000 bill", "Great fit for a commercial system 🏭 Our engineer designs it after a free site visit.\n\nWhich town is the factory in?"),
     ],
     "faqs": [
         F("Where are you?", "No. 210, Kandy Road, Kiribathgoda. We install island-wide."),

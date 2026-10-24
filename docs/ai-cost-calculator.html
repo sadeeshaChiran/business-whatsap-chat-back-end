@@ -1,0 +1,148 @@
+<title>Agent Metra AI Cost</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a calculator sheet – assumptions on the left, the package ledger on the right; one column on phones. */
+:root {
+  --bg: #f6f4fb; --panel: #ffffff; --ink: #1d1733; --ink-2: #5d5677; --line: #e2dcf1; --accent: #5b34d1; --accent-soft: #ece6fc;
+  --good: #137a43; --good-bg: #e2f5ea; --warn: #9a5b00; --warn-bg: #fff1d6; --bad: #b4233a; --bad-bg: #fde4e8;
+  --f-display: "Figtree", system-ui, sans-serif; --f-body: "Figtree", system-ui, sans-serif; --f-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #120d24; --panel: #1b1535; --ink: #f1edfc; --ink-2: #b4abd3; --line: #2f2652; --accent: #a98cff; --accent-soft: #2a2050;
+  --good: #5fd894; --good-bg: #133524; --warn: #f2be62; --warn-bg: #3a2a0c; --bad: #ff8a9b; --bad-bg: #3d1520; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #120d24; --panel: #1b1535; --ink: #f1edfc; --ink-2: #b4abd3; --line: #2f2652; --accent: #a98cff; --accent-soft: #2a2050;
+  --good: #5fd894; --good-bg: #133524; --warn: #f2be62; --warn-bg: #3a2a0c; --bad: #ff8a9b; --bad-bg: #3d1520; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1180px; margin: 0 auto; padding-block: 32px 56px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font: 800 clamp(1.7rem, 3.4vw, 2.4rem)/1.1 var(--f-display); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+.sub { color: var(--ink-2); max-width: 64ch; margin: 10px 0 0; }
+.grid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 20px; margin-top: 26px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.panel h2 { font: 700 0.78rem/1 var(--f-body); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 14px; }
+.field { display: grid; grid-template-columns: 1fr 110px; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.field:last-of-type { border-bottom: 0; }
+.field label { font-size: 0.9rem; }
+.field small { display: block; color: var(--ink-2); font-size: 0.76rem; }
+input[type=number] { width: 100%; font: 600 0.9rem var(--f-mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; text-align: right; }
+input[type=number]:focus, button:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.preset { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.preset button { font: 600 0.8rem var(--f-body); border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
+.preset button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.unit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.unit div { background: var(--accent-soft); border-radius: 10px; padding: 12px; }
+.unit b { display: block; font: 700 1.35rem var(--f-mono); }
+.unit span { font-size: 0.8rem; color: var(--ink-2); }
+.usage { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; font-size: 0.9rem; }
+.usage input { flex: 1; accent-color: var(--accent); }
+.usage output { font: 600 0.9rem var(--f-mono); min-width: 3.5em; text-align: right; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; min-width: 640px; }
+th, td { padding: 9px 8px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font: 700 0.74rem var(--f-body); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+td { font: 500 0.9rem var(--f-mono); }
+td:first-child { font: 700 0.95rem var(--f-body); }
+td input[type=number] { width: 92px; }
+.pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font: 700 0.8rem var(--f-mono); }
+.pill.good { background: var(--good-bg); color: var(--good); } .pill.warn { background: var(--warn-bg); color: var(--warn); } .pill.bad { background: var(--bad-bg); color: var(--bad); }
+.notes { margin-top: 18px; display: grid; gap: 8px; color: var(--ink-2); font-size: 0.86rem; max-width: 80ch; }
+.notes b { color: var(--ink); }
+.foot { margin-top: 14px; font-size: 0.8rem; color: var(--ink-2); }
+</style>
+
+<div class="wrap">
+  <h1>What one customer chat really costs</h1>
+  <p class="sub">Agent Metra AI cost per credit and per package, from 3,180 real AI replies (Oct 2026). Change any number and the margins update. 1 credit = 100,000 AI tokens ≈ one average customer chat.</p>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="h-in">
+      <h2 id="h-in">Assumptions</h2>
+      <div class="preset" role="group" aria-label="Model price">
+        <button type="button" id="p-config" aria-pressed="true">Bot config prices</button>
+        <button type="button" id="p-list" aria-pressed="false">Google list (½)</button>
+        <button type="button" id="p-lite" aria-pressed="false">Flash-Lite</button>
+      </div>
+      <div class="field"><label for="pin">Input $ / 1M tokens</label><input id="pin" type="number" step="0.005" value="0.75"></div>
+      <div class="field"><label for="pcache">Cached input $ / 1M</label><input id="pcache" type="number" step="0.005" value="0.075"></div>
+      <div class="field"><label for="pout">Output $ / 1M</label><input id="pout" type="number" step="0.05" value="3.75"></div>
+      <div class="field"><label for="tin">Input tokens per reply<small>measured average</small></label><input id="tin" type="number" step="100" value="11489"></div>
+      <div class="field"><label for="tcache">…of which cached<small>business prompt cache</small></label><input id="tcache" type="number" step="100" value="9810"></div>
+      <div class="field"><label for="tout">Output tokens per reply</label><input id="tout" type="number" step="10" value="146"></div>
+      <div class="field"><label for="rpc">AI replies per chat<small>real buying chats ≈ 12</small></label><input id="rpc" type="number" step="1" value="8"></div>
+      <div class="field"><label for="rate">Rs per US $</label><input id="rate" type="number" step="1" value="311"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-out">
+      <h2 id="h-out">Per credit</h2>
+      <div class="unit">
+        <div><b id="o-reply">–</b><span>AI cost per reply</span></div>
+        <div><b id="o-chat">–</b><span>AI cost per chat (1 credit)</span></div>
+      </div>
+      <h2>Packages at launch prices</h2>
+      <div class="usage"><label for="use">Credits used</label><input id="use" type="range" min="20" max="100" step="5" value="100"><output id="o-use" for="use">100%</output></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Package</th><th scope="col">Rs / month</th><th scope="col">Chats</th><th scope="col">Rs per chat</th><th scope="col">AI cost</th><th scope="col">Left after AI</th><th scope="col">Margin</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="notes">
+        <p><b>Reading it.</b> Margin is what stays after the AI bill only. Hosting, WhatsApp numbers, support and PayHere fees (about 3%) come out of it, so keep paid packages above 50% at full use.</p>
+        <p><b>Meta fees.</b> Chats the customer starts are free on WhatsApp for 24 hours. Only broadcasts (marketing templates) cost per message, and the business pays Meta for those.</p>
+        <p><b>Most shops use 40–70% of their credits.</b> Move the slider to see a normal month.</p>
+      </div>
+      <p class="foot">Data: bot_ai_usage, 18–21 Oct 2026, gemini-3.8-flash / 3-flash / 3.1-flash-lite. Rate: about Rs 311 per US $ (Feb 2026; check before using).</p>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PACKS = [
+  { name: "Free", price: 0, chats: 30 },
+  { name: "Starter", price: 4990, chats: 250 },
+  { name: "Growth", price: 8990, chats: 550 },
+  { name: "Business", price: 14990, chats: 1000 },
+  { name: "Pro", price: 23990, chats: 1600 },
+  { name: "Top-up 100", price: 1500, chats: 100 },
+  { name: "Top-up 1,000", price: 12900, chats: 1000 },
+];
+const PRESETS = { "p-config": [0.75, 0.075, 3.75], "p-list": [0.375, 0.0375, 1.875], "p-lite": [0.25, 0.025, 1.5] };
+const fmt = (n, d = 0) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const rows = $("rows");
+PACKS.forEach((p, i) => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${p.name}</td><td><input type="number" id="pr${i}" aria-label="${p.name} price" value="${p.price}" step="10"></td>
+    <td><input type="number" id="ch${i}" aria-label="${p.name} chats" value="${p.chats}" step="10"></td><td id="pc${i}"></td><td id="ac${i}"></td><td id="lf${i}"></td><td id="mg${i}"></td>`;
+  rows.appendChild(tr);
+});
+function calc() {
+  const v = (id) => Math.max(0, Number($(id).value) || 0);
+  const uncached = Math.max(0, v("tin") - v("tcache"));
+  const usd = (uncached * v("pin") + v("tcache") * v("pcache") + v("tout") * v("pout")) / 1e6;
+  const replyRs = usd * v("rate"), chatRs = replyRs * v("rpc");
+  $("o-reply").textContent = `Rs ${fmt(replyRs, 2)}`;
+  $("o-chat").textContent = `Rs ${fmt(chatRs, 2)}`;
+  const use = v("use") / 100; $("o-use").textContent = `${Math.round(use * 100)}%`;
+  PACKS.forEach((p, i) => {
+    const price = v(`pr${i}`), chats = v(`ch${i}`), cost = chats * use * chatRs, left = price - cost;
+    const margin = price > 0 ? left / price : null;
+    $(`pc${i}`).textContent = price > 0 && chats > 0 ? `Rs ${fmt(price / chats, 1)}` : "–";
+    $(`ac${i}`).textContent = `Rs ${fmt(cost)}`;
+    $(`lf${i}`).textContent = price > 0 ? `Rs ${fmt(left)}` : `−Rs ${fmt(cost)}`;
+    const cls = margin == null ? "warn" : margin >= 0.6 ? "good" : margin >= 0.45 ? "warn" : "bad";
+    $(`mg${i}`).innerHTML = `<span class="pill ${cls}">${margin == null ? "free" : `${fmt(margin * 100)}%`}</span>`;
+  });
+}
+Object.keys(PRESETS).forEach((id) => $(id).addEventListener("click", () => {
+  const [a, b, c] = PRESETS[id]; $("pin").value = a; $("pcache").value = b; $("pout").value = c;
+  Object.keys(PRESETS).forEach((k) => $(k).setAttribute("aria-pressed", String(k === id))); calc();
+}));
+document.addEventListener("input", calc);
+calc();
+</script>

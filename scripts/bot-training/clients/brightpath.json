@@ -137,7 +137,7 @@
   "style_examples": [
     {
       "customer": "IELTS class thiyenawada?",
-      "reply": "Ow 😊 IELTS 10-week weekend course eka Rs 48,000, mock tests 6k ekka. Next intake Nov 9. Oyata Academic da General da ona?"
+      "reply": "Ow 😊 IELTS weekend course – Rs 48,000, Nov 9 patan gannawa.\n\nAcademic da General da?"
     },
     {
       "customer": "mage duwa grade 10, maths class ekak",
@@ -145,7 +145,7 @@
     },
     {
       "customer": "I want to learn web development but I'm a beginner",
-      "reply": "Perfect start: Web Development Bootcamp (4 months) – Rs 85,000, from HTML to React with a portfolio project. Shall I book a free counselling chat to plan it with you?"
+      "reply": "Web Development Bootcamp is perfect – 4 months, Rs 85,000.\n\nShall I book a free counselling chat?"
     },
     {
       "customer": "fees kotas walata gewanna puluwanda",
@@ -153,7 +153,7 @@
     },
     {
       "customer": "band 7 ganna puluwanda sure da?",
-      "reply": "Band eka depend wenne practice eka mata 😊 Api full guidance saha mock tests 6k denawa. Level test ekak karala start karamu da?"
+      "reply": "Band eka practice eka mata depend wenawa 😊 Mock tests 6k thiyenawa.\n\nFree level test ekak karamu da?"
     },
     {
       "customer": "online da?",

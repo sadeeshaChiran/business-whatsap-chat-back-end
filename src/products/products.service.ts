@@ -1,4 +1,5 @@
 import { PlanService } from '../platform/plan.service';
+import { TokenQuotaService } from '../platform/token-quota.service';
 import {
   BadRequestException,
   Optional,
@@ -90,6 +91,7 @@ export class ProductsService implements OnModuleInit {
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
     @Optional() private readonly planService?: PlanService,
+    @Optional() private readonly tokenQuota?: TokenQuotaService,
   ) {}
 
   /** Old products kept their photos as long "data:image/…" text – move them once into files with short full links. */
@@ -174,8 +176,8 @@ export class ProductsService implements OnModuleInit {
   async describePhotos(productId: number, force = false): Promise<string | null> {
     const base = String(process.env.SALES_BOT_URL ?? '').trim().replace(/\/+$/, '');
     if (!base) return null;
-    const [row]: Array<{ id: number; name: string; image_url: string | null; gallery: string[] | null; image_notes: string | null; image_notes_src: string | null }> =
-      await this.productRepository.query(`SELECT id, name, image_url, gallery, image_notes, image_notes_src FROM product WHERE id = $1`, [productId]);
+    const [row]: Array<{ id: number; company_id: number; name: string; image_url: string | null; gallery: string[] | null; image_notes: string | null; image_notes_src: string | null }> =
+      await this.productRepository.query(`SELECT id, company_id, name, image_url, gallery, image_notes, image_notes_src FROM product WHERE id = $1`, [productId]);
     if (!row) return null;
     const url = [row.image_url, ...(row.gallery ?? [])].map((u) => String(u ?? '').trim()).find((u) => /^https?:\/\//i.test(u) || u.includes('/public/product-images/'));
     if (!url) {
@@ -183,6 +185,8 @@ export class ProductsService implements OnModuleInit {
       return null;
     }
     if (!force && row.image_notes && row.image_notes_src === url) return row.image_notes; // same photo – nothing to do
+    // this is AI work for the company: it uses its credits, and waits while the company has none left
+    if (this.tokenQuota && !(await this.tokenQuota.canBotReply(Number(row.company_id)).catch(() => true))) return null;
     let file = readOwnProductImage(url);
     if (!file) {
       const response = await fetch(absoluteProductImage(url), { signal: AbortSignal.timeout(20000) });
@@ -200,10 +204,24 @@ export class ProductsService implements OnModuleInit {
     // photo too large / not readable (4xx except auth and rate limit): skip THIS product; AI down / key / rate limit: try later
     if (!reply.ok && reply.status >= 400 && reply.status < 500 && ![401, 403, 429].includes(reply.status)) return null;
     if (!reply.ok) throw new Error(`describe service answered ${reply.status}`);
-    const notes = String(((await reply.json()) as { description?: string }).description ?? '').trim().slice(0, 300);
+    const body = (await reply.json()) as { description?: string; usage?: Record<string, number | string> };
+    await this.saveAiUsage(Number(row.company_id), body.usage);
+    const notes = String(body.description ?? '').trim().slice(0, 300);
     if (!notes) return null;
     await this.productRepository.query(`UPDATE product SET image_notes = $2, image_notes_src = $3 WHERE id = $1`, [productId, notes, url]);
     return notes;
+  }
+
+  /** Records the AI tokens of a product-photo description, so it uses the company's credits like every other AI job. */
+  private async saveAiUsage(companyId: number, usage: Record<string, number | string> | undefined) {
+    if (!usage || !companyId) return;
+    const n = (v: unknown) => Math.max(0, Number(v) || 0);
+    await this.productRepository.query(`
+      INSERT INTO bot_ai_usage (company_id, model, input_tokens, cached_tokens, output_tokens, calls, cost_usd, latency_ms, is_test)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE)`,
+      [companyId, String(usage.model ?? 'describe-photo').slice(0, 100), n(usage.input_tokens), n(usage.cached_tokens), n(usage.output_tokens),
+        n(usage.calls) || 1, n(usage.cost_usd), n(usage.latency_ms)]).catch(() => undefined);
+    this.tokenQuota?.forget(companyId);
   }
 
   /** Products with photos but no AI photo description yet (a few per start, so the cost stays small). */

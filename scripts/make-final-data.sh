@@ -7,6 +7,8 @@
 # What it does, in order (safe to run again):
 #   00  sync id sequences (only moves them forward)
 #   01  delete every company except VORA, Chu.lk and Agent Metra; delete 999 test customers in VORA and Chu.lk
+#   01b FRESH START (only once): delete ALL customers, chats and orders of VORA and Chu.lk; keep products and bot knowledge
+#   01c credits + packages: 1 credit = 100,000 tokens ≈ 1 customer chat; packages counted in chats
 #   02  Agent Metra account (agentmetra@gmail.com) + 7 industry demo companies with products
 #   03  bot training: Chu.lk, VORA, Agent Metra and the 7 demos (settings, zones, services, policies, styles, FAQs)
 # Password for agentmetra@gmail.com and every @demo.test login: DEMO_PASSWORD (default 12345678).
@@ -23,6 +25,12 @@ cat scripts/data/00-sync-sequences.sql
 echo
 echo "-- ═════════ 01 cleanup ═════════"
 cat scripts/data/01-cleanup-keep-vora-chulk.sql
+echo
+echo "-- ═════════ 01b fresh start VORA + Chu.lk (runs only once) ═════════"
+cat scripts/data/02-fresh-start-vora-chulk.sql
+echo
+echo "-- ═════════ 01c credits and packages ═════════"
+cat scripts/data/03-credits-and-packages.sql
 echo
 echo "-- ═════════ 02 Agent Metra + industry demo companies ═════════"
 python3 scripts/make-industry-demos.py

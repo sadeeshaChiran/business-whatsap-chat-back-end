@@ -10,7 +10,10 @@ Choosing a new package starts it right away. Paying again for the same package a
 
 ## AI credits
 
-- Every **AI bot reply** uses credits – about **1 credit per reply**. Replies by your team, flows, forms and broadcasts don't use AI credits.
+- **1 credit ≈ 1 customer chat** – from the first question to the order (about 8 AI replies).
+- Every AI job uses credits **by its real size**: a quick price question uses a small part of a credit, a long buying chat a little more than one.
+  AI comment replies and private messages, post captions, photo search and the one-time AI description of each product photo also use credits.
+- Replies by your team, flows, forms and broadcasts don't use AI credits.
 - Your package gives a number of credits **every month**. Unused package credits don't carry over.
 - At **80%** you get a warning. At **100%** the AI bot stops and chats go to your agents. Your inbox, agents, WhatsApp, orders and bookings keep working.
 - The **Credits** card on the Dashboard and the banner on top show what is left.

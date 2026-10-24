@@ -27,6 +27,7 @@ import { FlowsModule } from './flows/flows.controller';
 import { SocialModule } from './social/social.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
 import { PublicHelpModule } from './public-help/public-help';
+import { PublicDemoModule } from './public-demo/public-demo';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -68,6 +69,7 @@ if (!supabaseDatabaseUrl) {
     ActivityLogModule,
     RealtimeModule,
     PublicHelpModule,
+    PublicDemoModule,
   ],
   controllers: [AppController],
   providers: [

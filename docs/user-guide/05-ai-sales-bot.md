@@ -77,4 +77,4 @@ The settings show the last 30 days: how many were sent and how many customers or
 
 ## Credits
 
-Every bot reply uses AI **credits** (about 1 credit per reply). Replies by your team are free. See [Billing and credits](#billing).
+The bot uses AI **credits**: 1 credit ≈ 1 whole customer chat (about 8 AI replies), so one reply is about 0.1–0.2 credit. Replies by your team are free. See [Billing and credits](#billing).
