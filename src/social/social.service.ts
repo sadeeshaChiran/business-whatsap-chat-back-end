@@ -15,6 +15,18 @@ type Platform = 'facebook' | 'instagram';
 type Page = { page_id: string; page_name: string | null; page_access_token: string; instagram_business_account_id: string | null };
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
+/** The private message could not be sent: post its answer publicly instead – without the greeting line and without
+ *  sentences asking for personal details, max ~240 characters (prices and details are fine to show publicly). Can be "". */
+export function publicFallback(dm: string): string {
+  const lines = dm.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const body = lines.length > 1 && /^(hi|hello|hey|ayubowan|ආයුබෝවන්|வணக்கம்)\b/i.test(lines[0]) && lines[0].length < 30 ? lines.slice(1) : lines;
+  const personal = /(address|phone|number|\bnama\b|ලිපිනය|දුරකථන|முகவரி)/i;
+  const text = body
+    .map((line) => line.split(/(?<=[.!?])\s+/).filter((sentence) => !personal.test(sentence)).join(' '))
+    .filter(Boolean).join('\n');
+  return text.length > 240 ? `${text.slice(0, 237).trimEnd()}…` : text;
+}
+
 /**
  * Social section: Facebook Page + Instagram comments (reply, private reply, hide, delete, like, AI suggestions,
  * AI auto-reply), posts (publish, schedule, edit, delete), Page / Instagram profile and analytics.
@@ -488,8 +500,11 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   private async suggestFor(companyId: number, id: number) {
     const c = await this.comment(companyId, id);
+    const settings = await this.settings(companyId);
     const ai = await this.callBot<{ reply: string; dm: string; intent: string; hide: boolean }>('/social/comment-reply', {
       platform: c.platform, post_text: c.post_text, comment: c.message, author: c.author_name,
+      // private messages on: price / details go to the customer's inbox as a normal chat message, the public reply stays short
+      dm_enabled: settings.auto_dm !== false,
     }, companyId);
     await this.dataSource.query(`UPDATE social_comment SET ai_reply = $2, ai_dm = $3, ai_intent = $4, updated_at = NOW() WHERE id = $1`,
       [id, ai.reply ?? '', ai.dm ?? '', String(ai.intent ?? '').slice(0, 20)]);
@@ -510,9 +525,18 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         await this.dataSource.query(`UPDATE social_comment SET is_hidden = TRUE, status = 'hidden', updated_at = NOW() WHERE id = $1`, [id]);
         return;
       }
-      if (settings.auto_reply !== 'reply' || !ai.reply) return;
-      await this.replyAs(companyId, id, ai.reply, null, true);
-      if (settings.auto_dm && ai.dm) await this.privateReplyAs(companyId, id, ai.dm).catch(() => undefined);
+      if (settings.auto_reply !== 'reply' || (!ai.reply && !ai.dm)) return;
+      // Private message FIRST: the public reply says "sent to your inbox", so it must really be there.
+      // If Meta refuses it (older than 7 days, privacy settings), the answer is posted publicly instead.
+      let dmSent = false;
+      if (settings.auto_dm && ai.dm) {
+        dmSent = await this.privateReplyAs(companyId, id, ai.dm).then(() => true).catch((error: unknown) => {
+          this.logger.warn(`private reply ${id}: ${error instanceof Error ? error.message : String(error)}`);
+          return false;
+        });
+      }
+      const publicText = ai.dm && !dmSent ? publicFallback(ai.dm) : ai.reply;
+      if (publicText) await this.replyAs(companyId, id, publicText, null, true);
     } catch (error) {
       this.logger.warn(`auto-reply ${id}: ${error instanceof Error ? error.message : String(error)}`);
     }

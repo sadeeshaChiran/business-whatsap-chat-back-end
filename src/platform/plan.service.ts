@@ -5,7 +5,9 @@ import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
 
 /** Tokens per bot reply (shop data mostly cached + chat + answer). */
-export const DEFAULT_TOKENS_PER_REPLY = 9_000; // measured 8 Oct 2026 (scale test): 8,100–12,000 tokens per AI reply incl. the cached prompt
+export const DEFAULT_TOKENS_PER_REPLY = 12_500; // measured 24 Oct 2026 on 3,180 replies: ≈ 12,500 tokens per AI reply incl. the cached prompt
+/** 1 credit ≈ ONE average customer chat (≈ 8 bot replies). Super admin can change it (platform_setting "credits"). */
+export const DEFAULT_TOKENS_PER_CREDIT = 100_000;
 
 /**
  * Package rules in one place (replaces the old hard-coded "Free only / max 3 agents").
@@ -38,13 +40,13 @@ export class PlanService {
     const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number } }> = await this.packageRepository.manager
       .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
     const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
-    // default: 1 credit = 1 average AI reply (easy to explain to shops)
-    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || perReply);
+    // default: 1 credit = 1 average customer chat (easy to explain to shops)
+    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || DEFAULT_TOKENS_PER_CREDIT);
     this.creditCache = { at: Date.now(), value, perReply };
     return this.creditCache;
   }
 
-  /** 1 credit = this many AI tokens (super admin setting, default = one average AI reply). Companies only see credits. */
+  /** 1 credit = this many AI tokens (super admin setting, default = one average customer chat). Companies only see credits. */
   async tokensPerCredit(): Promise<number> {
     return (await this.creditSetting()).value;
   }
