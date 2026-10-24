@@ -21,6 +21,7 @@ import { ActivityLogModule } from './activity-log/activity-log';
 import { PlatformModule } from './platform/platform.module';
 import { VerificationModule } from './verification/verification';
 import { CrmModule } from './crm/crm';
+import { ReportsModule } from './reports/reports.module';
 import { MobileModule } from './mobile/mobile';
 import { MarketingModule } from './marketing/marketing.controller';
 import { FlowsModule } from './flows/flows.controller';
@@ -61,6 +62,7 @@ if (!supabaseDatabaseUrl) {
     PlatformModule,
     VerificationModule,
     CrmModule,
+    ReportsModule,
     MobileModule,
     MarketingModule,
     FlowsModule,

@@ -159,7 +159,7 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
         });
         await this.web.sendToUsers([Number(alert.admin_user_id)], {
           title: String(alert.title ?? 'Notification'), body: String(alert.message ?? ''), kind: 'alert', tag: `alert-${alert.id}`,
-          url: alert.order_id ? '/orders' : alert.conversation_id ? `/inbox/${alert.conversation_id}` : '/dashboard',
+          url: alert.kind === 'low_stock' || alert.kind === 'out_of_stock' ? '/stock' : alert.order_id ? '/orders' : alert.conversation_id ? `/inbox/${alert.conversation_id}` : '/dashboard',
         });
       }
       if (alerts.length) await this.dataSource.query(`UPDATE push_cursor SET last_id = $2 WHERE name = $1`, ['alerts', alerts[alerts.length - 1].id]);

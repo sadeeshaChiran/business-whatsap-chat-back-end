@@ -16,7 +16,7 @@ The bot only sells what is in your catalog, at the prices you set. Keep it up to
 
 Use **Previous** and **Next** (bottom right) to move between the parts. **Add Product** / **Update Product** appears on the last part, in place of **Next**.
 
-**Available to order** switches a product off when it is out of stock – no stock counting needed.
+**Available to order** switches a product off when it is out of stock – no stock counting needed. If you want counts and low-stock alerts, see **Stock and alerts** below.
 
 **Brands**: the product list has a **Brand** column, the search finds brands, and **All brands** filters by one brand. The AI bot knows each product's brand, so "Casio watch thiyenawada?" finds the right products; it never invents a brand.
 
@@ -56,6 +56,22 @@ In the inbox the customer's photo shows what the bot found, for example **🔎 O
 **Replying to a photo**: when the customer replies to a photo ("mekata kiyada?") the bot knows which product that photo is – a photo the bot sent, or a photo the customer sent earlier.
 
 > **Tip for best results:** add clear photos of every product and every colour / option (option photos in **Variants & inventory**). The more of your own photos the bot knows, the more often it is sure.
+
+## Stock and alerts
+
+**Sales → Stock & alerts** (owner; supervisors can see it). Stock counting is **optional and off** for every product until you switch it on – products you don't count stay simply Available or Unavailable.
+
+1. Switch on **Count stock** for a product. Enter the stock you have now (**I counted**). For a product with options (size, colour, pack) each option has its own stock.
+2. From then on **orders take stock out** – orders from the AI bot, orders your team adds in a chat, and changes to them. A **cancelled or deleted order puts the stock back**. Each change is listed under the product's **Stock changes** (with the order number or who changed it).
+3. When goods arrive press **Stock → Received / removed** (a minus number for damaged items or returns to the supplier), or **I counted** after counting the shelf.
+4. **Alert at**: when the stock falls to this number or below you get a **Low stock** notification (default 5; 0 = no low alert).
+5. At **0** the product (or the option) turns **Unavailable automatically** and you get an **Out of stock** notification – the AI bot stops selling it, exactly like a manual Unavailable. When you add stock it turns **Available again by itself**. (If you set Unavailable by hand, it stays until you change it.)
+
+The list shows the stock, **Low / Out of stock** badges, how many were **sold in the last 30 days** and how many days the stock **lasts about** at that speed. Filters: Counting stock, Low, Out of stock, Not counted.
+
+> **Note:** saving the product form does not change counted stock – change it only on the Stock page. Orders the admin types by hand without choosing a catalog product don't change stock.
+
+**Customer buys every … days** (optional, any product): how long one purchase usually lasts a customer – for example a 30-pack of diapers ≈ 21 days. It is used by the **Reorder due** list (see [Reports](#reports)).
 
 ## Services
 

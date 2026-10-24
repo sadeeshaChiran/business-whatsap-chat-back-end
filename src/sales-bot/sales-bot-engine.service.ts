@@ -31,6 +31,8 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotClient, type SalesBotOrder, type SalesBotResult, type SalesBotTurn } from './sales-bot.client';
 import { absoluteProductImage, readOwnProductImage, sniffImage } from '../products/product-images';
 import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-match';
+import { StockService } from '../reports/stock';
+import { DemandService } from '../reports/reports';
 import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
@@ -59,7 +61,7 @@ export function splitReply(text: string, maxParts = 3): string[] {
 }
 
 /** intent is stored on the bot message, e.g. "lead,handoff" (one reply can do several things). */
-type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[]; invoiceBookingIds?: number[] };
+type Outcome = { intent: string | null; replyOverride: string | null; invoiceOrderIds: number[]; invoiceBookingIds?: number[]; unavailableItem?: string | null };
 type LeadStage = 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
 const LEAD_RANK: Record<LeadStage, number> = { new: 0, contacted: 1, qualified: 2, proposal: 3, won: 4, lost: 4 };
 
@@ -265,6 +267,9 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** Customer photo → product (optional so unit tests can build the engine without it). */
   @Optional() @Inject(PhotoMatchService) private readonly photoMatcher?: PhotoMatchService;
+  /** Stock counting (orders take stock out) and the product demand report – optional, they never change a reply. */
+  @Optional() @Inject(StockService) private readonly stock?: StockService;
+  @Optional() @Inject(DemandService) private readonly demand?: DemandService;
 
   constructor(
     @InjectRepository(Company) private readonly companyRepository: Repository<Company>,
@@ -514,7 +519,8 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []), simulated,
+    const picks = photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
+    const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
     // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
     if (text && !outcome.replyOverride && !photosSent) text = withoutPhotoPointer(text, result.language);
@@ -528,6 +534,13 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
     await markAnswered();
+    // product demand report: what the bot showed / put in a summary / could not sell (never changes the reply)
+    void this.demand?.recordTurnSafe({
+      companyId, conversationId: conversation.id, channelUserId: channelUser.id,
+      shownProductIds: photosSent ? [...picks.map((pick) => pick.id), ...photoIds] : photoIds,
+      cartProductIds: session.pending_order?.summary_shown ? session.pending_order.items.map((item) => item.product_id) : [],
+      unavailableItem: outcome.unavailableItem ?? null, customerText, reply: text ?? '', isTest: simulated,
+    });
     // the customer wrote again while the bot was writing → answer that too (after the usual short wait)
     const [newer] = await this.messageRepository.query(
       `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' AND id > $2 LIMIT 1`, [conversationId, answeredUpTo]);
@@ -908,6 +921,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const invoiceOrderIds: number[] = [];
     const invoiceBookingIds: number[] = [];
     let savedOrderId: number | null = null;
+    let unavailableItem: string | null = null;
     const who = channelUser.display_name || channelUser.external_user_id;
 
     const booking = result.booking;
@@ -1026,6 +1040,7 @@ export class SalesBotEngineService implements OnModuleInit {
       }
       if (orderOutcome.startsWith('unavailable:')) {
         replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
+        unavailableItem = orderOutcome.slice(12);
       }
       if (orderOutcome.startsWith('blocked:')) {
         replyOverride = holdMessage(result.language);
@@ -1039,7 +1054,7 @@ export class SalesBotEngineService implements OnModuleInit {
       if (change.intent) intents.add(change.intent);
       if (change.invoice) invoiceOrderIds.push(change.invoice);
       if (change.hold) replyOverride = changeHoldMessage(result.language);
-      if (change.unavailable) replyOverride = unavailableMessage(result.language, change.unavailable);
+      if (change.unavailable) { replyOverride = unavailableMessage(result.language, change.unavailable); unavailableItem = change.unavailable; }
       if (change.handoff) {
         await this.handoff(companyId, conversation, channelUser, 'bot_handoff', change.handoff);
         intents.add('handoff');
@@ -1088,7 +1103,7 @@ export class SalesBotEngineService implements OnModuleInit {
       await this.handoff(companyId, conversation, channelUser, 'bot_handoff', result.handoff.reason || 'The bot asked for a person.');
       intents.add('handoff');
     }
-    return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds, invoiceBookingIds };
+    return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds, invoiceBookingIds, unavailableItem };
   }
 
   /** The agent a bot order / booking counts for: the agent who accepted this chat. Nobody yet → set when an agent accepts. */
@@ -1536,6 +1551,7 @@ export class SalesBotEngineService implements OnModuleInit {
     await this.orderHistoryRepository.save(this.orderHistoryRepository.create({
       order_id: order.id, status: 'Pending', message: `Order changed by the customer in chat (sales bot): ${request}`,
     }));
+    await this.stock?.syncOrderSafe(order.id);
     await this.appendOrderNote(order.id, `✏️ Changed by the customer: ${request}`);
     await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${order.id} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
     await this.advanceLead(conversation.id, 'won', { order_value: subtotal + (fee ?? 0), order_id: order.id });
@@ -1553,6 +1569,7 @@ export class SalesBotEngineService implements OnModuleInit {
       await this.orderHistoryRepository.save(this.orderHistoryRepository.create({
         order_id: order.id, status: 'Cancelled', message: `Cancelled by the customer in chat (sales bot): ${reason}`,
       }));
+      await this.stock?.syncOrderSafe(order.id);
       await this.appendOrderNote(order.id, `❌ Cancelled by the customer: ${reason}`);
       await this.notifyTeam(companyId, 'order_cancelled', 'MEDIUM', `Order #${order.id} cancelled by the customer`, `${who}: ${reason}`, conversation.id, order.id);
       await this.advanceLead(conversation.id, 'lost', { lost_reason: reason });
@@ -1761,6 +1778,7 @@ export class SalesBotEngineService implements OnModuleInit {
     await this.orderHistoryRepository.save(this.orderHistoryRepository.create({
       order_id: saved.id, status: 'Pending', message: 'Order confirmed by the customer in chat (sales bot).',
     }));
+    await this.stock?.syncOrderSafe(saved.id);
     if (name && (!channelUser.display_name || channelUser.display_name === channelUser.external_user_id)) {
       await this.channelUserRepository.update(channelUser.id, { display_name: name.slice(0, 255) });
     }
