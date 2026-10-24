@@ -123,4 +123,20 @@ export class Product {
   /** Available / Unavailable (replaces stock counts – default available) */
   @Column({ type: 'boolean', default: true })
   is_available: boolean;
+
+  /** Optional stock counting: when true, `quantity` (or each variant option's quantity) is the stock and orders take it out */
+  @Column({ type: 'boolean', default: false })
+  track_stock: boolean;
+
+  /** Alert when the stock falls to this number or below (stock counting only) */
+  @Column({ type: 'int', default: 5 })
+  low_stock_level: number;
+
+  /** true = the product was switched to Unavailable automatically at 0 stock (switched back on when stock is added) */
+  @Column({ type: 'boolean', default: false })
+  stock_auto_off: boolean;
+
+  /** How many days one purchase usually lasts (e.g. a 30-pack of diapers ≈ 21) – used for the reorder-due list */
+  @Column({ type: 'int', nullable: true })
+  reorder_days: number | null;
 }

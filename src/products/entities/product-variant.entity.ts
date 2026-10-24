@@ -20,6 +20,8 @@ export type ProductVariantOption = {
   weight?: number;
   /** false = this option is not available right now (missing = available) */
   available?: boolean;
+  /** true = set to not available automatically at 0 stock (stock counting) – switched back on when stock is added */
+  auto_off?: boolean;
 };
 
 @Entity()

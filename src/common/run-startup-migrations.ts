@@ -65,6 +65,7 @@ const MIGRATION_FILES = [
   'supabase_oct18_photo_match.sql',
   'supabase_product_brand.sql',
   'supabase_ai_usage_detail.sql',
+  'supabase_stock_reports.sql',
 ] as const;
 
 function migrationDir(): string | null {

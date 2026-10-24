@@ -64,6 +64,7 @@ import {
 import { readDocumentText, splitIntoPieces } from './document-knowledge';
 import { Inject, Optional } from '@nestjs/common';
 import { ActivityLogService } from '../activity-log/activity-log';
+import { StockService } from '../reports/stock';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -137,6 +138,8 @@ export class BotAdminService {
 
   /** Who changed / deleted orders (owner + supervisors read it in Team → Activity log). */
   @Optional() @Inject(ActivityLogService) private readonly activity?: ActivityLogService;
+  /** Stock counting: status changes (cancel / un-cancel) and deleted orders put stock back (optional). */
+  @Optional() @Inject(StockService) private readonly stock?: StockService;
 
   constructor(
     @InjectRepository(Company)
@@ -3733,6 +3736,7 @@ export class BotAdminService {
     const before = order.status;
     order.status = payload.status;
     const saved = await this.orderRepository.save(order);
+    if (before !== saved.status) await this.stock?.syncOrderSafe(saved.id);
     await this.activity?.log(user, { action: 'order_status', entity: 'order', entity_id: saved.id,
       summary: `Order #${saved.id}: status ${before} → ${saved.status}`, details: { from: before, to: saved.status } });
     const message = await this.renderOrderStatusMessage(user.company_id, saved);
@@ -4309,6 +4313,7 @@ export class BotAdminService {
     }
 
     const saved = await this.orderRepository.save(order);
+    if (before.status !== saved.status) await this.stock?.syncOrderSafe(saved.id);
     const changes = Object.fromEntries(Object.entries(before)
       .filter(([key, value]) => (saved as unknown as Record<string, unknown>)[key] !== value)
       .map(([key, value]) => [key, { from: value, to: (saved as unknown as Record<string, unknown>)[key] }]));
@@ -4330,6 +4335,7 @@ export class BotAdminService {
     await this.orderItemRepository.delete({ order_id: orderId });
     await this.orderStatusHistoryRepository.delete({ order_id: orderId });
     await this.orderRepository.remove(order);
+    await this.stock?.syncOrderSafe(orderId);
     await this.activity?.log(user, { action: 'order_delete', entity: 'order', entity_id: orderId,
       summary: `Order #${orderId} deleted (${snapshot.customer_name || 'customer'}${snapshot.total != null ? `, Rs ${snapshot.total}` : ''})`, details: snapshot });
     return { id: orderId, removed: true };

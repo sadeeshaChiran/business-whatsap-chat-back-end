@@ -6,7 +6,7 @@ import { NotificationsQueryDto } from './dto/notifications-query.dto';
 
 type NotificationType = 'REMINDER' | 'RISK' | 'INFO';
 type NotificationPriority = 'LOW' | 'MEDIUM' | 'HIGH';
-type RelatedEntityType = 'order' | 'conversation' | 'queue' | null;
+type RelatedEntityType = 'order' | 'conversation' | 'queue' | 'stock' | null;
 
 export type NotificationItem = {
   id: string;
@@ -103,10 +103,10 @@ export class NotificationsService {
     try {
       const rows: Array<{
         id: number; priority: NotificationPriority; title: string; message: string;
-        conversation_id: number | null; order_id: number | null; created_at: Date;
+        conversation_id: number | null; order_id: number | null; created_at: Date; kind?: string;
       }> = user.role === 'admin' || user.role === 'supervisor'
         ? await this.dataSource.query(
-            `SELECT id, priority, title, message, conversation_id, order_id, created_at
+            `SELECT id, priority, title, message, conversation_id, order_id, created_at, kind
                FROM bot_notification
               WHERE company_id = $1 AND created_at > NOW() - INTERVAL '14 days'
               ORDER BY id DESC LIMIT 20`,
@@ -128,8 +128,9 @@ export class NotificationsService {
           message: row.message,
           priority: row.priority ?? 'MEDIUM',
           createdAt: new Date(row.created_at),
-          relatedEntityType: row.order_id ? 'order' : row.conversation_id ? 'conversation' : null,
-          relatedEntityId: row.order_id ?? row.conversation_id ?? null,
+          // low / out of stock alerts open the Stock page
+          relatedEntityType: row.kind === 'low_stock' || row.kind === 'out_of_stock' ? 'stock' : row.order_id ? 'order' : row.conversation_id ? 'conversation' : null,
+          relatedEntityId: row.kind === 'low_stock' || row.kind === 'out_of_stock' ? null : row.order_id ?? row.conversation_id ?? null,
         }),
       );
     } catch (error) {

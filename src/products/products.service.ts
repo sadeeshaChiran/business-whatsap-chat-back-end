@@ -18,6 +18,7 @@ import { ProductVariant } from './entities/product-variant.entity';
 import { Product } from './entities/product.entity';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
 import { MAX_PRODUCT_IMAGE_BYTES, absoluteProductImage, readOwnProductImage, storeIfDataUrl } from './product-images';
+import { optionLabel } from '../reports/stock-logic';
 import { Logger, OnModuleInit } from '@nestjs/common';
 type ImportVariant = {
   variant_name: string;
@@ -29,6 +30,8 @@ type ImportVariant = {
   use_default_image?: boolean;
   weight?: number;
   available?: boolean;
+  /** set to not available automatically at 0 stock (stock counting) */
+  auto_off?: boolean;
 };
 
 type ImportLine = {
@@ -535,6 +538,7 @@ export class ProductsService implements OnModuleInit {
         }
         if (variant.available === false) {
           withPricing.available = false;
+          if (variant.auto_off) withPricing.auto_off = true;
         }
         if (variant.image_url?.trim()) {
           withPricing.image_url = variant.image_url.trim();
@@ -822,6 +826,17 @@ export class ProductsService implements OnModuleInit {
       product.show_to_bot = updateProductDto.show_to_bot;
     }
 
+    // Stock counting on: the counted stock is changed only on the Stock page (and by orders) – saving the product form
+    // keeps each option's stock and its automatic "not available at 0", whatever quantity the form sends
+    if (product.track_stock && updateProductDto.variants !== undefined) {
+      const counted = new Map((product.variants?.[0]?.variants ?? []).map((option) => [optionLabel(option), option]));
+      updateProductDto.variants = updateProductDto.variants.map((incoming) => {
+        const before = counted.get(optionLabel(incoming as never));
+        const next = { ...incoming, quantity: Number(before?.quantity ?? 0) } as typeof incoming & { auto_off?: boolean };
+        if (before?.auto_off && incoming.available !== true) Object.assign(next, { available: false, auto_off: true });
+        return next;
+      });
+    }
     const normalizedVariants = this.normalizeVariants(
       updateProductDto.variants,
       updateProductDto.price !== undefined
@@ -885,7 +900,7 @@ export class ProductsService implements OnModuleInit {
         (total, variant) => total + Number(variant.quantity ?? 0),
         0,
       );
-    } else if (!hasVariants && updateProductDto.quantity !== undefined) {
+    } else if (!hasVariants && updateProductDto.quantity !== undefined && !product.track_stock) {
       product.quantity = Number(updateProductDto.quantity ?? 0);
     }
 
@@ -1525,6 +1540,7 @@ export class ProductsService implements OnModuleInit {
     if (!product) throw new NotFoundException('Product not found');
     if (!variantValue) {
       product.is_available = available;
+      product.stock_auto_off = false;   // a manual choice replaces the automatic "Unavailable at 0 stock"
       await this.productRepository.save(product);
       return { id: product.id, is_available: product.is_available };
     }
@@ -1534,6 +1550,7 @@ export class ProductsService implements OnModuleInit {
     if (!row || !option) throw new NotFoundException('Variant not found');
     if (available) delete option.available;
     else option.available = false;
+    delete option.auto_off;
     await this.productVariantRepository.update(row.id, { variants: row.variants } as never);
     return { id: product.id, variant_value: option.variant_value, available };
   }
