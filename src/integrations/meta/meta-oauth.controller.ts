@@ -64,6 +64,7 @@ export class MetaOAuthController {
             is_super_admin: false,
           },
           { code: code.trim(), via_redirect: true },
+          payload.a ? { label: payload.l, purpose: payload.p } : undefined,
         );
         const params = new URLSearchParams({
           meta: 'whatsapp_connected',
@@ -71,6 +72,7 @@ export class MetaOAuthController {
         });
         if (result.verified_name) params.set('name', result.verified_name);
         if (result.replaced_previous_number) params.set('replaced', '1');
+        if (result.added_number) params.set('added', '1');
         if (result.registration_message)
           params.set('warning', result.registration_message);
         return res.redirect(

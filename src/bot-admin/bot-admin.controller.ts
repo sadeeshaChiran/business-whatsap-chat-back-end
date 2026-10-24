@@ -32,6 +32,8 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { UpdateStatusTemplateDto } from './dto/update-status-template.dto';
 import { CreateBotOrderDto } from './dto/create-bot-order.dto';
 import { MessageFeedbackDto } from './dto/message-feedback.dto';
+import { SendLocationDto } from './dto/send-location.dto';
+import { SendContactDto } from './dto/send-contact.dto';
 import { SendConversationMessageDto } from './dto/send-conversation-message.dto';
 import { AssignConversationDto } from './dto/assign-conversation.dto';
 import { UpdateLeadStageDto } from './dto/update-lead-stage.dto';
@@ -275,6 +277,26 @@ export class BotAdminController {
     @Body() payload: SendConversationMessageDto,
   ) {
     return this.botAdminService.sendConversationMessage(user, id, payload.text, payload.reply_to_message_id);
+  }
+
+  /** Share a map location from the chat (the 📎 → Location button) */
+  @Post('conversations/:id/messages/location')
+  sendConversationLocation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: SendLocationDto,
+  ) {
+    return this.botAdminService.sendConversationLocation(user, id, payload);
+  }
+
+  /** Share a contact card from the chat (the 📎 → Contact button) */
+  @Post('conversations/:id/messages/contact')
+  sendConversationContact(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() payload: SendContactDto,
+  ) {
+    return this.botAdminService.sendConversationContact(user, id, payload);
   }
 
   /** Owner 👍 / 👎 on a bot reply: 👍 = style example, 👎 = better reply or "don't answer like this" */

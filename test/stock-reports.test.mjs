@@ -45,7 +45,8 @@ describe('stock counting', () => {
     assert.equal(list.data.totals.tracked, 0);
     assert.equal(list.data.products.find((p) => p.id === plain.id).track_stock, false);
     assert.equal((await api('PATCH', `/stock/products/${plain.id}`, { token: agent.token, body: { track_stock: true } })).status, 403);
-    assert.equal((await api('PATCH', `/stock/products/${plain.id}`, { token: supervisor.token, body: { track_stock: true } })).status, 403);
+    // supervisors (team leads) may change stock settings too – e.g. the alert level
+    assert.equal((await api('PATCH', `/stock/products/${plain.id}`, { token: supervisor.token, body: { low_stock_level: 5 } })).status, 200);
     assert.equal((await api('GET', '/stock/products', { token: supervisor.token })).status, 200);
     // another shop cannot touch it
     assert.equal((await api('PATCH', `/stock/products/${plain.id}`, { token: other.token, body: { track_stock: true } })).status, 404);

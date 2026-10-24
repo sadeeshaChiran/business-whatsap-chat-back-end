@@ -125,7 +125,7 @@ export class ProductReportService {
          GROUP BY i.product_id
       )
       SELECT p.id, p.name, p.sku, p.brand, p.image_url, p.price, p.is_available, p.show_to_bot, p.track_stock, p.quantity,
-             p.low_stock_level, p.has_variants,
+             p.low_stock_level, p.has_variants, p.reorder_days,
              (SELECT v.variants FROM product_variant v WHERE v.product_id = p.id ORDER BY v.id LIMIT 1) AS options,
              COALESCE(ev.shown, 0)::int AS shown, COALESCE(ev.cart, 0)::int AS cart, COALESCE(ev.unavailable, 0)::int AS unavailable,
              COALESCE(s.orders, 0)::int AS orders, COALESCE(s.qty, 0)::int AS qty, COALESCE(s.revenue, 0)::float AS revenue,
@@ -142,6 +142,7 @@ export class ProductReportService {
       id: num(r.id), name: String(r.name), sku: r.sku ?? '', brand: r.brand ?? null, image_url: r.image_url ?? null, price: num(r.price),
       is_available: r.is_available !== false, show_to_bot: r.show_to_bot !== false, track_stock: Boolean(r.track_stock),
       stock: r.track_stock ? held.stock : null, stock_state: r.track_stock ? held.state : null, low_stock_level: num(r.low_stock_level),
+      reorder_days: r.reorder_days == null ? null : num(r.reorder_days),
       shown: num(r.shown), cart: num(r.cart), unavailable: num(r.unavailable),
       orders: num(r.orders), qty: num(r.qty), revenue: Math.round(num(r.revenue)), buyers: num(r.buyers), bot_orders: num(r.bot_orders),
       // of the chats that saw it, how many ordered it (bot orders only – manual orders may not come from a chat that saw it)
@@ -234,7 +235,7 @@ function findings(products: Array<{ name: string; shown: number; orders: number;
   const restock = products.filter((p) => p.unavailable > 0).sort((a, b) => b.unavailable - a.unavailable);
   if (restock.length) out.push(`${many(restock.length, 'product was', 'products were')} asked for while unavailable – most: ${restock[0].name} (${restock[0].unavailable} times). Restocking them is the quickest extra sales.`);
   const weak = products.filter((p) => p.shown >= 5 && p.conversion < 10).sort((a, b) => b.shown - a.shown);
-  if (weak.length) out.push(`${weak[0].name} was shown in ${weak[0].shown} chats but ${weak[0].conversion ? `only ${weak[0].conversion}% ordered` : "nobody ordered it"} – check its price, photos or selling points.`);
+  if (weak.length) out.push(`${weak[0].name} was asked about in ${weak[0].shown} chats but ${weak[0].conversion ? `only ${weak[0].conversion}% ordered` : "nobody ordered it"} – check its price, photos or selling points.`);
   const low = products.filter((p) => p.track_stock && (p.stock_state === 'low' || p.stock_state === 'out') && p.orders > 0);
   if (low.length) out.push(`${many(low.length, 'selling product is', 'selling products are')} low or out of stock: ${low.slice(0, 3).map((p) => `${p.name} (${p.stock_state === 'out' ? 'out' : 'low'})`).join(', ')}.`);
   if (notInCatalog) out.push(`Customers asked for ${many(notInCatalog, 'thing', 'things')} you don't sell – see "Asked for, not in your catalog". Some may be worth adding.`);

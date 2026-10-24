@@ -434,7 +434,7 @@ export class SalesBotEngineService implements OnModuleInit {
       .join('\n');
     const social = socialPlatformOf(channelUser.platform);
     // Messenger / Instagram chats are answered through the connected Page, not a WhatsApp channel
-    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
+    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId, channelUser.external_user_id).catch(() => null);
     // the customer's photos of this turn – or the earlier photo they replied to ("mekata kiyada?")
     const photoRows = pending.filter((row) => row.media_url && row.message_type === 'image').slice(-3);
     if (!photoRows.length) {
@@ -1364,7 +1364,7 @@ export class SalesBotEngineService implements OnModuleInit {
     }
 
     const social = socialPlatformOf(channelUser.platform);
-    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId).catch(() => null);
+    const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId, channelUser.external_user_id).catch(() => null);
     const sessionState = this.readSessionState(channelUser.session_state);
     const session: BotSession = (sessionState.sales_bot as BotSession) ?? {};
     const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId });

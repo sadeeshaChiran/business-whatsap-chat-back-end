@@ -75,6 +75,8 @@ type CompanyContactChannelUser = {
   bot_enabled: boolean;
   manual_mode: boolean;
   last_seen_at: Date | string | null;
+  /** the company's WhatsApp number this customer writes to (several numbers) */
+  whatsapp_channel_id?: number | null;
 };
 
 type CompanyContactRow = {
@@ -195,7 +197,11 @@ export class BotAdminService {
     return { base, secureKey, enabled: Boolean(base && secureKey) };
   }
 
-  private async resolveCompanyWhatsappChannel(companyId: number) {
+  /**
+   * The WhatsApp number to use. With a customer phone: the number that customer wrote to (several numbers per
+   * company); otherwise / as fallback the main number. One number per company works exactly as before.
+   */
+  private async resolveCompanyWhatsappChannel(companyId: number, customerPhone?: string | null) {
     const channels = await this.whatsappChannelRepository.find({
       where: { company_id: companyId },
       order: { id: 'DESC' },
@@ -203,6 +209,16 @@ export class BotAdminService {
     if (!channels.length) {
       return null;
     }
+    const digits = String(customerPhone ?? '').replace(/\D/g, '');
+    if (digits && channels.length > 1) {
+      const [row] = (await this.whatsappChannelRepository.query(
+        `SELECT whatsapp_channel_id AS id FROM bot_channel_user WHERE company_id = $1 AND platform = 'whatsapp' AND external_user_id = $2 LIMIT 1`,
+        [companyId, digits]).catch(() => [])) as Array<{ id: number | null }>;
+      const used = row?.id ? channels.find((channel) => Number(channel.id) === Number(row.id)) : undefined;
+      if (used) return used;
+    }
+    const primary = channels.length > 1 ? channels.find((channel) => channel.is_primary) : undefined;
+    if (primary) return primary;
     return (
       channels.find(
         (channel) =>
@@ -213,6 +229,14 @@ export class BotAdminService {
       channels.find((channel) => channel.evaluation_whatsapp_key?.trim()) ??
       channels[0]
     );
+  }
+
+  /** The number an inbound message arrived on (null for older messages / one-number companies). */
+  private async whatsappChannelOfMessage(companyId: number, messageId: number): Promise<WhatsappChannel | null> {
+    const [row] = (await this.whatsappChannelRepository.query(
+      `SELECT whatsapp_channel_id AS id FROM bot_message WHERE id = $1 AND whatsapp_channel_id IS NOT NULL`, [messageId]).catch(() => [])) as Array<{ id: number }>;
+    if (!row?.id) return null;
+    return this.whatsappChannelRepository.findOne({ where: { id: Number(row.id), company_id: companyId } });
   }
 
   private isMetaWhatsappChannel(channel: WhatsappChannel | null | undefined): boolean {
@@ -290,7 +314,7 @@ export class BotAdminService {
     options: WhatsappTextOptions = {},
   ): Promise<string | null> {
     if (isTestPhone(phone)) return testSendResult().messageId; // Customer simulator chat: never sent to WhatsApp
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
     await this.assertWhatsappSendReady(channel);
     try {
       const result = await this.whatsappService.sendText(companyId, phone, text, options);
@@ -311,7 +335,7 @@ export class BotAdminService {
       mediaType: 'image' | 'document' | 'audio' | 'video';
     },
   ): Promise<string | null> {
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
     await this.assertWhatsappSendReady(channel);
     try {
       const result = await this.whatsappService.sendMedia(companyId, phone, media);
@@ -431,7 +455,7 @@ export class BotAdminService {
     user: AuthenticatedUser,
     conversationId: number,
   ) {
-    let isAdmin = user.role === 'admin';
+    let isAdmin = user.role === 'admin' || user.role === 'supervisor';
     if (!user.role) {
       const company = await this.getCompanyForUser(user);
       if (!company) throw new ForbiddenException('Company not found.');
@@ -1901,6 +1925,7 @@ export class BotAdminService {
           bot_enabled: channelUser.bot_enabled,
           manual_mode: channelUser.manual_mode,
           last_seen_at: channelUser.last_seen_at,
+          whatsapp_channel_id: channelUser.whatsapp_channel_id ?? null,
         },
         conversation: {
           id: conversation.id,
@@ -1992,6 +2017,7 @@ export class BotAdminService {
       bot_enabled: channelUser.bot_enabled,
       manual_mode: channelUser.manual_mode,
       last_seen_at: channelUser.last_seen_at,
+      whatsapp_channel_id: channelUser.whatsapp_channel_id ?? null,
     });
 
     const latestConversation = (channelUser: BotChannelUser | undefined) => {
@@ -2410,7 +2436,7 @@ export class BotAdminService {
     }
 
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id, phone);
     const platform = String(conversation.channelUser?.platform ?? 'whatsapp').toLowerCase();
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
@@ -2627,7 +2653,8 @@ export class BotAdminService {
     }
 
     // 3. WhatsApp Cloud API media id ("meta-media:<id>") – images, voice, video, documents
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    //    (read with the token of the number the message came in on – several numbers per company)
+    const channel = (await this.whatsappChannelOfMessage(user.company_id, messageId)) ?? (await this.resolveCompanyWhatsappChannel(user.company_id));
     const metaToken = channel?.meta_access_token?.trim() ?? '';
     const metaMediaId = this.extractMetaMediaId(message);
     if (metaMediaId && metaToken) {
@@ -3269,7 +3296,7 @@ export class BotAdminService {
     const platform = this.normalizeChannelPlatform(channelUser.platform);
     try {
       if (platform === 'whatsapp') {
-        const channel = await this.resolveCompanyWhatsappChannel(companyId);
+        const channel = await this.resolveCompanyWhatsappChannel(companyId, channelUser.external_user_id);
         const token = channel?.meta_access_token?.trim();
         const phoneNumberId = channel?.meta_phone_number_id?.trim();
         if (!this.isMetaWhatsappChannel(channel) || !token || !phoneNumberId) return;
@@ -3393,7 +3420,7 @@ export class BotAdminService {
   ): Promise<{ ok: boolean; messageId: string | null }> {
     if (isTestPhone(phone)) return { ok: true, messageId: testSendResult().messageId }; // simulator chat
     try {
-      const channel = await this.resolveCompanyWhatsappChannel(companyId);
+      const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
       if (!channel) return { ok: false, messageId: null };
 
       if (this.isMetaWhatsappChannel(channel)) {
@@ -3806,7 +3833,7 @@ export class BotAdminService {
     }
     if (isTestPhone(cleanedPhone)) return true; // simulator chat: never sent to WhatsApp
 
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, cleanedPhone);
     if (!channel) {
       return false;
     }
@@ -4926,10 +4953,9 @@ export class BotAdminService {
       user,
       Number(note.bot_channel_user_id),
     );
-
-    const phone = this.normalizePhoneKey(channelUser.external_user_id);
-    if (!phone) {
-      throw new BadRequestException('Invalid customer phone for this client.');
+    // an agent sends only their own notes (not the owner's or the bot's internal notes)
+    if (!isAdmin && Number(note.created_by_user_id ?? 0) !== Number(user.id)) {
+      throw new ForbiddenException('You can send only your own notes to the customer.');
     }
 
     const text = note.content.trim();
@@ -4937,7 +4963,17 @@ export class BotAdminService {
       throw new BadRequestException('Note content is empty.');
     }
 
-    await this.sendCompanyWhatsappText(companyId, phone, text);
+    if (socialPlatformOf(channelUser.platform)) {
+      // Messenger / Instagram customers get it on their own channel
+      const delivered = await this.sendCustomerMessage(companyId, channelUser, text);
+      if (!delivered) throw new BadRequestException('Could not send the note on Messenger / Instagram. Reply from the chat instead.');
+    } else {
+      const phone = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phone) {
+        throw new BadRequestException('Invalid customer phone for this client.');
+      }
+      await this.sendCompanyWhatsappText(companyId, phone, text);
+    }
 
     note.sent_at = new Date();
     const saved = await this.customerNoteRepository.save(note);

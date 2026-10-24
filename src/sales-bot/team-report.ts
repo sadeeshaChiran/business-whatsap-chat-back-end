@@ -103,7 +103,7 @@ export async function teamReport(ds: DataSource, companyId: number, daysRaw: num
       bookings: { count: num(kk.bookings), kept: num(kk.kept), value: num(kk.value) },
       notes: num(n.get(id)?.notes),
       // chats accepted that ended in an order or booking
-      conversion: num(cc.accepted) ? Math.round(((orderCount + num(kk.bookings)) / num(cc.accepted)) * 1000) / 10 : 0,
+      conversion: num(cc.accepted) ? Math.min(100, Math.round(((orderCount + num(kk.bookings)) / num(cc.accepted)) * 1000) / 10) : 0,
     };
   });
   const sum = (pick: (row: (typeof list)[number]) => number) => list.reduce((total, row) => total + pick(row), 0);

@@ -45,8 +45,26 @@ export class WhatsappService {
     return this.metaAdapter.resolveDisplayPhoneNumber(channel);
   }
 
-  async getChannelForCompany(companyId: number) {
-    return this.whatsappChannelService.getForCompany(companyId);
+  /** With a phone: the number that customer uses (several numbers per company); without: the main number. */
+  async getChannelForCompany(companyId: number, phone?: string | null) {
+    return phone ? this.whatsappChannelService.getForCustomer(companyId, phone) : this.whatsappChannelService.getForCompany(companyId);
+  }
+
+  /** Remembers which of the company's numbers a customer wrote to (replies go from it; reports per number). */
+  private async rememberCustomerNumber(channel: WhatsappChannel, phone: string, messageId: string | undefined) {
+    const digits = String(phone ?? '').replace(/\D/g, '');
+    const channelId = Number(channel.id);
+    if (!digits || !channelId) return;
+    await this.messageRepository.manager.query(
+      `UPDATE bot_channel_user SET whatsapp_channel_id = $3, first_whatsapp_channel_id = COALESCE(first_whatsapp_channel_id, $3)
+        WHERE company_id = $1 AND platform = 'whatsapp' AND external_user_id = $2
+          AND (whatsapp_channel_id IS DISTINCT FROM $3 OR first_whatsapp_channel_id IS NULL)`,
+      [Number(channel.company_id), digits, channelId]);
+    if (messageId?.trim()) {
+      await this.messageRepository.manager.query(
+        `UPDATE bot_message SET whatsapp_channel_id = $2 WHERE provider_message_id = $1 AND platform = 'whatsapp' AND whatsapp_channel_id IS NULL`,
+        [messageId.trim(), channelId]);
+    }
   }
 
   async resolveChannelForInbound(
@@ -226,6 +244,12 @@ export class WhatsappService {
         : undefined,
     );
 
+    // several numbers per company: remember which one this customer wrote to (never blocks the message)
+    if (routing.conversationId && !routing.duplicate) {
+      await this.rememberCustomerNumber(channel, normalized.phone, normalized.message_id)
+        .catch((error: unknown) => this.logger.warn(`customer number not saved: ${error instanceof Error ? error.message : String(error)}`));
+    }
+
     // the customer replied to (quoted) an earlier message: keep the quote for the inbox and the AI
     if (routing.conversationId && !routing.duplicate && normalized.message_id) {
       const quoted = normalized.provider === 'meta'
@@ -252,8 +276,11 @@ export class WhatsappService {
       }));
 
     // Python sales bot (SALES_BOT_URL): owns bot replies for Meta and Evolution.
+    // a number with the AI bot switched off is answered by the team only
+    const botOnThisNumber = channel.bot_enabled !== false;
     const salesBotHandled =
       !flowHandled &&
+      botOnThisNumber &&
       SalesBotHook.isActive() &&
       Boolean(routing.conversationId) &&
       !routing.duplicate &&
@@ -267,6 +294,7 @@ export class WhatsappService {
 
     if (
       !flowHandled &&
+      botOnThisNumber &&
       !SalesBotHook.isActive() &&
       normalized.provider === 'meta' &&
       forwardMeta &&
@@ -399,7 +427,7 @@ export class WhatsappService {
 
   async sendText(companyId: number, toPhone: string, text: string, options: WhatsappTextOptions = {}) {
     if (isTestPhone(toPhone)) return testSendResult(); // Customer simulator number: never sent to WhatsApp
-    const channel = await this.whatsappChannelService.getForCompany(companyId);
+    const channel = await this.whatsappChannelService.getForCustomer(companyId, toPhone);
     if (!channel) {
       throw new NotFoundException('WhatsApp channel not configured for this company.');
     }
@@ -420,7 +448,7 @@ export class WhatsappService {
     },
   ) {
     if (isTestPhone(toPhone)) return testSendResult(); // Customer simulator number: never sent to WhatsApp
-    const channel = await this.whatsappChannelService.getForCompany(companyId);
+    const channel = await this.whatsappChannelService.getForCustomer(companyId, toPhone);
     if (!channel) {
       throw new NotFoundException('WhatsApp channel not configured for this company.');
     }

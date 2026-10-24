@@ -56,8 +56,14 @@ export class FlowSenderService {
 
   private async sendWhatsapp(target: Target, message: Outgoing): Promise<string | null> {
     if (isTestPhone(target.recipient)) return null; // customer simulator
+    // the number this customer wrote to (several numbers per company), else the main number
     const [channel] = await this.dataSource.query(
-      `SELECT provider_type, meta_phone_number_id, meta_access_token FROM whatsapp_channels WHERE company_id = $1 ORDER BY id DESC LIMIT 1`, [target.companyId]);
+      `SELECT w.provider_type, w.meta_phone_number_id, w.meta_access_token FROM whatsapp_channels w
+        WHERE w.company_id = $1
+        ORDER BY (w.id = (SELECT cu.whatsapp_channel_id FROM bot_channel_user cu WHERE cu.company_id = $1 AND cu.platform = 'whatsapp'
+                          AND cu.external_user_id = $2 LIMIT 1)) DESC NULLS LAST,
+                 w.is_primary DESC, w.id DESC
+        LIMIT 1`, [target.companyId, String(target.recipient ?? '').replace(/\D/g, '')]);
     const cloud = channel?.provider_type === 'meta' && channel.meta_phone_number_id && channel.meta_access_token;
     if (!cloud) {
       // Evolution / other providers: plain text (buttons become numbered options), media downloaded and sent as a file

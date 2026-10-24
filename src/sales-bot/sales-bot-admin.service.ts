@@ -575,7 +575,8 @@ export class SalesBotAdminService {
       handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
       ai_credits: Math.round((num(summary?.ai_tokens) / (await this.planService.tokensPerCredit())) * 10) / 10,
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
-      conversion: conversations ? (orders + bookings) / conversations : 0,
+      // returning customers order in older chats too: never show more than 100 %
+      conversion: conversations ? Math.min(1, (orders + bookings) / conversations) : 0,
       daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),
       details: await botReportDetails(this.dataSource, companyId, days),
     };
