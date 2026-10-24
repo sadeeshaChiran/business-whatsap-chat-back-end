@@ -27,6 +27,7 @@ need(String(bot.tone ?? '').length <= 255, 'bot.tone: max 255 characters');
 need(String(bot.opening_hours ?? '').length <= 255, 'bot.opening_hours: max 255 characters');
 need(['auto', 'sinhala', 'sinhala_latin', 'tamil', 'english'].includes(bot.default_language ?? 'auto'), 'bot.default_language: auto / sinhala / tamil / english');
 need(['products', 'services', 'both'].includes(bot.sells ?? 'products'), 'bot.sells: products / services / both');
+need(bot.booking_capacity == null || (Number.isInteger(bot.booking_capacity) && bot.booking_capacity >= 1), 'bot.booking_capacity: whole number, 1 or more (bookings at the same time)');
 
 // ---- general rules every shop gets (each can be switched off or replaced in the JSON) ----
 const address = {
@@ -51,8 +52,11 @@ const faqChars = faqs.reduce((n, [a, b]) => n + a.length + b.length + 4, 0);
 if (faqChars > 6000) console.error(`warning: FAQs are ${faqChars} chars (over 6000 they are searched instead of always in the prompt)`);
 const zones = c.delivery_zones ?? [];
 for (const z of zones) need(z.area && z.fee != null, `delivery zone needs area and fee: ${JSON.stringify(z)}`);
+for (const z of zones) need(String(z.area ?? '').length <= 120, `delivery zone area: max 120 characters (${z.area})`);
 const services = c.services ?? [];
 for (const s of services) need(s.name && s.price != null, `service needs name and price: ${JSON.stringify(s)}`);
+for (const s of services) need(String(s.price_note ?? '').length <= 50, `service price_note: max 50 characters (${s.name}: ${s.price_note})`);
+for (const s of services) need(String(s.name ?? '').length <= 255, `service name: max 255 characters (${s.name})`);
 if (errors.length) { console.error(errors.map((e) => `error: ${e}`).join('\n')); process.exit(1); }
 
 const rows = [...policies.map(([a, b]) => ['policy', a, b]), ...styles.map(([a, b]) => ['style', a, b]), ...faqs.map(([a, b]) => ['faq', a, b])];
@@ -70,15 +74,16 @@ BEGIN
   IF cid IS NULL THEN RAISE EXCEPTION 'company with admin ${c.admin_email} not found – create the account first'; END IF;
 
   INSERT INTO bot_sales_settings (company_id, bot_name, tone, default_language, greeting, about, opening_hours, payment_methods,
-      sells, auto_send_invoice, followup_enabled, free_delivery_over, auto_enable_new_customers, created_at, updated_at)
+      sells, auto_send_invoice, followup_enabled, free_delivery_over, auto_enable_new_customers, booking_capacity, created_at, updated_at)
   VALUES (cid, ${q(bot.name)}, ${q(bot.tone ?? 'friendly, short, helpful')}, ${q(bot.default_language ?? 'auto')}, ${q(bot.greeting ?? '')},
       ${q(bot.about ?? '')}, ${q(bot.opening_hours ?? '')}, ${q(bot.payment_methods ?? 'Cash on delivery')}, ${q(bot.sells ?? 'products')},
       ${bot.auto_send_invoice === false ? 'FALSE' : 'TRUE'}, ${bot.followup_enabled === false ? 'FALSE' : 'TRUE'}, ${num(bot.free_delivery_over)},
-      ${bot.auto_enable_new_customers === false ? 'FALSE' : 'TRUE'}, NOW(), NOW())
+      ${bot.auto_enable_new_customers === false ? 'FALSE' : 'TRUE'}, ${num(bot.booking_capacity ?? 1)}, NOW(), NOW())
   ON CONFLICT (company_id) DO UPDATE SET bot_name = EXCLUDED.bot_name, tone = EXCLUDED.tone, default_language = EXCLUDED.default_language,
       greeting = EXCLUDED.greeting, about = EXCLUDED.about, opening_hours = EXCLUDED.opening_hours, payment_methods = EXCLUDED.payment_methods,
       sells = EXCLUDED.sells, auto_send_invoice = EXCLUDED.auto_send_invoice, followup_enabled = EXCLUDED.followup_enabled,
-      free_delivery_over = EXCLUDED.free_delivery_over, auto_enable_new_customers = EXCLUDED.auto_enable_new_customers, updated_at = NOW();
+      free_delivery_over = EXCLUDED.free_delivery_over, auto_enable_new_customers = EXCLUDED.auto_enable_new_customers,
+      booking_capacity = EXCLUDED.booking_capacity, updated_at = NOW();
 ${zones.length ? `
   DELETE FROM bot_delivery_zone WHERE company_id = cid;
   INSERT INTO bot_delivery_zone (company_id, area, fee, days, included_kg, per_extra_kg, weight_rounding) VALUES

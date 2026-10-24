@@ -3,7 +3,8 @@
 1. **Account**: create the company (sign-up or super admin) and import its products (Products → Import).
 2. **Training file**: copy `template.json` to `clients/<client>.json` and fill it:
    - `admin_email`: the company admin login
-   - `bot`: name, tone (max 255 chars), greeting, about, opening hours (max 255), payment, `sells` (products / services / both)
+   - `bot`: name, tone (max 255 chars), greeting, about, opening hours (max 255), payment, `sells` (products / services / both),
+     `booking_capacity` (optional: how many bookings can share the same time, e.g. 10 tables)
    - `address_customers`: `auto` (Madam/Sir only when known), `madam_sir` (always Madam / Sir), `name` (first name only)
    - `delivery_zones`: `{ "area": "Colombo", "fee": 350, "days": "1-2 days" }`, `"*"` = everywhere; weight rules: `included_kg`, `per_extra_kg`
    - `services` (salons, clinics): name, price, duration_min
