@@ -50,11 +50,39 @@ export class WhatsappChannelService {
     }
   }
 
+  /** The company's main number (the first one when none is marked). */
   async getForCompany(companyId: number) {
     return this.whatsappChannelRepository.findOne({
       where: { company_id: companyId },
-      order: { id: 'ASC' },
+      order: { is_primary: 'DESC', id: 'ASC' },
     });
+  }
+
+  /** Every number of the company, main number first. */
+  async listForCompany(companyId: number) {
+    return this.whatsappChannelRepository.find({
+      where: { company_id: companyId },
+      order: { is_primary: 'DESC', id: 'ASC' },
+    });
+  }
+
+  /**
+   * The number to answer a customer from: the one they wrote to last, else the main number.
+   * With one number this is always the main number.
+   */
+  async getForCustomer(companyId: number, phone: string | null | undefined) {
+    const digits = String(phone ?? '').replace(/\D/g, '');
+    if (digits) {
+      const [row] = await this.whatsappChannelRepository.query(
+        `SELECT cu.whatsapp_channel_id AS id FROM bot_channel_user cu
+          WHERE cu.company_id = $1 AND cu.platform = 'whatsapp' AND cu.external_user_id = $2 AND cu.whatsapp_channel_id IS NOT NULL
+          LIMIT 1`, [companyId, digits]).catch(() => []) as Array<{ id: number }>;
+      if (row?.id) {
+        const channel = await this.whatsappChannelRepository.findOne({ where: { id: Number(row.id), company_id: companyId } });
+        if (channel) return channel;
+      }
+    }
+    return this.getForCompany(companyId);
   }
 
   mapEvolutionState(state: string | null | undefined): string {
@@ -108,6 +136,24 @@ export class WhatsappChannelService {
         created_at: new Date(),
       }),
     );
+  }
+
+  /** Another number for the company (not the main one). The first number of a company becomes its main number. */
+  async addNumber(companyId: number, companyName: string, patch: Partial<WhatsappChannel>): Promise<WhatsappChannel> {
+    const count = await this.whatsappChannelRepository.count({ where: { company_id: companyId } });
+    return this.whatsappChannelRepository.save(this.whatsappChannelRepository.create({
+      company_id: companyId,
+      company_name: companyName,
+      instance_name: patch.meta_phone_number_id?.trim() || `company-${companyId}-${Date.now()}`,
+      provider_type: 'meta',
+      role_type: 'general',
+      status: 'CONNECTED',
+      weight: 1,
+      bot_enabled: true,
+      is_primary: count === 0,
+      created_at: new Date(),
+      ...patch,
+    }));
   }
 
   toSnapshot(channel: WhatsappChannel | null): WhatsappChannelSnapshot {

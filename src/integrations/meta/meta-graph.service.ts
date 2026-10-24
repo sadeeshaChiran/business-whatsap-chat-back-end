@@ -670,7 +670,7 @@ export class MetaGraphService {
    * Embedded Signup fallback: the business token's granular scopes list the shared WhatsApp Business Accounts;
    * returns the first phone number found (the one the customer just set up in most cases).
    */
-  async discoverSharedWhatsappNumber(accessToken: string): Promise<{ waba_id: string; phone_number_id: string } | null> {
+  async discoverSharedWhatsappNumber(accessToken: string, exclude: string[] = []): Promise<{ waba_id: string; phone_number_id: string } | null> {
     const cfg = this.getConfig();
     const appToken = `${cfg.appId}|${cfg.appSecret}`;
     const debug = await this.healthGet<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>(
@@ -683,7 +683,8 @@ export class MetaGraphService {
       const numbers = await this.healthGet<{ data?: Array<{ id: string; platform_type?: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
       for (const number of numbers.data?.data ?? []) {
         // a number just added in the signup is not on the Cloud API yet
-        if (number.id) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
+        // numbers the company already connected are skipped when adding another one
+        if (number.id && !exclude.includes(number.id)) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
       }
     }
     const pick = found.find((n) => n.fresh) ?? found[0];

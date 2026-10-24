@@ -63,6 +63,8 @@ export type SalesBotContext = {
   campaign?: BotCampaign | null;
   /** Sri Lanka date and time now, e.g. "2026-10-09 Friday 14:20" (for "tomorrow", "next Monday") */
   today?: string;
+  /** the shop's WhatsApp number this customer wrote to, when the shop has several (sales, support, wholesale …) */
+  whatsapp_number?: { label: string | null; purpose: string | null; note: string | null } | null;
   /** booked times (next 90 days) - the bot's check_booking_time tool uses this */
   bookings?: { mode: 'requested' | 'confirmed'; capacity: number; open: string; close: string; busy: Array<{ id: number; date: string; start: string; end: string }> };
   /** this customer's bookings that are still open (requested / confirmed) - the bot changes or cancels these */
@@ -300,8 +302,22 @@ export class SalesBotContextService {
     });
   }
 
+  /** The number the customer wrote to – only when the shop has more than one number or gave it a note. */
+  private async whatsappNumberFor(companyId: number, channelUserId: number) {
+    try {
+      const [row] = (await this.companyRepository.query(
+        `SELECT w.label, w.purpose, w.bot_note, (SELECT COUNT(*) FROM whatsapp_channels x WHERE x.company_id = $1)::int AS numbers
+           FROM bot_channel_user cu JOIN whatsapp_channels w ON w.id = cu.whatsapp_channel_id AND w.company_id = cu.company_id
+          WHERE cu.id = $2 AND cu.company_id = $1`, [companyId, channelUserId])) as Array<{ label: string | null; purpose: string | null; bot_note: string | null; numbers: number }>;
+      if (!row || (Number(row.numbers) < 2 && !row.bot_note?.trim())) return null;
+      return { label: row.label?.trim() || null, purpose: row.purpose || null, note: row.bot_note?.trim() || null };
+    } catch {
+      return null;
+    }
+  }
+
   async build(companyId: number, channelUserId: number | null, channel = 'whatsapp', chat: { conversationId?: number; message?: string } = {}): Promise<SalesBotContext> {
-    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign] = await Promise.all([
+    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign, whatsappNumber] = await Promise.all([
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
       this.loadProducts(companyId),
@@ -322,6 +338,7 @@ export class SalesBotContextService {
             .getMany()
         : Promise.resolve([] as BotOrder[]),
       this.campaignFor(chat.conversationId, chat.message),
+      channel === 'whatsapp' && channelUserId ? this.whatsappNumberFor(companyId, channelUserId) : Promise.resolve(null),
     ]);
 
     const now = sriLankaNow();
@@ -407,6 +424,7 @@ export class SalesBotContextService {
       })),
       channel,
       campaign,
+      whatsapp_number: whatsappNumber,
       today: now.label,
       bookings: effectiveSellsOf(company, settings) === 'products' ? undefined : await this.upcomingBookings(companyId, settings, now.date),
       open_bookings: effectiveSellsOf(company, settings) === 'products' || !channelUserId ? undefined : await this.openBookings(companyId, channelUserId, now.date),

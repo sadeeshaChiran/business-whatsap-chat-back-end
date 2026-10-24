@@ -224,7 +224,8 @@ export class MobileService {
         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id LEFT JOIN app_user u ON u.id = c.assigned_agent_id
        WHERE c.id = $1 AND cu.company_id = $2`, [conversationId, user.company_id]);
     if (!row) throw new NotFoundException('Chat not found.');
-    if ((await this.role(user)) !== 'admin' && Number(row.assigned_agent_id) !== Number(user.id) && row.assigned_agent_id != null) {
+    // agents: only chats assigned to them (same rule as the web inbox – queued chats are not open to every agent)
+    if ((await this.role(user)) !== 'admin' && Number(row.assigned_agent_id) !== Number(user.id)) {
       throw new NotFoundException('Chat not found.');
     }
     return row;

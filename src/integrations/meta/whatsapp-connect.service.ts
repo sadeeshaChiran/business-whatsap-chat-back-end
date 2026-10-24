@@ -47,7 +47,8 @@ export class WhatsappConnectService {
     return company;
   }
 
-  async connect(user: AuthenticatedUser, body: WhatsappConnectInput) {
+  async connect(user: AuthenticatedUser, body: WhatsappConnectInput, addNumber?: { label?: string; purpose?: string }) {
+    if (addNumber) return this.connectAnother(user, body, addNumber);
     const company = await this.assertAdmin(user);
     const existing = await this.whatsappChannelService.getForCompany(
       user.company_id,
@@ -134,6 +135,59 @@ export class WhatsappConnectService {
         ? null
         : `The number could not be registered for the Cloud API: ${registration.message}`,
       replaced_previous_number: Boolean(replaced),
+      added_number: false,
+    };
+  }
+
+  /**
+   * Adds another WhatsApp number to the company (sales, support, wholesale …). The main number, the company
+   * settings and every existing chat stay as they are; customers are answered from the number they write to.
+   */
+  async connectAnother(user: AuthenticatedUser, body: WhatsappConnectInput, addNumber: { label?: string; purpose?: string }) {
+    const company = await this.assertAdmin(user);
+    const existing = await this.whatsappChannelService.listForCompany(Number(company.id));
+    const taken = existing.map((channel) => String(channel.meta_phone_number_id ?? '').trim()).filter(Boolean);
+    const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code, body.page_url, Boolean(body.via_redirect));
+    let wabaId = body.waba_id?.trim() ?? '';
+    let phoneNumberId = body.phone_number_id?.trim() ?? '';
+    if (!wabaId || !phoneNumberId) {
+      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, taken);
+      if (!found)
+        throw new BadRequestException('Meta did not share a new WhatsApp number. Run the setup again and choose (or add) the new phone number.');
+      wabaId = found.waba_id;
+      phoneNumberId = found.phone_number_id;
+    }
+    if (taken.includes(phoneNumberId))
+      throw new BadRequestException('This WhatsApp number is already connected to your workspace.');
+    await this.companyService.assertWhatsappNumberFree(Number(company.id), phoneNumberId);
+
+    const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
+    await this.metaGraphService.subscribeWhatsappApp(wabaId, accessToken);
+    const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? ''))
+      ? String(process.env.WHATSAPP_REGISTRATION_PIN)
+      : String(Math.floor(100000 + Math.random() * 900000));
+    const registration = await this.metaGraphService.registerWhatsappNumber(phoneNumberId, accessToken, pin);
+    const main = existing[0] ?? null;
+    await this.whatsappChannelService.addNumber(Number(company.id), String(company.name ?? ''), {
+      meta_phone_number_id: phoneNumberId,
+      meta_waba_id: wabaId,
+      meta_access_token: accessToken,
+      meta_verify_token: main?.meta_verify_token?.trim() || process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() || randomBytes(24).toString('hex'),
+      meta_webhook_base_url: main?.meta_webhook_base_url?.trim() || process.env.PUBLIC_API_BASE_URL?.trim() || process.env.API_BASE_URL?.trim() || null,
+      display_phone: phone.display_phone_number,
+      verified_name: phone.verified_name || null,
+      label: addNumber.label?.trim() || null,
+      purpose: addNumber.purpose?.trim() || null,
+    });
+    return {
+      company,
+      display_phone_number: phone.display_phone_number,
+      verified_name: phone.verified_name,
+      subscribed: true,
+      registered: registration.registered,
+      registration_message: registration.registered ? null : `The number could not be registered for the Cloud API: ${registration.message}`,
+      replaced_previous_number: false,
+      added_number: true,
     };
   }
 }

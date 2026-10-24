@@ -5,7 +5,7 @@ import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { DataSource, EntityManager } from 'typeorm';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly, ManagerOnly } from '../auth/decorators/roles.decorator';
+import { ManagerOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { PusherService } from '../common/pusher.service';
@@ -379,9 +379,9 @@ export class StockController {
   @Get('products/:id') @ManagerOnly()
   product(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.stock.product(user, id); }
 
-  @Patch('products/:id') @AdminOnly()
+  @Patch('products/:id') @ManagerOnly()
   settings(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: StockSettingsDto) { return this.stock.settings(user, id, dto); }
 
-  @Post('products/:id/adjust') @AdminOnly()
+  @Post('products/:id/adjust') @ManagerOnly()
   adjust(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: StockAdjustDto) { return this.stock.adjust(user, id, dto); }
 }

@@ -739,7 +739,9 @@ export class AgentRoutingService {
   }
 
   /**
-   * Chats waiting for an online agent: not active/closed and not held by an online assignee.
+   * Chats waiting for an online agent: not closed and not held by an online assignee.
+   * An ACTIVE chat counts too when its agent went offline / away and the customer's message is the last one
+   * (nobody answered) – otherwise those customers would wait until someone moves each chat by hand.
    */
   private async findQueueConversationsForCompany(
     companyId: number,
@@ -750,9 +752,10 @@ export class AgentRoutingService {
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
         companyId: Number(companyId),
       })
-      .andWhere('LOWER(c.status) NOT IN (:...closedStatuses)', {
-        closedStatuses: ['active', 'closed'],
-      })
+      .andWhere('LOWER(c.status) <> :closed', { closed: 'closed' })
+      .andWhere(`(LOWER(c.status) <> 'active' OR (
+        c.assigned_agent_id IS NOT NULL
+        AND (SELECT m.direction::text FROM bot_message m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) = 'inbound'))`)
       .andWhere(this.waitingForOnlineAgentSql(), {
         companyId: Number(companyId),
       })
