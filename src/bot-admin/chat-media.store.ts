@@ -13,7 +13,7 @@
  *   PUBLIC_API_BASE_URL   e.g. https://api.yourdomain.com/v1/api  (needed for Instagram media)
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { extname, join, resolve, sep } from 'path';
 
 export const CHAT_MEDIA_PREFIX = 'local-media:';
@@ -57,6 +57,36 @@ export function saveChatMedia(companyId: number, buffer: Buffer, mimetype: strin
   mkdirSync(join(chatMediaRoot(), String(Number(companyId)), month), { recursive: true });
   writeFileSync(absolute, buffer);
   return `${CHAT_MEDIA_PREFIX}${relative}`;
+}
+
+/** Same as saveChatMedia, for a big file already on disk (video upload): the file is moved, not read into memory. */
+export function saveChatMediaFile(companyId: number, tempPath: string, mimetype: string, originalName?: string): string {
+  const mime = (mimetype || '').split(';')[0].trim().toLowerCase();
+  let ext = extname(originalName ?? '').replace('.', '').toLowerCase();
+  if (!/^[a-z0-9]{1,5}$/.test(ext)) ext = EXT_BY_MIME[mime] ?? 'bin';
+  const month = new Date().toISOString().slice(0, 7);
+  const relative = `${Number(companyId)}/${month}/${randomUUID()}.${ext}`;
+  const absolute = join(chatMediaRoot(), relative);
+  mkdirSync(join(chatMediaRoot(), String(Number(companyId)), month), { recursive: true });
+  try {
+    renameSync(tempPath, absolute);
+  } catch {
+    // another disk: copy, then remove the temp file
+    copyFileSync(tempPath, absolute);
+    try { unlinkSync(tempPath); } catch { /* already gone */ }
+  }
+  return `${CHAT_MEDIA_PREFIX}${relative}`;
+}
+
+/** Where a stored file is on disk (for streaming big files). Null if missing or outside the media folder. */
+export function chatMediaFile(key: string): { path: string; size: number; contentType: string; fileName: string } | null {
+  if (!isChatMediaKey(key)) return null;
+  const relative = key.slice(CHAT_MEDIA_PREFIX.length);
+  const root = chatMediaRoot();
+  const absolute = resolve(root, relative);
+  if (!absolute.startsWith(root + sep) || !existsSync(absolute)) return null;
+  const fileName = relative.split('/').pop() ?? 'file';
+  return { path: absolute, size: statSync(absolute).size, contentType: mimeFromName(fileName), fileName };
 }
 
 export function isChatMediaKey(value: string | null | undefined): boolean {

@@ -60,8 +60,14 @@ server {
   client_max_body_size 25m;
   location / { proxy_pass http://127.0.0.1:3001; proxy_set_header Host $host;
                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
+  # Social → Create post: videos for reels, stories and video posts (keep in step with SOCIAL_VIDEO_MAX_MB)
+  location /v1/api/social/media { client_max_body_size 210m; proxy_request_buffering off; proxy_read_timeout 300s;
+               proxy_pass http://127.0.0.1:3001; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
 }
 ```
+
+Behind Cloudflare, uploads over 100 MB need a paid plan; on the free plan set `SOCIAL_VIDEO_MAX_MB=95`.
 
 ## 4. AI sales bot (`agent-metra-sales-bot`, FastAPI)
 
