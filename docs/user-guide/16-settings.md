@@ -1,6 +1,12 @@
 # Settings and security
 
-Open **Workspace → Settings**. The quick menu on top jumps to: Business, Account, Password, Appearance, Package & billing, Channels, Sales bot, Agents, Setup wizard.
+Open **Workspace → Settings** (or the **Settings** button in the quick dock). Every setting works the same way: a list on the left (on a phone: the start page) and the chosen page next to it (on a phone it opens on its own – **All settings** takes you back).
+
+- **Your business** (owner): Business profile · Business type & orders · AI bot · Chat routing
+- **You** (everyone): Login email & mobile · Password & sessions · Notifications · Appearance
+- **More** (owner): Package & billing · Channels · AI sales bot · Agents · Setup wizard
+
+Switches save at once; pages with fields have a **Save** button at the bottom.
 
 ## Business (owner)
 
@@ -16,22 +22,22 @@ Open **Workspace → Settings**. The quick menu on top jumps to: Business, Accou
   - **Change password** – at least 8 characters with letters and numbers. Other devices are signed out.
   - **Sign out on all devices** – use it if you lost a phone or someone else knows your password.
 
-## Phone notifications
+## Notifications
 
 Get a notification on your phone or computer for every new customer message – like WhatsApp – even when {{brand}} is closed. Tap the notification to open that chat. No app store app is needed.
 
 **Android phone or computer (Chrome, Edge, Firefox, Safari on Mac)**
 
 1. Open {{brand}} and sign in.
-2. Press **Turn on** in the bar on top, or open **Notifications** (the bell → ⚙, or your name → Notifications) and press **Turn on**.
+2. Press **Turn on** in the bar on top, or open **Settings → Notifications** (also: the bell → ⚙, or your name → Notifications) and press **Turn on**.
 3. Allow notifications when the browser asks.
-4. Press **Send a test** – a notification pops up in a few seconds.
+4. Press **Test** – a notification pops up in a few seconds.
 
 **iPhone / iPad (iOS 16.4 or newer)**
 
 1. Open {{brand}} in **Safari**, tap **Share → Add to Home Screen**.
 2. Open {{brand}} from the new icon on your home screen and sign in.
-3. **Settings → Phone notifications → Turn on notifications**, then **Allow**.
+3. **Settings → Notifications → Turn on**, then **Allow**.
 
 **Choose what notifies you** – the bell → ⚙, or your name → **Notifications**. Each person chooses for themselves; changes are saved at once and the mobile app uses the same settings:
 
@@ -50,7 +56,7 @@ The bell inside the app always shows everything; use its **All · Chats · Order
 | Owner | Every new customer message – or choose **Only chats that need a person** (the bot is off for that chat or someone took over) – plus new orders, chats that need a person, new leads from ads and other alerts. |
 | Agent | Every message from customers assigned to them and new chats waiting for them to accept. |
 
-Turn it on on every phone and computer you use – each device is listed under **Your devices with notifications**. **Turn off here** stops them on that device. If notifications were blocked, allow them in the browser's site settings (the lock icon next to the address) and reload.
+Turn it on on every phone and computer you use. **Turn off** stops them on that device. If notifications were blocked, allow them in the browser's site settings (the lock icon next to the address) and reload.
 
 > **Tip:** Agents should also switch themselves **Online** in the top bar – only online agents get new chats.
 

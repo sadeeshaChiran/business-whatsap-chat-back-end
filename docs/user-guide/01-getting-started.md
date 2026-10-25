@@ -56,6 +56,12 @@ The menu on the left is grouped:
 
 Some pages depend on your package. If a page is not in your package you see what it does and an **Upgrade** button.
 
+**Quick dock** (computer): a floating bar at the bottom with the pages you use most – Home, Inbox, Orders, Products, Reports, Settings – and a **＋** for quick jobs (new order, add product, customers, reorder due …). It slides away while you scroll down and comes back when you scroll up; the small arrow tucks it away (press **Quick dock** to bring it back).
+
+**Phone**: the bottom bar – **Home, Chats, ＋ (quick jobs), Orders, More** (the full menu). Add {{brand}} to your home screen to use it like an app.
+
+**Search pages**: press **Ctrl K** (or the search button) and type – close it with **Esc**, the ✕ button or a tap outside.
+
 ## Owner and agents
 
 - The **owner** (company admin) sees everything and changes settings.
