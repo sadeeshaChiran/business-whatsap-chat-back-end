@@ -105,13 +105,17 @@ export class WebPushService {
   async sendToUsers(userIds: number[], payload: WebPushPayload): Promise<number> {
     const ids = [...new Set(userIds.filter((id) => Number.isFinite(id) && id > 0))];
     if (!ids.length) return 0;
-    const subs: Array<{ id: number; endpoint: string; p256dh: string; auth: string; mode: PushMode }> =
-      await this.dataSource.query(`SELECT id, endpoint, p256dh, auth, mode FROM web_push_subscription WHERE user_id = ANY($1::bigint[])`, [ids]);
+    const subs: Array<{ id: number; user_id: number; endpoint: string; p256dh: string; auth: string; mode: PushMode }> =
+      await this.dataSource.query(`SELECT id, user_id, endpoint, p256dh, auth, mode FROM web_push_subscription WHERE user_id = ANY($1::bigint[])`, [ids]);
     if (!subs.length) return 0;
     const keys = await this.vapid();
+    // people with saved notification settings were already filtered by them; the browser "mode" is for the others
+    const withSettings = new Set(((await this.dataSource.query(`SELECT user_id FROM notification_preference WHERE user_id = ANY($1::bigint[])`, [ids])
+      .catch(() => [])) as Array<{ user_id: string }>).map((row) => Number(row.user_id)));
     let sent = 0;
     for (const sub of subs) {
-      if (payload.kind === 'message' && sub.mode === 'attention' && !payload.needsPerson) continue;
+      const owner = Number((sub as { user_id?: number }).user_id);
+      if (payload.kind === 'message' && sub.mode === 'attention' && !payload.needsPerson && !withSettings.has(owner)) continue;
       try {
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({
           title: payload.title.slice(0, 120), body: payload.body.slice(0, 240), url: payload.url, tag: payload.tag ?? payload.url,

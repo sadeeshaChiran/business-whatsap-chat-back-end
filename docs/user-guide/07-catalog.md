@@ -59,7 +59,7 @@ In the inbox the customer's photo shows what the bot found, for example **🔎 O
 
 ## Stock and alerts
 
-**Sales → Stock & alerts** (owner; supervisors can see it). Stock counting is **optional and off** for every product until you switch it on – products you don't count stay simply Available or Unavailable.
+Open it from **Reports → Product report** → *Count stock for some products*, or search "stock" in the top search (owner; supervisors can see it). Stock counting is **optional and off** for every product until you switch it on – products you don't count stay simply Available or Unavailable.
 
 1. Switch on **Count stock** for a product. Enter the stock you have now (**I counted**). For a product with options (size, colour, pack) each option has its own stock.
 2. From then on **orders take stock out** – orders from the AI bot, orders your team adds in a chat, and changes to them. A **cancelled or deleted order puts the stock back**. Each change is listed under the product's **Stock changes** (with the order number or who changed it).

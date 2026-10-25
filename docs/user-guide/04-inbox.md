@@ -59,7 +59,7 @@ To see results per ad (who ordered, who booked, who was lost), open **Marketing 
 ## Taking over from the bot
 
 - Turn **AI reply** off to answer yourself. The bot stays quiet for this customer until you turn it on again.
-- When an agent **accepts** a chat, the bot stops for that chat automatically. The agent can switch AI reply back on.
+- When an agent **accepts** a chat, the bot keeps helping. The agent can switch AI reply off in the chat header to reply alone.
 - When the bot needs a person (complaint, refund, price discount, the customer asks for a person…), it writes a **client note** "🙋 Customer needs a person", sends you a notification and gives the chat to an agent. See [AI sales bot](#ai-sales-bot).
 
 ## Writing messages

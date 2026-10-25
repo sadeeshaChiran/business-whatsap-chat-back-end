@@ -1,5 +1,5 @@
 -- More than one WhatsApp number per company (Oct 2026).
--- Every number is a row in whatsapp_channels. The main number (is_primary) is the one the company had before;
+-- Every number is a row in whatsapp_channels. The main number (is_primary) is the one the company had before,
 -- nothing changes for companies with one number. Customers are answered from the number they wrote to.
 
 ALTER TABLE whatsapp_channels ADD COLUMN IF NOT EXISTS label TEXT;
