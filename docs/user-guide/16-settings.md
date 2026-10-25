@@ -29,7 +29,7 @@ Get a notification on your phone or computer for every new customer message – 
 **Android phone or computer (Chrome, Edge, Firefox, Safari on Mac)**
 
 1. Open {{brand}} and sign in.
-2. Press **Turn on** in the bar on top, or open **Settings → Notifications** (also: the bell → ⚙, or your name → Notifications) and press **Turn on**.
+2. Press **Turn on** in the bar on top, or open **Settings → Notifications** (also: the bell → Settings, or your name → Notifications) and press **Turn on**.
 3. Allow notifications when the browser asks.
 4. Press **Test** – a notification pops up in a few seconds.
 
@@ -39,13 +39,13 @@ Get a notification on your phone or computer for every new customer message – 
 2. Open {{brand}} from the new icon on your home screen and sign in.
 3. **Settings → Notifications → Turn on**, then **Allow**.
 
-**Choose what notifies you** – the bell → ⚙, or your name → **Notifications**. Each person chooses for themselves; changes are saved at once and the mobile app uses the same settings:
+**Choose what notifies you** – the bell → Settings, or your name → **Notifications**. Each person chooses for themselves; changes are saved at once and the mobile app uses the same settings:
 
 - **Customer messages**: *Every message*, *Needs a person* (only chats the AI bot hands over and chats assigned to you) or *Off*.
 - Switches for **Customer asks for a person**, **New orders**, **Order changes and cancel requests**, **Bookings** and **Stock alerts** – e.g. switch messages *Off* and keep only **New orders** on.
 - **Quiet hours** (e.g. 10:00 pm – 7:00 am): everything is silent except customers who ask for a person.
 
-The bell inside the app always shows everything; use its **All · Chats · Orders · Alerts** chips to filter.
+The bell inside the app always shows everything. It opens a panel on the right (a full screen on phones) grouped by **Today**, **Yesterday** and **Earlier**, with **All · Chats · Orders · Alerts** tabs. What you see is marked read a moment after you open it (new ones keep a dot until you close the panel), and clicking a notification marks it read and opens it. **Settings** at the bottom opens these choices; **Mark all read** clears everything.
 
 **Use it like an app**: on a phone, add {{brand}} to the home screen (Chrome: ⋮ → *Add to Home screen*; iPhone Safari: *Share → Add to Home Screen*). It opens full screen with the bottom bar – **Home, Chats, ＋ (quick jobs: new order, add product, customers, reorder due …), Orders, More** (the full menu). Long-press the icon for shortcuts to the Inbox and a new order.
 

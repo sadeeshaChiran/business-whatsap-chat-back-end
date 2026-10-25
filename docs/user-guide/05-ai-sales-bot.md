@@ -69,11 +69,13 @@ The settings show the last 30 days: how many were sent and how many customers or
 
 **AI & automation → Bot reports** (last 7, 30 or 90 days – history depends on your package):
 
-- **Sales**: chats that became a sale, new chats, orders, order value, bookings, leads, chats handed to a person.
-- **Chats and orders per day** chart.
-- **What the bot did**: orders taken, changes and cancellations, bookings, invoices sent.
-- **Follow-ups**: sent and ordered (within 7 days).
-- Your 👍/👎 ratings, why chats went to a person, languages, replies per channel, best-selling products, when the bot works, reply speed and credits per reply.
+- **Bot health** (0–100) at the top, made of five parts you can see: sales from chats (30), solved without a person (25), good ratings (20), reply speed (15) and follow-up replies (10). 80+ is *Excellent*, 65+ *Good*, 45+ *Fair*.
+- **What the numbers say**: short findings with what to do next – for example the most common reason chats go to a person, or the language most customers write in.
+- **Sales**: chats that became a sale, new chats, orders, order value, bookings, leads, chats handed to a person, replies by the AI bot.
+- **Chats, orders and conversion per day** chart.
+- **Sales funnel** (chats → leads → orders and bookings) and **Follow-up funnel** (followed up → replied → ordered within 7 days).
+- **What the bot did**: orders taken, changes and cancellations, bookings, invoices sent, notes saved.
+- Your 👍/👎 ratings, why chats went to a person, best-selling products, when the bot works (24-hour heat strip), languages, replies per channel, reply speed and credits per reply.
 
 ## Credits
 
