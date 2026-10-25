@@ -15,10 +15,15 @@ All comments from Facebook and Instagram in one list.
 
 ## Create post
 
-- **Write with AI**: enter a topic and choose the language (English, Sinhala, Singlish, Tamil). Edit the text as you like.
-- Add up to **10 photos** (or a video). Instagram needs at least one photo, and captions up to 2,200 characters.
-- See the **Facebook** and **Instagram previews**.
-- **Post now**, **Schedule** (quick choices like *Today 7 pm*, *Tomorrow 9 am*, *Saturday 10 am*) or **Save draft**. Open **Drafts & scheduled** to change or cancel.
+Five short steps, with a live phone preview on the right:
+
+1. **Post to** – tap your Facebook Page, your Instagram account or both.
+2. **Photos** – drop photos on the box, click to choose, or paste one into the caption. Up to **10** (JPG or PNG). Drag to change the order – the first photo is the **cover**. Instagram needs at least one photo; several photos become a swipeable carousel.
+3. **Caption** – type, add emojis with one tap, add a saved **hashtag set**, or **Write with AI** (topic, language: English, Sinhala, Singlish or Tamil, and tone). Instagram allows 2,200 characters and 30 hashtags.
+4. **Link** – optional (links are not clickable in Instagram captions).
+5. **When** – **Post now**, **Schedule** (quick choices like *Today 7 pm*, *Tomorrow 9 am*, *Saturday 10 am*) or **Save draft**.
+
+The preview shows the post the way it looks in the feed – Facebook's photo grid (1, 2, 3 or 4+ photos) and Instagram's carousel, *… more* after the first 125 characters, and *See more* on Facebook. **Before you post** lists anything to fix. Drafts and scheduled posts are listed under the composer – press ✎ to change one or 🗑 to cancel it.
 
 ## Content calendar
 
@@ -26,7 +31,7 @@ A month view of scheduled and published posts. Press **+** on a day to plan a po
 
 ## Published posts
 
-Your recent posts with their results. **Edit** (Facebook only – Instagram captions can't be edited by apps) and **Delete**. Instagram may refuse deleting some posts – then delete them in the Instagram app.
+Your recent posts with their results: totals for posts, likes, comments, shares and engagement per post, and the **★ Top post**. Sort by newest, most engagement, most likes or most comments, and search the text. **Open**, **Post again** (copies the text into a new post), **Edit** (Facebook only – Instagram captions can't be edited by apps) and **Delete**. Instagram may refuse deleting some posts – then delete them in the Instagram app.
 
 ## Social analytics
 
