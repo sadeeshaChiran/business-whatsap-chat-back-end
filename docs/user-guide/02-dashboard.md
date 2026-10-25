@@ -4,7 +4,7 @@ The Dashboard is the first page after login. It shows how your business is doing
 
 ## Getting around
 
-Use the **quick dock** at the bottom of the screen (on phones: the bottom bar and its **+** button) to jump to Inbox, Orders, Products, Reports or Settings. Every page ends above the bar, so it never covers a row or a button; the small arrow tucks it away. The **WhatsApp**, **AI bot** and **Package** chips are links too, and most cards have a link in their top-right corner (Pipeline, Bot reports, Agent performance, Channels).
+Use the **quick dock** at the bottom of the screen (on phones: the bottom bar and its **+** button) to jump to Inbox, Orders, Products, Reports or Settings. It slides away while you scroll down and comes back when you scroll up; the small arrow tucks it away. The **WhatsApp**, **AI bot** and **Package** chips are links too, and most cards have a link in their top-right corner (Pipeline, Bot reports, Agent performance, Channels).
 
 ## Period
 
