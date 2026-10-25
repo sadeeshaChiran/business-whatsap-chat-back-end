@@ -69,6 +69,7 @@ const MIGRATION_FILES = [
   'supabase_whatsapp_numbers.sql',
   'supabase_notification_preferences.sql',
   'supabase_social_video.sql',
+  'supabase_tiktok.sql',
 ] as const;
 
 function migrationDir(): string | null {

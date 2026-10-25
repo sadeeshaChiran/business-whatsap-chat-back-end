@@ -82,4 +82,31 @@ describe('SalesBotEngineService on Messenger / Instagram', () => {
     expect(t.social.sendText).not.toHaveBeenCalled();
     expect(t.reply.mock.calls[0][0].session.channel).toBe('whatsapp');
   });
+
+  it('replies on TikTok through the TikTok channel; the bot itself treats it like Instagram', async () => {
+    const t = build('tiktok');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'tiktok', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('instagram');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'tiktok', provider_message_id: 'm.out.1', delivery_status: 'sent' }));
+  });
+
+  it('does not reply on TikTok when the package does not include TikTok (Instagram stays as it is)', async () => {
+    const t = build('tiktok', {}, { tiktok: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.reply).not.toHaveBeenCalled();
+    const ig = build('instagram', {}, { tiktok: false });
+    await (ig.engine as any).turn(7, 21);
+    expect(ig.social.sendText).toHaveBeenCalled();
+  });
+
+  it('a TikTok rule refusal (10 in a row / 48 hours) marks the reply failed, not lost', async () => {
+    const t = build('tiktok');
+    t.social.sendText.mockRejectedValue(new Error('TikTok allows 10 messages in a row.'));
+    await (t.engine as any).turn(7, 21);
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ provider_message_id: null, delivery_status: 'failed' }));
+  });
 });

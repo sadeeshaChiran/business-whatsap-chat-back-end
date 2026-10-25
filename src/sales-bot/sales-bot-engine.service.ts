@@ -15,6 +15,13 @@ import { PusherService } from '../common/pusher.service';
 import { SalesBotHook, type SalesBotInboundEvent } from '../common/sales-bot-hook';
 import { Company } from '../company/entities/company.entity';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
+import type { SocialPlatform } from '../integrations/meta/meta-social-sender.service';
+
+/**
+ * The channel name the AI bot gets. TikTok direct messages work like Instagram ones (no phone number, no files,
+ * a reply window), so the bot is told "instagram" for TikTok chats and needs no change; every other channel as before.
+ */
+const botChannel = (social: SocialPlatform | null): string => (social === 'tiktok' ? 'instagram' : social ?? 'whatsapp');
 import { WhatsappProviderFactory } from '../integrations/whatsapp/whatsapp-provider.factory';
 import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 import { Product } from '../products/entities/product.entity';
@@ -454,12 +461,12 @@ export class SalesBotEngineService implements OnModuleInit {
 
     let result: SalesBotResult;
     try {
-      const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId: conversation.id, message });
+      const context = await this.contextService.build(companyId, channelUser.id, botChannel(social), { conversationId: conversation.id, message });
       if (photoMatches.length) context.photo_matches = photoMatches;
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
         session: {
-          language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp',
+          language: session.language, pending_order: session.pending_order ?? null, channel: botChannel(social),
           memory: session.memory ?? '', handoff_at: session.handoff_at ?? 0, profile_name: channelUser.display_name ?? '',
         },
         media, context,
@@ -1367,11 +1374,11 @@ export class SalesBotEngineService implements OnModuleInit {
     const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId, channelUser.external_user_id).catch(() => null);
     const sessionState = this.readSessionState(channelUser.session_state);
     const session: BotSession = (sessionState.sales_bot as BotSession) ?? {};
-    const context = await this.contextService.build(companyId, channelUser.id, social ?? 'whatsapp', { conversationId });
+    const context = await this.contextService.build(companyId, channelUser.id, botChannel(social), { conversationId });
     const result = await this.client.reply({
       company_id: companyId, customer_id: channelUser.id, message: '', history: await this.history(conversationId, last.id + 1),
       session: {
-        language: session.language, pending_order: session.pending_order ?? null, channel: social ?? 'whatsapp', memory: session.memory ?? '', profile_name: channelUser.display_name ?? '',
+        language: session.language, pending_order: session.pending_order ?? null, channel: botChannel(social), memory: session.memory ?? '', profile_name: channelUser.display_name ?? '',
         followup: { number, max, note: conversation.followup_note ?? '', hours_quiet: Math.round((Date.now() - quietSince.getTime()) / 3_600_000) },
       },
       media: null, context,

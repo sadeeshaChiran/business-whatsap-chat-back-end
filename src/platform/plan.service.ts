@@ -116,7 +116,7 @@ export class PlanService {
   }
 
   /** Features the company gets only because it has valid bought credits (Free + top-up). */
-  static readonly CREDIT_FEATURES = ['messenger', 'instagram', 'social'];
+  static readonly CREDIT_FEATURES = ['messenger', 'instagram', 'social', 'tiktok'];
 
   async limitsForCompany(companyId: number): Promise<ResolvedLimits & { package: PlatformPackage | null; unlocked_by_credits: string[] }> {
     const pkg = await this.byCode(await this.companyPlan(companyId));

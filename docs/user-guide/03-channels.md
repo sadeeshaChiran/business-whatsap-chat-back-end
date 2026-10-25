@@ -58,6 +58,28 @@ Then: **Channels → Instagram → Connect Instagram**, log in with the Facebook
 
 > **Tip:** On Messenger and Instagram the bot always asks for a phone number before it confirms an order, so your delivery team can call the customer.
 
+## TikTok
+
+Customers who send a **direct message to your TikTok Business account** reach the same Inbox, and the AI bot can answer them like any other chat.
+
+What you need:
+
+- A **TikTok Business account** (TikTok app → Settings and privacy → Account → *Switch to Business Account*).
+- TikTok business messaging is **not available in the EU (EEA), the UK and Switzerland**.
+
+Then: **Channels → TikTok → Connect TikTok**, log in on TikTok's own page and **allow every permission** it asks for. The page then shows your @username, how many TikTok customers wrote and when the last message arrived. **Check connection** tests the login, the account and the webhook.
+
+TikTok has its own rules. They apply **only to TikTok chats** – WhatsApp, Messenger and Instagram work exactly as before:
+
+- You can reply for **48 hours** after the customer's last message.
+- You can send at most **10 messages in a row**. When the customer replies, you can send 10 more. A bar above the message box shows the hours and messages left.
+- You can send **text and photos** (JPG or PNG, up to 3 MB). Files and voice notes can't be sent – invoices go as a link.
+- Only the customer can start a chat.
+
+In the Inbox, TikTok chats have the TikTok mark, and a **TikTok** filter button appears as soon as you have a TikTok chat.
+
+> **Tip:** For the AI bot a TikTok chat is like an Instagram chat – same answers, same order steps (it asks for a phone number before it confirms an order).
+
 ## The connection check
 
 Every channel page has a live **connection check**. It asks Meta what is working right now and shows each item in plain words:
@@ -72,7 +94,7 @@ When something is red, press **Fix it** if the button is shown (for example *reg
 
 ## Package and channels
 
-Messenger, Instagram and Social (comments and posts) depend on your package. On some packages, **buying AI credits switches them on** while your bought credits last. See [Billing and credits](#billing).
+Messenger, Instagram, TikTok and Social (comments and posts) depend on your package. On some packages, **buying AI credits switches them on** while your bought credits last. See [Billing and credits](#billing).
 
 ## Meta's 24-hour rule
 

@@ -39,7 +39,7 @@ export const SEGMENTS: Array<{ key: SegmentKey; label: string; description: stri
 
 export class InsightsQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(7) @Max(3650) days?: number;
-  @IsOptional() @IsIn(['whatsapp', 'messenger', 'instagram']) platform?: 'whatsapp' | 'messenger' | 'instagram';
+  @IsOptional() @IsIn(['whatsapp', 'messenger', 'instagram', 'tiktok']) platform?: 'whatsapp' | 'messenger' | 'instagram' | 'tiktok';
 }
 export class InsightsTagDto extends InsightsQueryDto {
   @IsIn(SEGMENTS.map((s) => s.key)) segment!: SegmentKey;
@@ -188,7 +188,8 @@ export class CustomerInsightsService {
     }
     customers.sort((a, b) => new Date(b.last_activity_at).getTime() - new Date(a.last_activity_at).getTime());
 
-    const platforms = ['whatsapp', 'messenger', 'instagram'] as const;
+    // TikTok shows up only for a business that has TikTok customers (nothing changes for the others)
+    const platforms: string[] = ['whatsapp', 'messenger', 'instagram', ...(customers.some((c) => c.platform === 'tiktok') ? ['tiktok'] : [])];
     const visitsInPeriod = customers.flatMap((c) => c.all.filter((v) => new Date(v.start_at).getTime() >= since).map((v) => ({ ...v, platform: c.platform })));
     const channelRow = (pf: string | null) => {
       const list = pf ? customers.filter((c) => c.platform === pf) : customers;
