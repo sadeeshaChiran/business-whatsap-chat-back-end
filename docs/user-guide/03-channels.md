@@ -17,7 +17,26 @@ The card at the top then shows your WhatsApp business name, the number and its q
 
 > **Note:** A number that is used in the normal WhatsApp or WhatsApp Business **app** must be moved to the Cloud API. After that the number no longer works in the phone app – all chats are answered in {{brand}}. If you want to keep your phone app, use a new number for {{brand}}.
 
-**Change number**: press **Change number** on the card. The old number keeps working until the new one is connected.
+**Change main number**: press **Change main number** on the card. The new number REPLACES the old one; the old number keeps working until the new one is connected. Want to keep the old number too? Use **Add a number** instead.
+
+### More than one WhatsApp number
+
+Use different numbers for different jobs – for example **Sales**, **Customer support**, **Wholesale** or a **branch**. Every chat still arrives in one Inbox.
+
+1. **Channels → WhatsApp → Your WhatsApp numbers → Add a number**.
+2. Give it a **name** (e.g. "Wholesale") and choose what **customers use it for**.
+3. Press **Continue to Meta**, choose **Add a new number** and verify it with the SMS code. You come back and the number is ready.
+
+What happens then:
+
+- **Replies go from the number the customer wrote to** – from the bot and from your team. A customer never gets an answer from a number they don't know.
+- The **Inbox** shows a small badge with the number's name on every WhatsApp chat, and a **WhatsApp number** filter at the top of the chat list.
+- Each number shows its **results for the last 30 days**: chats, new customers, orders and sales – so you see which number brings the most business.
+- **Instructions for the AI bot on this number** (optional): e.g. "Wholesale customers: minimum 10 packs, give the wholesale price list". The bot also knows what the number is for.
+- **AI bot answers on this number**: switch it off for a number only your team should answer (e.g. a support line). Chats on that number wait in the **Chat queue** for an agent.
+- **Make main**: the main number is used for broadcasts and for chats your team starts. **Disconnect** removes an extra number; its customers get replies from the main number from then on. Chats, customers and orders stay.
+
+Your package sets how many numbers you can connect (**Billing**). Only the owner can add or change numbers.
 
 **Did Meta show an error?** Press **Connect with Meta** again. If it still fails, a link **Use Meta's pop-up window** appears as a second way to connect.
 

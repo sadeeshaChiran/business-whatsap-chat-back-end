@@ -12,6 +12,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { NotificationPreferencesController, NotificationPreferencesService, categoryOfKind } from './notification-preferences';
 import { WebPushController, WebPushService } from './web-push';
 
 /* ───────── DTOs ───────── */
@@ -49,7 +50,7 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
   private token: { value: string; expires: number } | null = null;
   private account: { project_id: string; client_email: string; private_key: string } | null = null;
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource, private readonly web: WebPushService) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource, private readonly web: WebPushService, private readonly preferences: NotificationPreferencesService) {}
 
   onModuleInit() {
     try {
@@ -133,14 +134,19 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
          WHERE m.id > $1 AND m.direction::text = 'inbound' ORDER BY m.id LIMIT 200`, [lastMessage]);
       const CHANNEL: Record<string, string> = { whatsapp: 'WhatsApp', messenger: 'Messenger', instagram: 'Instagram' };
       for (const m of messages) {
-        const to = [m.assigned_agent_id ?? m.admin_user_id].filter(Boolean).map(Number);
         const text = m.type === 'image' ? '📷 Photo' : m.type === 'voice' ? '🎤 Voice note' : m.type === 'video' ? '🎥 Video' : String(m.content ?? '');
-        await this.sendToUsers(to, `${m.name} · ${m.platform}`, text, { type: 'message', conversation_id: String(m.conversation_id) });
+        // each person's notification settings decide (no settings = every message, as before)
+        const appTo = await this.preferences.filter([m.assigned_agent_id ?? m.admin_user_id].filter(Boolean).map(Number), 'message',
+          { urgent: Boolean(m.assigned_agent_id) || Boolean(m.needs_person) });
+        await this.sendToUsers(appTo, `${m.name} · ${m.platform}`, text, { type: 'message', conversation_id: String(m.conversation_id) });
         // browser / phone notifications: the agent who has the chat, and the owner (the owner can choose "only chats that need a person")
         const title = `${m.name} · ${CHANNEL[m.platform] ?? m.platform}`;
         const payload = { title, body: text || 'New message', tag: `chat-${m.conversation_id}`, kind: 'message' as const, needsPerson: Boolean(m.needs_person) || !m.assigned_agent_id };
-        if (m.assigned_agent_id) await this.web.sendToUsers([Number(m.assigned_agent_id)], { ...payload, url: `/my-chats/${m.conversation_id}`, needsPerson: true });
-        if (m.admin_user_id && Number(m.admin_user_id) !== Number(m.assigned_agent_id)) {
+        if (m.assigned_agent_id && (await this.preferences.filter([Number(m.assigned_agent_id)], 'message', { urgent: true })).length) {
+          await this.web.sendToUsers([Number(m.assigned_agent_id)], { ...payload, url: `/my-chats/${m.conversation_id}`, needsPerson: true });
+        }
+        if (m.admin_user_id && Number(m.admin_user_id) !== Number(m.assigned_agent_id)
+          && (await this.preferences.filter([Number(m.admin_user_id)], 'message', { urgent: Boolean(m.needs_person) })).length) {
           await this.web.sendToUsers([Number(m.admin_user_id)], { ...payload, url: `/inbox/${m.conversation_id}`, needsPerson: Boolean(m.needs_person) });
         }
       }
@@ -154,6 +160,8 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
          WHERE n.id > $1 AND n.priority IN ('MEDIUM', 'HIGH') ORDER BY n.id LIMIT 200`, [lastAlert]);
       for (const alert of alerts) {
         if (!alert.admin_user_id) continue;
+        // the owner's switches: orders / changes / hand-overs / bookings / stock (+ quiet hours)
+        if (!(await this.preferences.filter([Number(alert.admin_user_id)], categoryOfKind(alert.kind), { urgent: alert.kind === 'handoff' })).length) continue;
         await this.sendToUsers([Number(alert.admin_user_id)], alert.title, alert.message, {
           type: alert.kind, conversation_id: String(alert.conversation_id ?? ''), order_id: String(alert.order_id ?? ''),
         });
@@ -292,5 +300,5 @@ export class MobileController {
   remove(@CurrentUser() user: AuthenticatedUser, @Param('token') token: string) { return this.mobile.removeDevice(user, token); }
 }
 
-@Module({ imports: [AuthModule], controllers: [MobileController, WebPushController], providers: [MobileService, PushService, WebPushService] })
+@Module({ imports: [AuthModule], controllers: [MobileController, WebPushController, NotificationPreferencesController], providers: [MobileService, PushService, WebPushService, NotificationPreferencesService] })
 export class MobileModule {}

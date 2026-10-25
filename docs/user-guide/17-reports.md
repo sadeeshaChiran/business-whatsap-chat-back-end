@@ -44,7 +44,7 @@ Cancelled orders are not counted.
 How it decides:
 
 - A customer who bought the product **2 or more times**: the usual gap between their purchases.
-- A customer who bought it **once**: the product's **Customer buys every … days** (set it on the Stock page). The report tells you which bought products don't have it yet.
+- A customer who bought it **once**: the product's **buys again every … days** (open the product on the Product report and set it at the bottom). The report tells you which bought products don't have it yet.
 
 | Badge | Meaning |
 | --- | --- |

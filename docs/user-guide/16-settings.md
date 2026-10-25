@@ -23,7 +23,7 @@ Get a notification on your phone or computer for every new customer message – 
 **Android phone or computer (Chrome, Edge, Firefox, Safari on Mac)**
 
 1. Open {{brand}} and sign in.
-2. Press **Turn on** in the green bar on top, or go to **Settings → Phone notifications → Turn on notifications**.
+2. Press **Turn on** in the bar on top, or open **Notifications** (the bell → ⚙, or your name → Notifications) and press **Turn on**.
 3. Allow notifications when the browser asks.
 4. Press **Send a test** – a notification pops up in a few seconds.
 
@@ -33,7 +33,17 @@ Get a notification on your phone or computer for every new customer message – 
 2. Open {{brand}} from the new icon on your home screen and sign in.
 3. **Settings → Phone notifications → Turn on notifications**, then **Allow**.
 
-**What you get**
+**Choose what notifies you** – the bell → ⚙, or your name → **Notifications**. Each person chooses for themselves; changes are saved at once and the mobile app uses the same settings:
+
+- **Customer messages**: *Every message*, *Needs a person* (only chats the AI bot hands over and chats assigned to you) or *Off*.
+- Switches for **Customer asks for a person**, **New orders**, **Order changes and cancel requests**, **Bookings** and **Stock alerts** – e.g. switch messages *Off* and keep only **New orders** on.
+- **Quiet hours** (e.g. 10:00 pm – 7:00 am): everything is silent except customers who ask for a person.
+
+The bell inside the app always shows everything; use its **All · Chats · Orders · Alerts** chips to filter.
+
+**Use it like an app**: on a phone, add {{brand}} to the home screen (Chrome: ⋮ → *Add to Home screen*; iPhone Safari: *Share → Add to Home Screen*). It opens full screen with the bottom bar – **Home, Chats, ＋ (quick jobs: new order, add product, customers, reorder due …), Orders, More** (the full menu). Long-press the icon for shortcuts to the Inbox and a new order.
+
+**What you get** (when you have not changed your settings)
 
 | Who | Notifications |
 | --- | --- |
