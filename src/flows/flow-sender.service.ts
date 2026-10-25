@@ -38,6 +38,7 @@ export class FlowSenderService {
         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE c.id = $1`, [conversationId]);
     if (!row) return null;
     const platform = String(row.platform).toLowerCase();
+    if (platform === 'tiktok') return null; // flows are not sent on TikTok (TikTok rules: 48 h, 10 in a row)
     return {
       companyId: Number(row.company_id), conversationId: Number(row.conversation_id), channelUserId: Number(row.channel_user_id),
       platform: platform === 'messenger' || platform === 'facebook' ? 'messenger' : platform === 'instagram' ? 'instagram' : 'whatsapp',

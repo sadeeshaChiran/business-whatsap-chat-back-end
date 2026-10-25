@@ -9,6 +9,7 @@ export type LimitDefinition = { key: string; label: string; kind: LimitKind; gro
 export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'messenger', label: 'Messenger', kind: 'feature', group: 'Channels', description: 'Connect a Facebook Page; the AI replies on Messenger.' },
   { key: 'instagram', label: 'Instagram', kind: 'feature', group: 'Channels', description: 'The AI replies to Instagram DMs.' },
+  { key: 'tiktok', label: 'TikTok', kind: 'feature', group: 'Channels', description: 'Connect a TikTok Business account; the AI replies to TikTok direct messages.' },
   { key: 'lead_management', label: 'Lead Management', kind: 'feature', group: 'Sales', description: 'Lead pipeline board (new → won).' },
   { key: 'crm', label: 'CRM', kind: 'feature', group: 'Sales', description: 'Contacts, 360 view, tags, follow-up tasks, CSV import / export.' },
   { key: 'marketing_ads', label: 'Marketing – ad results', kind: 'feature', group: 'Marketing', description: 'Chats, orders and sales per Click-to-WhatsApp / Messenger / Instagram ad.' },

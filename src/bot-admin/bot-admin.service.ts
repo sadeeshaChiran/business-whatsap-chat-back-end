@@ -4,6 +4,7 @@ import { isTestPhone, testSendResult } from '../common/test-phone';
 import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
+import { TiktokHook } from '../common/tiktok-hook';
 import {
   BadRequestException,
   ForbiddenException,
@@ -2771,6 +2772,7 @@ export class BotAdminService {
   }
 
   private async sendSocialConversationText(companyId: number, platform: string, accountId: string | null, recipientId: string, text: string): Promise<string | null> {
+    if (platform === 'tiktok') return this.sendTiktok(() => TiktokHook.sendText({ companyId, businessId: accountId, conversationId: recipientId }, text));
     if (!accountId) throw new BadRequestException('This legacy conversation is not linked to a Meta account. Wait for a new incoming message before replying.');
     const connection = await this.metaPageConnectionRepository.findOne({
       where: platform === 'instagram'
@@ -2791,6 +2793,15 @@ export class BotAdminService {
     const result = await response.json() as { message_id?: string; error?: { message?: string } };
     if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected the message. Check messaging permissions and the reply window.');
     return result.message_id ?? null;
+  }
+
+  /** TikTok replies (agents): TikTok's own rules come back as a clear message for the team. */
+  private async sendTiktok(send: () => Promise<string | null>): Promise<string | null> {
+    try {
+      return await send();
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'TikTok did not accept the message.');
+    }
   }
 
   private async getSocialReplyTarget(companyId: number, platform: string, accountId: string | null) {
@@ -3057,7 +3068,10 @@ export class BotAdminService {
 
     const socialPlatform = channelUser.platform?.toLowerCase();
     let providerMessageId: string | null = null;
-    if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
+    if (socialPlatform === 'tiktok') {
+      providerMessageId = await this.sendTiktok(() => TiktokHook.sendText(
+        { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id }, trimmed));
+    } else if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
       providerMessageId = await this.sendSocialConversationText(user.company_id, socialPlatform === 'facebook' ? 'messenger' : socialPlatform, channelUser.source_account_id, channelUser.external_user_id, trimmed);
     } else {
       const phone = this.normalizePhoneKey(channelUser.external_user_id);
@@ -3158,11 +3172,23 @@ export class BotAdminService {
     const trimmedCaption = caption?.trim() || '';
     const platform = this.normalizeChannelPlatform(channelUser.platform);
 
+    if (platform === 'tiktok') {
+      // TikTok: one JPG / PNG photo (max 3 MB) per message – checked before anything is stored
+      if (mediaType !== 'image' || !/^image\/(jpe?g|png)$/.test(mimetype)) throw new BadRequestException('TikTok can only receive JPG or PNG photos.');
+      if (uploaded.buffer.length > 3 * 1024 * 1024) throw new BadRequestException('TikTok photos must be smaller than 3 MB.');
+    }
+
     // Keep our own copy: the inbox can always show/download it, and Instagram needs a public URL.
     const storedKey = saveChatMedia(user.company_id, uploaded.buffer, mimetype, fileName);
 
     let providerMessageId: string | null = null;
-    if (platform === 'instagram') {
+    let tiktokCaptionId: string | null = null; // TikTok only: the caption is a message of its own
+    if (platform === 'tiktok') {
+      // the caption goes as its own message
+      const target = { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id };
+      providerMessageId = await this.sendTiktok(() => TiktokHook.sendImage(target, { buffer: uploaded.buffer, mimetype, fileName }));
+      if (trimmedCaption) tiktokCaptionId = await this.sendTiktok(() => TiktokHook.sendText(target, trimmedCaption));
+    } else if (platform === 'instagram') {
       providerMessageId = await this.sendInstagramMedia(
         user.company_id, channelUser.source_account_id, channelUser.external_user_id, storedKey, mediaType, trimmedCaption,
       );
@@ -3200,11 +3226,18 @@ export class BotAdminService {
         platform: channelUser.platform || 'whatsapp',
         provider_message_id: providerMessageId,
         delivery_status: providerMessageId ? 'sent' : null,
-        content: mediaType === 'document' ? fileName : trimmedCaption || `[${mediaType}]`,
+        content: mediaType === 'document' ? fileName : (platform === 'tiktok' ? '' : trimmedCaption) || `[${mediaType}]`,
         media_url: storedKey,
         source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
       }),
     );
+    if (platform === 'tiktok' && trimmedCaption) {
+      await this.messageRepository.save(this.messageRepository.create({
+        conversation_id: conversationId, direction: 'outbound', message_type: 'text', platform: 'tiktok',
+        provider_message_id: tiktokCaptionId, delivery_status: tiktokCaptionId ? 'sent' : null, content: trimmedCaption,
+        source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
+      }));
+    }
 
     conversation.last_message_at = new Date();
     await this.conversationRepository.save(conversation);
@@ -3213,8 +3246,9 @@ export class BotAdminService {
 
   /* ════════════════ New helpers (add inside BotAdminService) ════════════════ */
 
-  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' {
+  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' | 'tiktok' {
     const platform = String(value ?? '').toLowerCase();
+    if (platform === 'tiktok') return 'tiktok';
     if (platform.includes('instagram')) return 'instagram';
     if (platform.includes('messenger') || platform.includes('facebook')) return 'messenger';
     return 'whatsapp';
@@ -3316,6 +3350,7 @@ export class BotAdminService {
         });
         return;
       }
+      if (platform === 'tiktok') return; // TikTok has no "seen" for businesses
       // Messenger / Instagram: "seen"
       const target = await this.getSocialReplyTarget(companyId, platform, channelUser.source_account_id);
       const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
@@ -4966,7 +5001,9 @@ export class BotAdminService {
     if (socialPlatformOf(channelUser.platform)) {
       // Messenger / Instagram customers get it on their own channel
       const delivered = await this.sendCustomerMessage(companyId, channelUser, text);
-      if (!delivered) throw new BadRequestException('Could not send the note on Messenger / Instagram. Reply from the chat instead.');
+      if (!delivered) throw new BadRequestException(socialPlatformOf(channelUser.platform) === 'tiktok'
+        ? 'Could not send the note on TikTok (TikTok allows replies for 48 hours and 10 messages in a row). Reply from the chat instead.'
+        : 'Could not send the note on Messenger / Instagram. Reply from the chat instead.');
     } else {
       const phone = this.normalizePhoneKey(channelUser.external_user_id);
       if (!phone) {

@@ -26,6 +26,7 @@ import { MobileModule } from './mobile/mobile';
 import { MarketingModule } from './marketing/marketing.controller';
 import { FlowsModule } from './flows/flows.controller';
 import { SocialModule } from './social/social.controller';
+import { TiktokModule } from './integrations/tiktok/tiktok.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
 import { PublicHelpModule } from './public-help/public-help';
 import { PublicDemoModule } from './public-demo/public-demo';
@@ -67,6 +68,7 @@ if (!supabaseDatabaseUrl) {
     MarketingModule,
     FlowsModule,
     SocialModule,
+    TiktokModule,
     SalesBotModule,
     ActivityLogModule,
     RealtimeModule,
