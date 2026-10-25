@@ -2,18 +2,60 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
+import { unlinkSync } from 'fs';
+import { publicChatMediaUrl, saveChatMedia, saveChatMediaFile } from '../bot-admin/chat-media.store';
 import { PusherService } from '../common/pusher.service';
 import { SocialHook } from '../common/social-hook';
 import { FlowHook } from '../common/flow-hook';
-import { GraphError, graphRequest, tokenScopes } from '../marketing/graph';
+import { GraphError, graphRequest, graphVersion, tokenScopes } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
 
-export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean };
+export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean; format?: string };
 type Platform = 'facebook' | 'instagram';
 type Page = { page_id: string; page_name: string | null; page_access_token: string; instagram_business_account_id: string | null };
+/** What is published: a feed post (photos, one video or text), a reel (one video) or a story (one photo or video, 24 h). */
+export type PostFormat = 'post' | 'reel' | 'story';
+/** What a published item is, for the posts list: feed post, video, reel or story. */
+type PostKind = 'post' | 'video' | 'reel' | 'story';
+type SocialItem = {
+  id: string; platform: Platform; kind: PostKind; text: string; image: string | null; video: string | null; video_id?: string | null;
+  type: string; link: string; created_time: string; likes: number; comments: number; shares: number | null;
+  can_edit: boolean; can_delete: boolean; length?: number; children: Array<{ type: string; image: string | null; video: string | null }>;
+};
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
+
+export const postFormat = (value: unknown): PostFormat => (value === 'reel' || value === 'story' ? value : 'post');
+/** Our upload links end with the file type (…/token.mp4?exp=…); other https links are judged the same way. */
+export function isVideoUrl(url: string): boolean {
+  try {
+    return /\.(mp4|mov|m4v)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+/** Videos go through the background queue (Meta needs minutes to process them). */
+export const needsBackground = (format: PostFormat, media: string[]) => format === 'reel' || media.some(isVideoUrl);
+const videoMaxBytes = () => Math.max(10, Number(process.env.SOCIAL_VIDEO_MAX_MB ?? 200)) * 1024 * 1024;
+/** META_RUPLOAD_BASE_URL is only for automated tests (fake Meta) – leave it empty in production. */
+const ruploadBase = () => (process.env.META_RUPLOAD_BASE_URL?.trim() || 'https://rupload.facebook.com').replace(/\/+$/, '');
+const newestFirst = <T extends { created_time: string }>(items: T[]) =>
+  [...items].sort((a, b) => (new Date(b.created_time).getTime() || 0) - (new Date(a.created_time).getTime() || 0));
+
+/** Meta's rules for each format, checked before anything is sent (clear message instead of a Meta error later). */
+export function checkMedia(format: PostFormat, platforms: string[], media: string[]) {
+  const videos = media.filter(isVideoUrl);
+  if (format === 'reel') {
+    if (videos.length !== 1 || media.length !== 1) throw new BadRequestException('A reel is one video (MP4 or MOV, vertical 9:16 looks best).');
+    return;
+  }
+  if (format === 'story') {
+    if (media.length !== 1) throw new BadRequestException('A story is one photo or one video.');
+    return;
+  }
+  if (videos.length && media.length > 1) throw new BadRequestException('A post can have photos or one video – not both. Post the video on its own or as a reel.');
+  if (platforms.includes('instagram') && !media.length) throw new BadRequestException('Instagram posts need at least one photo or a video.');
+}
 
 /** The private message could not be sent: post its answer publicly instead – without the greeting line and without
  *  sentences asking for personal details, max ~240 characters (prices and details are fine to show publicly). Can be "". */
@@ -552,96 +594,218 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   /* ───────────────────────── posts ───────────────────────── */
 
-  async posts(user: AuthenticatedUser, platform: string) {
+  /**
+   * Everything published on the Page and Instagram: posts, videos, reels and stories, newest first.
+   * kind: all | post | video | reel | story. Each list is asked for on its own – one list Meta refuses (or a field
+   * Meta retired) must not empty the page; what could not be read is listed in `warnings`.
+   */
+  async posts(user: AuthenticatedUser, platform: string, kind = 'all') {
     const companyId = await this.adminCompany(user);
     const page = await this.page(companyId);
-    try {
-      if (platform === 'instagram') {
-        if (!page.instagram_business_account_id) return { posts: [], instagram_linked: false };
-        const media = await graphRequest<{ data: Array<Record<string, any>> }>('GET', `/${page.instagram_business_account_id}/media`, page.page_access_token,
-          { fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count', limit: '30' });
-        return {
-          instagram_linked: true,
-          posts: (media.data ?? []).map((m) => ({
-            id: m.id, platform: 'instagram', text: m.caption ?? '', image: m.media_type === 'VIDEO' ? m.thumbnail_url : m.media_url, type: m.media_type,
-            link: m.permalink, created_time: m.timestamp, likes: num(m.like_count), comments: num(m.comments_count), shares: null,
-            can_edit: false, can_delete: true,
-          })),
-        };
+    const want = (k: PostKind) => kind === 'all' || kind === k;
+    const warnings: string[] = [];
+    const attempt = async <T>(label: string, run: () => Promise<T[]>): Promise<T[]> => {
+      try {
+        return await run();
+      } catch (error) {
+        warnings.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        return [];
       }
-      const posts = await graphRequest<{ data: Array<Record<string, any>> }>('GET', `/${page.page_id}/posts`, page.page_access_token, {
-        fields: 'id,message,created_time,full_picture,permalink_url,shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)', limit: '30',
-      });
-      return {
-        posts: (posts.data ?? []).map((p) => ({
-          id: p.id, platform: 'facebook', text: p.message ?? '', image: p.full_picture ?? null, type: p.full_picture ? 'IMAGE' : 'TEXT',
-          link: p.permalink_url, created_time: p.created_time, likes: num(p.reactions?.summary?.total_count),
-          comments: num(p.comments?.summary?.total_count), shares: num(p.shares?.count), can_edit: true, can_delete: true,
+    };
+    /** rich fields first; if Meta refuses them, the basic fields */
+    const list = async (path: string, rich: string, basic: string, limit = '30') => {
+      try {
+        return (await graphRequest<{ data: Array<Record<string, any>> }>('GET', path, page.page_access_token, { fields: rich, limit })).data ?? [];
+      } catch (error) {
+        if (rich === basic) throw error;
+        return (await graphRequest<{ data: Array<Record<string, any>> }>('GET', path, page.page_access_token, { fields: basic, limit })).data ?? [];
+      }
+    };
+
+    if (platform === 'instagram') {
+      if (!page.instagram_business_account_id) return { posts: [], instagram_linked: false, warnings };
+      const ig = page.instagram_business_account_id;
+      const [media, stories] = await Promise.all([
+        want('post') || want('video') || want('reel')
+          ? attempt('Instagram posts', () => list(`/${ig}/media`,
+            'id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count,children{media_type,media_url,thumbnail_url}',
+            'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count'))
+          : Promise.resolve([]),
+        want('story') ? attempt('Instagram stories', () => list(`/${ig}/stories`, 'id,media_type,media_url,thumbnail_url,permalink,timestamp', 'id,media_type,media_url,permalink,timestamp')) : Promise.resolve([]),
+      ]);
+      const items: SocialItem[] = [
+        ...media.map((m): SocialItem => {
+          const video = m.media_type === 'VIDEO';
+          const k: PostKind = m.media_product_type === 'REELS' ? 'reel' : video ? 'video' : 'post';
+          return {
+            id: m.id, platform: 'instagram', kind: k, text: m.caption ?? '', image: video ? m.thumbnail_url ?? null : m.media_url ?? null,
+            video: video ? m.media_url ?? null : null, type: m.media_type, link: m.permalink, created_time: m.timestamp,
+            likes: num(m.like_count), comments: num(m.comments_count), shares: null, can_edit: false, can_delete: true,
+            children: (m.children?.data ?? []).map((c: Record<string, any>) => ({ type: c.media_type, image: c.media_type === 'VIDEO' ? c.thumbnail_url ?? null : c.media_url ?? null, video: c.media_type === 'VIDEO' ? c.media_url ?? null : null })),
+          };
+        }),
+        ...stories.map((s): SocialItem => ({
+          id: s.id, platform: 'instagram', kind: 'story', text: '', image: s.media_type === 'VIDEO' ? s.thumbnail_url ?? null : s.media_url ?? null,
+          video: s.media_type === 'VIDEO' ? s.media_url ?? null : null, type: s.media_type, link: s.permalink ?? '', created_time: s.timestamp,
+          likes: 0, comments: 0, shares: null, can_edit: false, can_delete: false, children: [],
         })),
-      };
-    } catch (error) {
-      this.graphError(error);
+      ].filter((item) => want(item.kind));
+      return { instagram_linked: true, posts: newestFirst(items), warnings };
     }
+
+    const [feed, reels, stories] = await Promise.all([
+      want('post') || want('video')
+        ? attempt('Facebook posts', () => list(`/${page.page_id}/posts`,
+          'id,message,created_time,full_picture,permalink_url,status_type,shares,comments.summary(true).limit(0),reactions.summary(true).limit(0),attachments{media_type,type,media,target,subattachments.limit(10){media,type}}',
+          'id,message,created_time,full_picture,permalink_url,shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)'))
+        : Promise.resolve([]),
+      want('reel') || want('video')
+        ? attempt('Facebook reels', () => list(`/${page.page_id}/video_reels`,
+          'id,description,created_time,updated_time,permalink_url,picture,source,length,likes.summary(true).limit(0),comments.summary(true).limit(0)',
+          'id,description,created_time,permalink_url,picture,source'))
+        : Promise.resolve([]),
+      want('story') ? attempt('Facebook stories', () => list(`/${page.page_id}/stories`, 'post_id,status,creation_time,media_type,media_id,url', 'post_id,status,creation_time,media_type,url')) : Promise.resolve([]),
+    ]);
+    const reelIds = new Set(reels.map((r) => String(r.id)));
+    const items: SocialItem[] = [
+      ...feed.map((p): SocialItem | null => {
+        const attachment = p.attachments?.data?.[0] ?? null;
+        const isVideo = /video/i.test(String(attachment?.media_type ?? attachment?.type ?? p.status_type ?? ''));
+        const targetId = String(attachment?.target?.id ?? '');
+        if (isVideo && reelIds.has(targetId)) return null; // listed as a reel
+        const children = (attachment?.subattachments?.data ?? []).map((c: Record<string, any>) => ({ type: c.type, image: c.media?.image?.src ?? null, video: null }));
+        return {
+          id: p.id, platform: 'facebook', kind: isVideo ? 'video' : 'post', text: p.message ?? '', image: p.full_picture ?? attachment?.media?.image?.src ?? null,
+          video: isVideo ? attachment?.media?.source ?? null : null, video_id: isVideo && targetId ? targetId : null,
+          type: isVideo ? 'VIDEO' : p.full_picture ? 'IMAGE' : 'TEXT', link: p.permalink_url, created_time: p.created_time,
+          likes: num(p.reactions?.summary?.total_count), comments: num(p.comments?.summary?.total_count), shares: num(p.shares?.count),
+          can_edit: true, can_delete: true, children,
+        };
+      }).filter((item): item is SocialItem => item !== null),
+      ...reels.map((r): SocialItem => ({
+        id: r.id, platform: 'facebook', kind: 'reel', text: r.description ?? '', image: r.picture ?? null, video: r.source ?? null, video_id: r.id,
+        type: 'REELS', link: r.permalink_url ? (String(r.permalink_url).startsWith('http') ? r.permalink_url : `https://www.facebook.com${r.permalink_url}`) : '',
+        created_time: r.created_time ?? r.updated_time, likes: num(r.likes?.summary?.total_count), comments: num(r.comments?.summary?.total_count), shares: null,
+        can_edit: false, can_delete: true, length: r.length ? num(r.length) : undefined, children: [],
+      })),
+      ...stories.filter((s) => !s.status || String(s.status).toUpperCase() === 'PUBLISHED').map((s): SocialItem => ({
+        id: String(s.post_id ?? s.media_id), platform: 'facebook', kind: 'story', text: '', image: null, video: null,
+        type: String(s.media_type ?? 'STORY').toUpperCase(), link: s.url ?? '',
+        created_time: /^\d+$/.test(String(s.creation_time)) ? new Date(Number(s.creation_time) * 1000).toISOString() : s.creation_time,
+        likes: 0, comments: 0, shares: null, can_edit: false, can_delete: false, children: [],
+      })),
+    ].filter((item) => want(item.kind));
+    if (kind === 'all' && !feed.length && !reels.length && !stories.length && warnings.length) {
+      // nothing could be read at all: show Meta's reason like before
+      throw new BadRequestException(`Meta: ${warnings[0]}`);
+    }
+    return { posts: newestFirst(items), warnings };
   }
 
-  /** Photo for a post: stored by us, Meta downloads it from a public signed link. */
-  async uploadMedia(user: AuthenticatedUser, file?: { buffer: Buffer; mimetype: string; originalname: string }) {
-    const companyId = await this.adminCompany(user);
-    if (!file?.buffer?.length) throw new BadRequestException('Choose a photo.');
-    if (!/^image\/(jpeg|png)$/.test(file.mimetype)) throw new BadRequestException('Use a JPG or PNG photo (Instagram accepts only these).');
-    if (file.buffer.length > 8 * 1024 * 1024) throw new BadRequestException('The photo is larger than 8 MB.');
-    const key = saveChatMedia(companyId, file.buffer, file.mimetype, file.originalname || 'photo.jpg');
-    const url = publicChatMediaUrl(key, 7 * 24 * 3600);
-    if (!url) throw new BadRequestException('PUBLIC_API_BASE_URL is not set on the server – Meta cannot download the photo.');
-    return { url };
+  /** Photo or video for a post / reel / story: stored by us, Meta downloads it from a public signed link. */
+  async uploadMedia(user: AuthenticatedUser, file?: { buffer?: Buffer; path?: string; size?: number; mimetype: string; originalname: string }) {
+    const removeTemp = () => { if (file?.path) try { unlinkSync(file.path); } catch { /* gone */ } };
+    let companyId: number;
+    try {
+      companyId = await this.adminCompany(user);
+    } catch (error) {
+      removeTemp();
+      throw error;
+    }
+    const size = file?.size ?? file?.buffer?.length ?? 0;
+    if (!file || !size) { removeTemp(); throw new BadRequestException('Choose a photo or a video.'); }
+    const mime = String(file.mimetype ?? '').toLowerCase();
+    const isVideo = /^video\/(mp4|quicktime|x-m4v)$/.test(mime);
+    if (!isVideo && !/^image\/(jpeg|png)$/.test(mime)) {
+      removeTemp();
+      throw new BadRequestException('Use a JPG or PNG photo, or an MP4 / MOV video (Meta accepts only these).');
+    }
+    if (!isVideo && size > 8 * 1024 * 1024) { removeTemp(); throw new BadRequestException('The photo is larger than 8 MB.'); }
+    if (isVideo && size > videoMaxBytes()) { removeTemp(); throw new BadRequestException(`The video is larger than ${Math.round(videoMaxBytes() / 1048576)} MB.`); }
+    const key = file.path
+      ? saveChatMediaFile(companyId, file.path, mime, file.originalname || (isVideo ? 'video.mp4' : 'photo.jpg'))
+      : saveChatMedia(companyId, file.buffer as Buffer, mime, file.originalname || 'photo.jpg');
+    // scheduled posts are published up to weeks later – the link must still work then
+    const url = publicChatMediaUrl(key, 45 * 24 * 3600);
+    if (!url) throw new BadRequestException('PUBLIC_API_BASE_URL is not set on the server – Meta cannot download the file.');
+    return { url, kind: isVideo ? 'video' : 'image', size };
   }
 
   async createPost(user: AuthenticatedUser, dto: PostInput) {
     const companyId = await this.adminCompany(user);
     const platforms = [...new Set((dto.platforms ?? []).filter((p) => p === 'facebook' || p === 'instagram'))] as Platform[];
     if (!platforms.length) throw new BadRequestException('Choose Facebook and / or Instagram.');
+    const format = postFormat(dto.format);
     const media = (dto.media_urls ?? []).filter((u) => /^https:\/\//.test(u)).slice(0, 10);
-    if (!dto.message?.trim() && !media.length && !dto.link) throw new BadRequestException('Write something or add a photo.');
+    const link = format === 'post' ? dto.link ?? null : null;
+    const message = format === 'story' ? '' : dto.message ?? '';
+    if (!message.trim() && !media.length && !link) throw new BadRequestException('Write something or add a photo.');
     if (dto.draft) {
       const when = dto.scheduled_at ? new Date(dto.scheduled_at) : null;
       const [row] = await this.dataSource.query(`
-        INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by, status)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'draft') RETURNING *`,
-        [companyId, platforms, dto.message ?? '', dto.link ?? null, JSON.stringify(media), when && !Number.isNaN(when.getTime()) ? when : null, user.id]);
+        INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by, status, format)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'draft', $8) RETURNING *`,
+        [companyId, platforms, message, link, JSON.stringify(media), when && !Number.isNaN(when.getTime()) ? when : null, user.id, format]);
       return { draft: row };
     }
-    if (platforms.includes('instagram') && !media.length) throw new BadRequestException('Instagram posts need at least one photo.');
+    checkMedia(format, platforms, media);
     const page = await this.page(companyId);
     if (platforms.includes('instagram') && !page.instagram_business_account_id) throw new BadRequestException('Instagram is not linked to this Facebook Page.');
     if (dto.scheduled_at) {
       const when = new Date(dto.scheduled_at);
       if (Number.isNaN(when.getTime()) || when.getTime() < Date.now() + 60_000) throw new BadRequestException('Choose a time at least 1 minute from now.');
       const [row] = await this.dataSource.query(`
-        INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by)
-        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7) RETURNING *`,
-        [companyId, platforms, dto.message ?? '', dto.link ?? null, JSON.stringify(media), when, user.id]);
+        INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by, format)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8) RETURNING *`,
+        [companyId, platforms, message, link, JSON.stringify(media), when, user.id, format]);
       return { scheduled: row };
     }
-    return { published: await this.publish(companyId, platforms, dto.message ?? '', dto.link ?? null, media) };
+    if (needsBackground(format, media)) return { queued: await this.queueNow(companyId, user.id, platforms, message, link, media, format) };
+    return { published: await this.publish(companyId, platforms, message, link, media, format) };
   }
 
-  private async publish(companyId: number, platforms: Platform[], message: string, link: string | null, media: string[]) {
+  /**
+   * Videos take Meta minutes to process – longer than a web request may last. They are published by the
+   * server in the background (the same queue as scheduled posts, starting now) and the owner gets a notification.
+   */
+  private async queueNow(companyId: number, userId: number | null, platforms: Platform[], message: string, link: string | null, media: string[], format: PostFormat, existingId?: number) {
+    const [row] = existingId
+      ? await this.dataSource.query(`
+          UPDATE social_post_schedule SET platforms = $2, message = $3, link = $4, media_urls = $5::jsonb, format = $6, scheduled_at = NOW(), status = 'scheduled', background = TRUE, error = NULL, updated_at = NOW()
+           WHERE id = $1 RETURNING *`, [existingId, platforms, message, link, JSON.stringify(media), format]).then((r) => (Array.isArray(r[0]) ? r[0] : r))
+      : await this.dataSource.query(`
+          INSERT INTO social_post_schedule (company_id, platforms, message, link, media_urls, scheduled_at, created_by, format, background)
+          VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), $6, $7, TRUE) RETURNING *`, [companyId, platforms, message, link, JSON.stringify(media), userId, format]);
+    setTimeout(() => void this.publishDue(), 50);
+    return row;
+  }
+
+  private async publish(companyId: number, platforms: Platform[], message: string, link: string | null, media: string[], format: PostFormat = 'post') {
     const page = await this.page(companyId);
     const results: Record<string, { id?: string; error?: string }> = {};
     const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+    const token = page.page_access_token;
+    const video = media.find(isVideoUrl) ?? null;
     // Facebook and Instagram run at the same time: one after the other was slow enough to time out,
     // and a problem on one platform must never stop the other.
     const facebook = async () => {
       try {
+        if (format === 'reel') return await this.facebookUpload(page, 'video_reels', video as string, { video_state: 'PUBLISHED', description: message });
+        if (format === 'story') {
+          if (video) return await this.facebookUpload(page, 'video_stories', video, {});
+          const photo = await graphRequest<{ id: string }>('POST', `/${page.page_id}/photos`, token, { url: media[0], published: false });
+          return await graphRequest<{ post_id?: string; id?: string }>('POST', `/${page.page_id}/photo_stories`, token, { photo_id: photo.id }).then((r) => ({ id: r.post_id ?? r.id ?? photo.id }));
+        }
+        if (video) return await graphRequest<{ id: string }>('POST', `/${page.page_id}/videos`, token, { file_url: video, description: message });
         if (media.length === 1) {
-          return await graphRequest<{ id: string; post_id?: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url: media[0], caption: message })
+          return await graphRequest<{ id: string; post_id?: string }>('POST', `/${page.page_id}/photos`, token, { url: media[0], caption: message })
             .then((r) => ({ id: r.post_id ?? r.id }));
         }
         if (media.length > 1) {
-          const ids = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${page.page_id}/photos`, page.page_access_token, { url, published: false }).then((r) => r.id)));
-          return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token, { message, attached_media: ids.map((id) => ({ media_fbid: id })) });
+          const ids = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${page.page_id}/photos`, token, { url, published: false }).then((r) => r.id)));
+          return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, token, { message, attached_media: ids.map((id) => ({ media_fbid: id })) });
         }
-        return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, page.page_access_token, { message, ...(link ? { link } : {}) });
+        return await graphRequest<{ id: string }>('POST', `/${page.page_id}/feed`, token, { message, ...(link ? { link } : {}) });
       } catch (error) {
         return { error: errorText(error) };
       }
@@ -651,19 +815,25 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       const caption = link ? `${message}\n${link}` : message;
       try {
         let creation: string;
-        if (media.length === 1) {
-          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { image_url: media[0], caption })).id;
+        if (format === 'story') {
+          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, token, video ? { media_type: 'STORIES', video_url: video } : { media_type: 'STORIES', image_url: media[0] })).id;
+        } else if (video) {
+          // Instagram publishes every single feed video as a reel; share_to_feed keeps it on the profile grid too
+          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, token, { media_type: 'REELS', video_url: video, caption, share_to_feed: true })).id;
+        } else if (media.length === 1) {
+          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, token, { image_url: media[0], caption })).id;
         } else {
-          const children = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { image_url: url, is_carousel_item: true }).then((r) => r.id)));
-          for (const child of children) await this.waitForInstagramMedia(child, page.page_access_token);
-          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, page.page_access_token, { media_type: 'CAROUSEL', children: children.join(','), caption })).id;
+          const children = await Promise.all(media.map((url) => graphRequest<{ id: string }>('POST', `/${ig}/media`, token, { image_url: url, is_carousel_item: true }).then((r) => r.id)));
+          for (const child of children) await this.waitForInstagramMedia(child, token);
+          creation = (await graphRequest<{ id: string }>('POST', `/${ig}/media`, token, { media_type: 'CAROUSEL', children: children.join(','), caption })).id;
         }
-        // Instagram downloads and processes the photo first; publishing before it is FINISHED fails ("Media ID is not available")
-        await this.waitForInstagramMedia(creation, page.page_access_token);
+        // Instagram downloads and processes the file first; publishing before it is FINISHED fails ("Media ID is not available")
+        if (video) await this.waitForInstagramVideo(creation, token);
+        else await this.waitForInstagramMedia(creation, token);
         let lastError: unknown;
         for (let attempt = 0; attempt < 4; attempt += 1) {
           try {
-            return await graphRequest<{ id: string }>('POST', `/${ig}/media_publish`, page.page_access_token, { creation_id: creation });
+            return await graphRequest<{ id: string }>('POST', `/${ig}/media_publish`, token, { creation_id: creation });
           } catch (error) {
             lastError = error;
             if (!/not available|not ready|9007|2207027/i.test(errorText(error))) break;
@@ -688,6 +858,26 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     return results;
   }
 
+  /**
+   * Facebook reels and video stories: start an upload, let Meta fetch the file from our public link
+   * (rupload with a file_url header – no bytes go through this server), then finish.
+   */
+  private async facebookUpload(page: Page, edge: 'video_reels' | 'video_stories', videoUrl: string, finish: Record<string, unknown>) {
+    const start = await graphRequest<{ video_id: string; upload_url?: string }>('POST', `/${page.page_id}/${edge}`, page.page_access_token, { upload_phase: 'start' });
+    const uploadUrl = start.upload_url || `${ruploadBase()}/video-upload/${graphVersion()}/${start.video_id}`;
+    const upload = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { Authorization: `OAuth ${page.page_access_token}`, file_url: videoUrl },
+      signal: AbortSignal.timeout(120_000),
+    });
+    const uploaded = (await upload.json().catch(() => ({}))) as { success?: boolean; error?: { message?: string } };
+    if (!upload.ok || uploaded.error || uploaded.success === false) throw new GraphError(uploaded.error?.message || `Meta could not fetch the video (${upload.status}).`);
+    const done = await graphRequest<{ success?: boolean; post_id?: string; id?: string }>('POST', `/${page.page_id}/${edge}`, page.page_access_token,
+      { upload_phase: 'finish', video_id: start.video_id, ...finish });
+    if (done.success === false) throw new GraphError('Meta did not accept the video.');
+    return { id: done.post_id ?? done.id ?? start.video_id };
+  }
+
   /** Waits until Instagram has processed an uploaded photo (status_code FINISHED), up to ~40 s (Apache and Cloudflare cut requests at 60–100 s). */
   private async waitForInstagramMedia(containerId: string, token: string) {
     const deadline = Date.now() + Number(process.env.IG_MEDIA_WAIT_MS ?? 40_000);
@@ -698,6 +888,22 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Instagram could not use the photo (${status?.status ?? code}). Use a JPG/PNG photo under 8 MB, 4:5 to 1.91:1.`);
       if (Date.now() > deadline) return;
       await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
+  /** Videos (reels, stories, feed videos) take minutes: runs in the background queue, up to IG_VIDEO_WAIT_MS (10 min). */
+  private async waitForInstagramVideo(containerId: string, token: string) {
+    const deadline = Date.now() + Number(process.env.IG_VIDEO_WAIT_MS ?? 600_000);
+    const pause = Number(process.env.IG_VIDEO_POLL_MS ?? 5000);
+    for (;;) {
+      const status = await graphRequest<{ status_code?: string; status?: string }>('GET', `/${containerId}`, token, { fields: 'status_code,status' }).catch(() => null);
+      const code = status?.status_code ?? 'IN_PROGRESS';
+      if (code === 'FINISHED' || code === 'PUBLISHED') return;
+      if (code === 'ERROR' || code === 'EXPIRED') {
+        throw new Error(`Instagram could not use the video (${status?.status ?? code}). Use an MP4 or MOV (H.264), 3 s to 15 min, 9:16 for reels and stories.`);
+      }
+      if (Date.now() > deadline) throw new Error('Instagram is still processing the video – try again in a few minutes.');
+      await new Promise((r) => setTimeout(r, pause));
     }
   }
 
@@ -769,9 +975,10 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const row = await this.editable(companyId, id);
     const platforms = dto.platforms ? [...new Set(dto.platforms.filter((p) => p === 'facebook' || p === 'instagram'))] : row.platforms;
     if (!platforms.length) throw new BadRequestException('Choose Facebook and / or Instagram.');
+    const format = postFormat(dto.format ?? row.format);
     const media = dto.media_urls ? dto.media_urls.filter((u) => /^https:\/\//.test(u)).slice(0, 10) : row.media_urls ?? [];
-    const message = dto.message ?? row.message;
-    const link = dto.link !== undefined ? dto.link || null : row.link;
+    const message = format === 'story' ? '' : dto.message ?? row.message;
+    const link = format !== 'post' ? null : dto.link !== undefined ? dto.link || null : row.link;
     if (!String(message).trim() && !media.length && !link) throw new BadRequestException('Write something or add a photo.');
     let status = row.status === 'failed' ? 'draft' : row.status;
     let when: Date | null = row.scheduled_at ? new Date(row.scheduled_at) : null;
@@ -782,23 +989,26 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     } else if (dto.draft) status = 'draft';
     if (status === 'scheduled') {
       if (!when || when.getTime() < Date.now() + 60_000) throw new BadRequestException('Choose a time at least 1 minute from now.');
-      if (platforms.includes('instagram') && !media.length) throw new BadRequestException('Instagram posts need at least one photo.');
+      checkMedia(format, platforms, media);
       const page = await this.page(companyId);
       if (platforms.includes('instagram') && !page.instagram_business_account_id) throw new BadRequestException('Instagram is not linked to this Facebook Page.');
     }
     const [updated] = await this.dataSource.query(`
-      UPDATE social_post_schedule SET platforms = $2, message = $3, link = $4, media_urls = $5::jsonb, scheduled_at = $6, status = $7, error = NULL, updated_at = NOW()
-       WHERE id = $1 RETURNING *`, [id, platforms, message, link, JSON.stringify(media), when, status]).then((r) => (Array.isArray(r[0]) ? r[0] : r));
+      UPDATE social_post_schedule SET platforms = $2, message = $3, link = $4, media_urls = $5::jsonb, scheduled_at = $6, status = $7, format = $8, error = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`, [id, platforms, message, link, JSON.stringify(media), when, status, format]).then((r) => (Array.isArray(r[0]) ? r[0] : r));
     return updated;
   }
 
-  /** Publish a draft / scheduled post right now. */
+  /** Publish a draft / scheduled post right now (videos: in the background, see queueNow). */
   async publishSchedule(user: AuthenticatedUser, id: number) {
     const companyId = await this.adminCompany(user);
     const row = await this.editable(companyId, id);
     const platforms = row.platforms as Platform[];
-    if (platforms.includes('instagram') && !(row.media_urls ?? []).length) throw new BadRequestException('Instagram posts need at least one photo.');
-    const results = await this.publish(companyId, platforms, row.message, row.link, row.media_urls ?? []);
+    const format = postFormat(row.format);
+    const media: string[] = row.media_urls ?? [];
+    checkMedia(format, platforms, media);
+    if (needsBackground(format, media)) return { queued: await this.queueNow(companyId, user.id, platforms, row.message, row.link, media, format, id) };
+    const results = await this.publish(companyId, platforms, row.message, row.link, media, format);
     const failed = Object.entries(results).filter(([, r]) => r.error);
     await this.dataSource.query(`UPDATE social_post_schedule SET status = 'published', scheduled_at = NOW(), results = $2::jsonb, error = $3, updated_at = NOW() WHERE id = $1`,
       [id, JSON.stringify(results), failed.length ? failed.map(([p, r]) => `${p}: ${r.error}`).join(' | ') : null]);
@@ -840,14 +1050,23 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       const rows = Array.isArray(due[0]) ? due[0] : due;
       for (const row of rows) {
         try {
-          const results = await this.publish(Number(row.company_id), row.platforms, row.message, row.link, row.media_urls ?? []);
+          const format = postFormat(row.format);
+          const results = await this.publish(Number(row.company_id), row.platforms, row.message, row.link, row.media_urls ?? [], format);
           const partial = Object.values(results).some((r) => r.error);
+          const problems = partial ? Object.entries(results).filter(([, r]) => r.error).map(([p, r]) => `${p}: ${r.error}`).join(' | ') : null;
           await this.dataSource.query(`UPDATE social_post_schedule SET status = $2, results = $3::jsonb, error = $4 WHERE id = $1`,
-            [row.id, 'published', JSON.stringify(results), partial ? Object.entries(results).filter(([, r]) => r.error).map(([p, r]) => `${p}: ${r.error}`).join(' | ') : null]);
+            [row.id, 'published', JSON.stringify(results), problems]);
+          if (row.background) {
+            // "Post now" with a video: tell the owner it is live (they left the page long ago)
+            const what = format === 'reel' ? 'reel' : format === 'story' ? 'story' : 'video post';
+            await this.dataSource.query(`INSERT INTO bot_notification (company_id, kind, priority, title, message) VALUES ($1, 'social', $2, $3, $4)`,
+              [row.company_id, partial ? 'HIGH' : 'MEDIUM', partial ? `Your ${what} is partly published` : `Your ${what} is live`,
+                (partial ? problems ?? '' : `Published on ${(row.platforms as string[]).map((p) => (p === 'facebook' ? 'Facebook' : 'Instagram')).join(' and ')}.`).slice(0, 400)]).catch(() => undefined);
+          }
         } catch (error) {
           await this.dataSource.query(`UPDATE social_post_schedule SET status = 'failed', error = $2 WHERE id = $1`, [row.id, error instanceof Error ? error.message : String(error)]);
-          await this.dataSource.query(`INSERT INTO bot_notification (company_id, kind, priority, title, message) VALUES ($1, 'social', 'HIGH', 'Scheduled post failed', $2)`,
-            [row.company_id, (error instanceof Error ? error.message : String(error)).slice(0, 400)]).catch(() => undefined);
+          await this.dataSource.query(`INSERT INTO bot_notification (company_id, kind, priority, title, message) VALUES ($1, 'social', 'HIGH', $2, $3)`,
+            [row.company_id, row.background ? 'Video post failed' : 'Scheduled post failed', (error instanceof Error ? error.message : String(error)).slice(0, 400)]).catch(() => undefined);
         }
       }
     } catch (error) {
@@ -855,6 +1074,130 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.running = false;
     }
+  }
+
+  /* ───────────────────────── one post: reach and results ───────────────────────── */
+
+  /**
+   * Results of one post, video, reel or story (Facebook: read_insights · Instagram: instagram_manage_insights –
+   * both already part of the Page connection). Every metric is asked for on its own: Meta retires and renames
+   * metrics, and a metric that does not exist for this kind of post must not hide the others.
+   */
+  async postInsights(user: AuthenticatedUser, postId: string, platform: string, kindRaw?: string) {
+    const companyId = await this.adminCompany(user);
+    const page = await this.page(companyId);
+    const token = page.page_access_token;
+    const kind: PostKind = ['post', 'video', 'reel', 'story'].includes(String(kindRaw)) ? (kindRaw as PostKind) : 'post';
+    if (!/^[0-9_]+$/.test(postId)) throw new BadRequestException('Unknown post.');
+    const values: Record<string, number> = {};
+    let reactions: Record<string, number> | null = null;
+    let retention: Array<{ second: number; value: number }> | null = null;
+
+    /** value of one metric (lifetime); null when Meta has no such metric for this item */
+    const metric = async (id: string, edge: 'insights' | 'video_insights', name: string, extra: Record<string, string> = {}) => {
+      try {
+        const r = await graphRequest<{ data: Array<{ name: string; values?: Array<{ value: unknown }>; total_value?: { value?: unknown } }> }>(
+          'GET', `/${id}/${edge}`, token, { metric: name, ...(edge === 'insights' && platform === 'facebook' ? { period: 'lifetime' } : {}), ...extra });
+        const row = r.data?.[0];
+        return row ? row.total_value?.value ?? row.values?.[0]?.value ?? null : null;
+      } catch {
+        return null;
+      }
+    };
+    const collect = async (id: string, edge: 'insights' | 'video_insights', names: string[]) => {
+      const results = await Promise.all(names.map(async (name) => [name, await metric(id, edge, name)] as const));
+      for (const [name, value] of results) {
+        if (value === null || value === undefined) continue;
+        if (typeof value === 'number' || /^-?\d+(\.\d+)?$/.test(String(value))) values[name] = num(value);
+        else if (name.includes('reactions') && typeof value === 'object') reactions = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, num(v)]));
+        else if (name.includes('retention') && typeof value === 'object') {
+          retention = Object.entries(value as Record<string, unknown>).map(([k, v]) => ({ second: num(k), value: Math.round(num(v) * 1000) / 10 })).sort((a, b) => a.second - b.second);
+        }
+      }
+    };
+
+    let likes = 0; let comments = 0; let shares: number | null = null; let saved: number | null = null;
+    try {
+      if (platform === 'instagram') {
+        const ig = page.instagram_business_account_id;
+        if (!ig) throw new BadRequestException('Instagram is not linked to this Facebook Page.');
+        const media = await graphRequest<{ id: string; owner?: { id: string }; like_count?: number; comments_count?: number; media_product_type?: string }>(
+          'GET', `/${postId}`, token, { fields: 'id,owner,like_count,comments_count,media_product_type' }).catch(() => null);
+        if (media?.owner?.id && media.owner.id !== ig) throw new BadRequestException('This post does not belong to your Instagram account.');
+        likes = num(media?.like_count); comments = num(media?.comments_count);
+        const names = kind === 'story'
+          ? ['reach', 'views', 'replies', 'shares', 'total_interactions', 'follows', 'profile_visits', 'profile_activity']
+          : ['reach', 'views', 'likes', 'comments', 'shares', 'saved', 'total_interactions', 'profile_visits', 'follows',
+            ...(kind === 'reel' || media?.media_product_type === 'REELS' ? ['ig_reels_avg_watch_time', 'ig_reels_video_view_total_time'] : [])];
+        await collect(postId, 'insights', names);
+        if (values.likes !== undefined) likes = values.likes;
+        if (values.comments !== undefined) comments = values.comments;
+        shares = values.shares ?? null; saved = values.saved ?? null;
+      } else {
+        const isVideoObject = !postId.includes('_');
+        if (!isVideoObject && !postId.startsWith(`${page.page_id}_`)) throw new BadRequestException('This post does not belong to your Page.');
+        if (isVideoObject) {
+          const video = await graphRequest<Record<string, any>>('GET', `/${postId}`, token, { fields: 'id,from,length,likes.summary(true).limit(0),comments.summary(true).limit(0)' })
+            .catch(() => graphRequest<Record<string, any>>('GET', `/${postId}`, token, { fields: 'id,from' }).catch(() => null));
+          if (video?.from?.id && String(video.from.id) !== String(page.page_id)) throw new BadRequestException('This video does not belong to your Page.');
+          likes = num(video?.likes?.summary?.total_count); comments = num(video?.comments?.summary?.total_count);
+          await collect(postId, 'video_insights', [
+            'total_video_views', 'total_video_views_unique', 'total_video_impressions_unique', 'total_video_impressions',
+            'total_video_avg_time_watched', 'total_video_complete_views', 'total_video_complete_views_unique', 'total_video_view_total_time',
+            'blue_reels_play_count', 'fb_reels_total_plays', 'fb_reels_replay_count', 'post_impressions_unique', 'post_video_avg_time_watched',
+            'post_video_views', 'post_video_followers', 'post_video_likes_by_reaction_type', 'post_video_retention_graph', 'post_video_social_actions',
+          ]);
+          if (values.post_video_social_actions !== undefined) shares = null;
+        } else {
+          const post = await graphRequest<Record<string, any>>('GET', `/${postId}`, token, { fields: 'id,shares,comments.summary(true).limit(0),reactions.summary(true).limit(0)' }).catch(() => null);
+          likes = num(post?.reactions?.summary?.total_count); comments = num(post?.comments?.summary?.total_count); shares = num(post?.shares?.count);
+          await collect(postId, 'insights', [
+            'post_impressions_unique', 'post_impressions', 'post_impressions_organic_unique', 'post_impressions_paid_unique', 'post_impressions_viral_unique',
+            'post_clicks', 'post_reactions_by_type_total', 'post_media_view', 'post_total_media_view_unique',
+            ...(kind === 'video' ? ['post_video_views', 'post_video_views_unique', 'post_video_avg_time_watched', 'post_video_complete_views_organic', 'post_video_retention_graph'] : []),
+          ]);
+        }
+      }
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      this.graphError(error);
+    }
+
+    // one shared shape for every platform and kind (missing = Meta has no such number for this item)
+    const pick = (...names: string[]) => { for (const n of names) if (values[n] !== undefined) return values[n]; return null; };
+    const reach = pick('reach', 'post_impressions_unique', 'total_video_impressions_unique', 'post_total_media_view_unique');
+    const views = pick('views', 'fb_reels_total_plays', 'blue_reels_play_count', 'total_video_views', 'post_video_views', 'post_media_view', 'post_impressions', 'total_video_impressions');
+    const avgWatchMs = pick('ig_reels_avg_watch_time', 'total_video_avg_time_watched', 'post_video_avg_time_watched');
+    const interactions = values.total_interactions ?? likes + comments + (shares ?? 0) + (saved ?? 0);
+    const engagementRate = reach ? Math.round((interactions / reach) * 1000) / 10 : null;
+    const metrics = [
+      { key: 'reach', label: 'Accounts reached', value: reach, hint: 'Different people who saw it' },
+      { key: 'views', label: kind === 'reel' || kind === 'video' ? 'Plays / views' : 'Views', value: views, hint: 'Times it was shown or played' },
+      { key: 'likes', label: platform === 'facebook' ? 'Reactions' : 'Likes', value: likes },
+      { key: 'comments', label: 'Comments', value: comments },
+      { key: 'shares', label: 'Shares', value: shares },
+      { key: 'saved', label: 'Saves', value: saved },
+      { key: 'clicks', label: 'Clicks', value: pick('post_clicks'), hint: 'Clicks on the post, photos and links' },
+      { key: 'replies', label: 'Replies', value: pick('replies') },
+      { key: 'profile_visits', label: 'Profile visits', value: pick('profile_visits'), hint: 'Opened your profile from this post' },
+      { key: 'follows', label: 'New followers', value: pick('follows', 'post_video_followers') },
+      { key: 'avg_watch', label: 'Average watch time', value: avgWatchMs === null ? null : Math.round(avgWatchMs / 100) / 10, unit: 's' },
+      { key: 'complete_views', label: 'Watched to the end', value: pick('total_video_complete_views', 'post_video_complete_views_organic') },
+      { key: 'replays', label: 'Replays', value: pick('fb_reels_replay_count') },
+      { key: 'organic_reach', label: 'Organic reach', value: pick('post_impressions_organic_unique'), hint: 'Reached without ads' },
+      { key: 'paid_reach', label: 'Paid reach', value: pick('post_impressions_paid_unique'), hint: 'Reached through ads' },
+      { key: 'viral_reach', label: 'Reached through shares', value: pick('post_impressions_viral_unique') },
+    ].filter((m) => m.value !== null && m.value !== undefined);
+
+    return {
+      id: postId, platform, kind, reach, views, interactions, engagement_rate: engagementRate,
+      metrics, reactions, retention,
+      available: Object.keys(values).length > 0,
+      note: Object.keys(values).length ? null
+        : kind === 'story' ? 'Meta shares story results only while the story is live (24 h) and for stories with enough viewers.'
+          : 'Meta has no reach numbers for this item yet (they appear a few hours after posting). Likes and comments are shown.',
+      fetched_at: new Date().toISOString(),
+    };
   }
 
   /* ───────────────────────── analytics ───────────────────────── */
