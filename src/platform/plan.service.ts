@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
+import { tiktokConfigured } from '../integrations/tiktok/tiktok-api';
 
 /** Tokens per bot reply (shop data mostly cached + chat + answer). */
 export const DEFAULT_TOKENS_PER_REPLY = 12_500; // measured 24 Oct 2026 on 3,180 replies: ≈ 12,500 tokens per AI reply incl. the cached prompt
@@ -124,7 +125,7 @@ export class PlanService {
     const unlocked: string[] = [];
     const locked = PlanService.CREDIT_FEATURES.filter((key) => !limits.features[key]);
     if (pkg && limits.features.credits_unlock && locked.length && (await this.hasActiveCredits(companyId))) {
-      for (const key of locked) { limits.features[key] = true; unlocked.push(key); }
+      for (const key of locked) { limits.features[key] = true; if (key !== 'tiktok' || tiktokConfigured()) unlocked.push(key); } // TikTok listed only when set up
     }
     return { ...limits, package: pkg, unlocked_by_credits: unlocked };
   }
