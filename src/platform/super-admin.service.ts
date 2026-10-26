@@ -1,4 +1,5 @@
 import { LIMIT_CATALOG, cleanLimits, resolveLimits } from './package-limits';
+import { tiktokConfigured } from '../integrations/tiktok/tiktok-api';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -317,7 +318,8 @@ export class SuperAdminService {
 
   /** What a package can switch on / limit (for the package editor). */
   limitCatalog() {
-    return LIMIT_CATALOG;
+    // TikTok shows up only once the server has a TikTok app (TIKTOK_APP_ID / TIKTOK_APP_SECRET) – hidden until then
+    return tiktokConfigured() ? LIMIT_CATALOG : LIMIT_CATALOG.filter((item) => item.key !== 'tiktok');
   }
 
   /* ───────────── Credits ───────────── */

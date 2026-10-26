@@ -60,6 +60,8 @@ Then: **Channels → Instagram → Connect Instagram**, log in with the Facebook
 
 ## TikTok
 
+> **Hidden for now.** This section is for when TikTok approves the app. Until then the TikTok menu, page and package switch are hidden (web app `VITE_TIKTOK_ENABLED=false`, API without `TIKTOK_APP_ID` / `TIKTOK_APP_SECRET`). The in-app guide does not show this section yet.
+
 Customers who send a **direct message to your TikTok Business account** reach the same Inbox, and the AI bot can answer them like any other chat.
 
 What you need:
