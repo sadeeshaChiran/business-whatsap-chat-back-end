@@ -34,6 +34,7 @@ Services: **API** (NestJS, port 3001), **web app** (static files from `frontend/
 | `SUPER_ADMIN_EMAILS` | Metrocoding staff emails |
 | `OTP_DEV_MODE` | `false` in production (only `true` on a test database) |
 | `SMTP_*`, `OTP_WHATSAPP_*` | so sign-up and forgot-password codes are delivered |
+| Telegram | nothing to set – each business connects its own bot token in Channels → Telegram. `PUBLIC_API_BASE_URL` must be **https** (Telegram only calls https webhooks) |
 | `TIKTOK_APP_ID` / `TIKTOK_APP_SECRET` | optional – TikTok channel. TikTok app (TikTok API for Business) with **Business Messaging** approved; redirect URL `{PUBLIC_API_BASE_URL}/integrations/tiktok/callback`. Webhook is set automatically on connect |
 
 Database changes are applied automatically when the API starts.

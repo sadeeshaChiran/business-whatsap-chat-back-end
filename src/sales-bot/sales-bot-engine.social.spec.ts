@@ -109,4 +109,33 @@ describe('SalesBotEngineService on Messenger / Instagram', () => {
     const out = t.saved.find((row) => row.direction === 'outbound');
     expect(out).toEqual(expect.objectContaining({ provider_message_id: null, delivery_status: 'failed' }));
   });
+
+  it('replies on Telegram through the Telegram channel; the bot itself treats it like Messenger', async () => {
+    const t = build('telegram');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'telegram', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('messenger');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'telegram', provider_message_id: 'm.out.1', delivery_status: 'sent' }));
+  });
+
+  it('does not reply on Telegram when the package does not include Telegram (Messenger stays as it is)', async () => {
+    const t = build('telegram', {}, { telegram: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.reply).not.toHaveBeenCalled();
+    const fb = build('messenger', {}, { telegram: false });
+    await (fb.engine as any).turn(7, 21);
+    expect(fb.social.sendText).toHaveBeenCalled();
+  });
+
+  it('replies in the customer app through the app (saved message), the bot treats it like Messenger', async () => {
+    const t = build('app');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'app', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('messenger');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'app', delivery_status: 'sent' }));
+  });
 });

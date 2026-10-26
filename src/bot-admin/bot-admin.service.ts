@@ -5,6 +5,8 @@ import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
 import { TiktokHook } from '../common/tiktok-hook';
+import { TelegramHook } from '../common/telegram-hook';
+import { AppChatHook } from '../common/app-chat-hook';
 import {
   BadRequestException,
   ForbiddenException,
@@ -2773,6 +2775,9 @@ export class BotAdminService {
 
   private async sendSocialConversationText(companyId: number, platform: string, accountId: string | null, recipientId: string, text: string): Promise<string | null> {
     if (platform === 'tiktok') return this.sendTiktok(() => TiktokHook.sendText({ companyId, businessId: accountId, conversationId: recipientId }, text));
+    if (platform === 'telegram') return this.sendTiktok(() => TelegramHook.sendText({ companyId, botId: accountId, chatId: recipientId }, text));
+    // customer app: the saved message is what the customer's app shows – nothing leaves the server
+    if (platform === 'app') return AppChatHook.send(companyId, recipientId);
     if (!accountId) throw new BadRequestException('This legacy conversation is not linked to a Meta account. Wait for a new incoming message before replying.');
     const connection = await this.metaPageConnectionRepository.findOne({
       where: platform === 'instagram'
@@ -2795,7 +2800,7 @@ export class BotAdminService {
     return result.message_id ?? null;
   }
 
-  /** TikTok replies (agents): TikTok's own rules come back as a clear message for the team. */
+  /** TikTok / Telegram replies (agents): the channel's own reason comes back as a clear message for the team. */
   private async sendTiktok(send: () => Promise<string | null>): Promise<string | null> {
     try {
       return await send();
@@ -3071,6 +3076,11 @@ export class BotAdminService {
     if (socialPlatform === 'tiktok') {
       providerMessageId = await this.sendTiktok(() => TiktokHook.sendText(
         { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id }, trimmed));
+    } else if (socialPlatform === 'app') {
+      providerMessageId = AppChatHook.send(user.company_id, channelUser.external_user_id);
+    } else if (socialPlatform === 'telegram') {
+      providerMessageId = await this.sendTiktok(() => TelegramHook.sendText(
+        { companyId: user.company_id, botId: channelUser.source_account_id, chatId: channelUser.external_user_id }, trimmed));
     } else if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
       providerMessageId = await this.sendSocialConversationText(user.company_id, socialPlatform === 'facebook' ? 'messenger' : socialPlatform, channelUser.source_account_id, channelUser.external_user_id, trimmed);
     } else {
@@ -3177,6 +3187,11 @@ export class BotAdminService {
       if (mediaType !== 'image' || !/^image\/(jpe?g|png)$/.test(mimetype)) throw new BadRequestException('TikTok can only receive JPG or PNG photos.');
       if (uploaded.buffer.length > 3 * 1024 * 1024) throw new BadRequestException('TikTok photos must be smaller than 3 MB.');
     }
+    if (platform === 'telegram') {
+      // Telegram: photos up to 10 MB, every other file up to 50 MB
+      const photo = mediaType === 'image' && /^image\/(jpe?g|png|webp)$/.test(mimetype);
+      if (uploaded.buffer.length > (photo ? 10 : 50) * 1024 * 1024) throw new BadRequestException(photo ? 'Telegram photos must be smaller than 10 MB.' : 'Telegram files must be smaller than 50 MB.');
+    }
 
     // Keep our own copy: the inbox can always show/download it, and Instagram needs a public URL.
     const storedKey = saveChatMedia(user.company_id, uploaded.buffer, mimetype, fileName);
@@ -3188,6 +3203,12 @@ export class BotAdminService {
       const target = { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id };
       providerMessageId = await this.sendTiktok(() => TiktokHook.sendImage(target, { buffer: uploaded.buffer, mimetype, fileName }));
       if (trimmedCaption) tiktokCaptionId = await this.sendTiktok(() => TiktokHook.sendText(target, trimmedCaption));
+    } else if (platform === 'app') {
+      providerMessageId = AppChatHook.send(user.company_id, channelUser.external_user_id);
+    } else if (platform === 'telegram') {
+      providerMessageId = await this.sendTiktok(() => TelegramHook.sendFile(
+        { companyId: user.company_id, botId: channelUser.source_account_id, chatId: channelUser.external_user_id },
+        { buffer: uploaded.buffer, mimetype, fileName, caption: trimmedCaption }));
     } else if (platform === 'instagram') {
       providerMessageId = await this.sendInstagramMedia(
         user.company_id, channelUser.source_account_id, channelUser.external_user_id, storedKey, mediaType, trimmedCaption,
@@ -3246,9 +3267,11 @@ export class BotAdminService {
 
   /* ════════════════ New helpers (add inside BotAdminService) ════════════════ */
 
-  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' | 'tiktok' {
+  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' | 'tiktok' | 'telegram' | 'app' {
     const platform = String(value ?? '').toLowerCase();
+    if (platform === 'app') return 'app';
     if (platform === 'tiktok') return 'tiktok';
+    if (platform === 'telegram') return 'telegram';
     if (platform.includes('instagram')) return 'instagram';
     if (platform.includes('messenger') || platform.includes('facebook')) return 'messenger';
     return 'whatsapp';
@@ -3350,7 +3373,7 @@ export class BotAdminService {
         });
         return;
       }
-      if (platform === 'tiktok') return; // TikTok has no "seen" for businesses
+      if (platform === 'tiktok' || platform === 'telegram' || platform === 'app') return; // no "seen" to send (the app shows read itself)
       // Messenger / Instagram: "seen"
       const target = await this.getSocialReplyTarget(companyId, platform, channelUser.source_account_id);
       const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
@@ -4083,6 +4106,7 @@ export class BotAdminService {
 
   /** Shows the invoice in the chat history of the customer's latest conversation. */
   private async logInvoiceMessage(channelUserId: number, platform: string | null | undefined, content: string) {
+    if (platform === 'app') return; // customer app: the PDF itself is already a message in the chat
     const conversation = await this.conversationRepository.findOne({
       where: { bot_channel_user_id: channelUserId },
       order: { id: 'DESC' },
@@ -4094,6 +4118,23 @@ export class BotAdminService {
     })).catch(() => undefined);
   }
 
+  /** Customer app: order messages / invoices are saved into the customer's app chat (that is the delivery). */
+  private async saveAppChatMessage(companyId: number, externalUserId: string, text: string, file: { buffer: Buffer; mimetype: string; fileName: string } | null): Promise<boolean> {
+    const channelUser = await this.channelUserRepository.findOne({ where: { company_id: companyId, platform: 'app', external_user_id: externalUserId } });
+    if (!channelUser) return false;
+    const conversation = await this.conversationRepository.findOne({ where: { bot_channel_user_id: channelUser.id }, order: { id: 'DESC' } });
+    if (!conversation) return false;
+    const mediaKey = file ? saveChatMedia(companyId, file.buffer, file.mimetype, file.fileName) : null;
+    await this.messageRepository.save(this.messageRepository.create({
+      conversation_id: conversation.id, direction: 'outbound', message_type: file && file.mimetype.startsWith('image/') ? 'image' : 'text', platform: 'app',
+      provider_message_id: AppChatHook.send(companyId, externalUserId), delivery_status: 'sent',
+      content: file ? [file.fileName, text].filter(Boolean).join('\n') : text, media_url: mediaKey, source: 'agent',
+    }));
+    conversation.last_message_at = new Date();
+    await this.conversationRepository.save(conversation);
+    return true;
+  }
+
   /** Sends a file (e.g. invoice PDF) on the customer's channel; falls back to the link as text. */
   private async sendCustomerFile(
     companyId: number,
@@ -4101,6 +4142,7 @@ export class BotAdminService {
     file: { buffer: Buffer; mimetype: string; fileName: string; url: string | null; caption: string },
   ): Promise<boolean> {
     if (!channelUser?.external_user_id) return false;
+    if (channelUser.platform === 'app') return this.saveAppChatMessage(companyId, channelUser.external_user_id, file.caption, { buffer: file.buffer, mimetype: file.mimetype, fileName: file.fileName });
     const social = socialPlatformOf(channelUser.platform);
     try {
       if (social) {
@@ -4125,6 +4167,7 @@ export class BotAdminService {
     channelUser: Pick<BotChannelUser, 'platform' | 'external_user_id' | 'source_account_id'> | null | undefined,
     message: string,
   ): Promise<boolean> {
+    if (channelUser?.platform === 'app') return this.saveAppChatMessage(companyId, channelUser.external_user_id, message, null);
     const social = socialPlatformOf(channelUser?.platform);
     if (social && channelUser) {
       try {
@@ -5025,7 +5068,7 @@ export class BotAdminService {
       .orderBy('c.id', 'DESC')
       .getOne();
 
-    if (conversation) {
+    if (conversation && channelUser.platform !== 'app') { // customer app: the note is already a message in the chat
       await this.messageRepository.save(
         this.messageRepository.create({
           conversation_id: conversation.id,

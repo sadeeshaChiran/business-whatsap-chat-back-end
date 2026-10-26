@@ -3,13 +3,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { MetaPageConnection } from '../../meta/entities/meta-page-connection.entity';
 import { TiktokHook } from '../../common/tiktok-hook';
+import { TelegramHook } from '../../common/telegram-hook';
+import { AppChatHook } from '../../common/app-chat-hook';
 
-export type SocialPlatform = 'messenger' | 'instagram' | 'tiktok';
+export type SocialPlatform = 'messenger' | 'instagram' | 'tiktok' | 'telegram' | 'app';
 
 /** 'facebook' is what some older rows call Messenger. Returns null for WhatsApp and anything else. */
 export function socialPlatformOf(value: string | null | undefined): SocialPlatform | null {
   const platform = String(value ?? '').trim().toLowerCase();
   if (platform === 'tiktok') return 'tiktok';
+  if (platform === 'telegram') return 'telegram';
+  if (platform === 'app') return 'app';
   if (platform.includes('instagram')) return 'instagram';
   if (platform.includes('messenger') || platform.includes('facebook')) return 'messenger';
   return null;
@@ -26,7 +30,7 @@ export class MetaSocialSenderService {
     private readonly connectionRepository: Repository<MetaPageConnection>,
   ) {}
 
-  private async target(companyId: number, platform: Exclude<SocialPlatform, 'tiktok'>, accountId: string | null) {
+  private async target(companyId: number, platform: Exclude<SocialPlatform, 'tiktok' | 'telegram' | 'app'>, accountId: string | null) {
     if (!accountId) throw new Error('this conversation is not linked to a Meta account');
     const connection = await this.connectionRepository.findOne({
       where: platform === 'instagram'
@@ -63,6 +67,10 @@ export class MetaSocialSenderService {
   async sendText(companyId: number, platform: SocialPlatform, accountId: string | null, recipientId: string, text: string): Promise<string | null> {
     // TikTok chats go to the TikTok channel (its own rules: 48-hour window, 10 messages in a row)
     if (platform === 'tiktok') return TiktokHook.sendText({ companyId, businessId: accountId, conversationId: recipientId }, text);
+    // Telegram chats go to the customer's chat with the business's bot
+    if (platform === 'telegram') return TelegramHook.sendText({ companyId, botId: accountId, chatId: recipientId }, text);
+    // customer app: the caller saves the message, which is what the app shows
+    if (platform === 'app') return AppChatHook.send(companyId, recipientId);
     const t = await this.target(companyId, platform, accountId);
     // Messenger and Instagram both reject text longer than 2000 characters
     const safe = text.length > 1900 ? `${text.slice(0, 1900)}…` : text;
@@ -77,6 +85,8 @@ export class MetaSocialSenderService {
   async sendImage(companyId: number, platform: SocialPlatform, accountId: string | null, recipientId: string,
     image: { url: string; buffer?: Buffer; mimetype?: string; fileName?: string }): Promise<string | null> {
     if (platform === 'tiktok') return TiktokHook.sendImage({ companyId, businessId: accountId, conversationId: recipientId }, image);
+    if (platform === 'telegram') return TelegramHook.sendFile({ companyId, botId: accountId, chatId: recipientId }, image);
+    if (platform === 'app') return AppChatHook.send(companyId, recipientId);
     const t = await this.target(companyId, platform, accountId);
     if (platform === 'messenger' && image.buffer) {
       const form = new FormData();
@@ -100,6 +110,10 @@ export class MetaSocialSenderService {
    */
   async sendFile(companyId: number, platform: SocialPlatform, accountId: string | null, recipientId: string,
     file: { buffer: Buffer; mimetype: string; fileName: string; url?: string | null; caption?: string }): Promise<string | null> {
+    // Telegram takes real files (e.g. the invoice PDF) with the caption
+    if (platform === 'telegram') return TelegramHook.sendFile({ companyId, botId: accountId, chatId: recipientId }, file);
+    // customer app: callers save the file message themselves (BotAdminService.sendCustomerFile does)
+    if (platform === 'app') return AppChatHook.send(companyId, recipientId);
     if (platform === 'instagram' || platform === 'tiktok') {
       // Instagram and TikTok cannot receive files – the link goes as text
       const text = [file.caption, file.url].filter(Boolean).join('\n');

@@ -21,7 +21,7 @@ import type { SocialPlatform } from '../integrations/meta/meta-social-sender.ser
  * The channel name the AI bot gets. TikTok direct messages work like Instagram ones (no phone number, no files,
  * a reply window), so the bot is told "instagram" for TikTok chats and needs no change; every other channel as before.
  */
-const botChannel = (social: SocialPlatform | null): string => (social === 'tiktok' ? 'instagram' : social ?? 'whatsapp');
+const botChannel = (social: SocialPlatform | null): string => (social === 'tiktok' ? 'instagram' : social === 'telegram' || social === 'app' ? 'messenger' : social ?? 'whatsapp');
 import { WhatsappProviderFactory } from '../integrations/whatsapp/whatsapp-provider.factory';
 import { WhatsappService } from '../integrations/whatsapp/whatsapp.service';
 import { Product } from '../products/entities/product.entity';

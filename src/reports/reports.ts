@@ -46,7 +46,7 @@ export class CustomerReportDto extends ReportPeriodDto {
   @IsOptional() @IsString() @MaxLength(100) search?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) product_id?: number;
   @IsOptional() @IsIn(['spent', 'orders', 'recent', 'name']) sort?: 'spent' | 'orders' | 'recent' | 'name';
-  @IsOptional() @IsIn(['whatsapp', 'messenger', 'instagram', 'tiktok']) platform?: 'whatsapp' | 'messenger' | 'instagram' | 'tiktok';
+  @IsOptional() @IsIn(['whatsapp', 'messenger', 'instagram', 'tiktok', 'telegram', 'app']) platform?: 'whatsapp' | 'messenger' | 'instagram' | 'tiktok' | 'telegram' | 'app';
 }
 
 export class ReorderDto {

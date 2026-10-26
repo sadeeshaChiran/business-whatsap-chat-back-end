@@ -70,6 +70,8 @@ const MIGRATION_FILES = [
   'supabase_notification_preferences.sql',
   'supabase_social_video.sql',
   'supabase_tiktok.sql',
+  'supabase_telegram.sql',
+  'supabase_customer_app.sql',
 ] as const;
 
 function migrationDir(): string | null {
