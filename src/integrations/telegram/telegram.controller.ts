@@ -19,6 +19,7 @@ import { RawResponse } from '../../common/decorators/raw-response.decorator';
 import { FeatureGuard, RequiresFeature } from '../../platform/feature.guard';
 import { SalesBotModule } from '../../sales-bot/sales-bot.module';
 import { TelegramService, type TelegramUpdate } from './telegram.service';
+import { TelegramSpacesService } from './telegram-spaces.service';
 
 const tagList = (value: unknown): string[] =>
   (Array.isArray(value) ? value : String(value ?? '').split(',')).map((t) => String(t).trim()).filter(Boolean).slice(0, 20);
@@ -84,6 +85,63 @@ export class TelegramController {
   }
 }
 
+/** Channels → Telegram → Groups & channels (owner): only invited customers get in. */
+@Controller('integrations/telegram/spaces')
+@ApiTags('Telegram')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('telegram')
+export class TelegramSpacesController {
+  constructor(private readonly spaces: TelegramSpacesService) {}
+
+  private company(user: AuthenticatedUser) { return Number(user.company_id); }
+
+  @Get() @AdminOnly()
+  list(@CurrentUser() user: AuthenticatedUser) { return this.spaces.list(this.company(user)); }
+
+  @Post() @AdminOnly()
+  link(@CurrentUser() user: AuthenticatedUser, @Body() body: { chat?: string }) { return this.spaces.link(this.company(user), String(body?.chat ?? '')); }
+
+  @Post(':id/refresh') @AdminOnly()
+  refresh(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.spaces.refresh(this.company(user), id); }
+
+  @Put(':id') @AdminOnly()
+  settings(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: { members_only?: unknown; audience_tags?: unknown }) {
+    return this.spaces.settings(this.company(user), id, body ?? {});
+  }
+
+  @Delete(':id') @AdminOnly()
+  unlink(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.spaces.unlink(this.company(user), id); }
+
+  @Get(':id/members') @AdminOnly()
+  members(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.spaces.members(this.company(user), id); }
+
+  @Get(':id/candidates') @AdminOnly()
+  candidates(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Query('q') q?: string) {
+    return this.spaces.candidates(this.company(user), id, q ?? '');
+  }
+
+  @Post(':id/invite') @AdminOnly()
+  invite(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: { channel_user_ids?: unknown; tags?: unknown; all?: unknown; message?: unknown }) {
+    return this.spaces.invite(this.company(user), id, body ?? {});
+  }
+
+  @Delete(':id/members/:channelUserId') @AdminOnly()
+  remove(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Param('channelUserId', ParseIntPipe) channelUserId: number) {
+    return this.spaces.remove(this.company(user), id, channelUserId);
+  }
+
+  @Post(':id/post') @AdminOnly()
+  @UseInterceptors(FileInterceptor('photo', { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }))
+  post(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: { text?: string },
+    @UploadedFile() photo?: { buffer: Buffer; mimetype: string; originalname: string }) {
+    if (photo?.buffer?.length && !/^image\/(jpe?g|png|webp)$/i.test(String(photo.mimetype))) throw new BadRequestException('The photo must be JPG, PNG or WEBP.');
+    return this.spaces.post(this.company(user), id, {
+      text: body?.text, photo: photo?.buffer?.length ? { buffer: photo.buffer, mimetype: String(photo.mimetype).toLowerCase(), fileName: photo.originalname || 'photo.jpg' } : null,
+    });
+  }
+}
+
 /** Public: Telegram calls this with every update of a connected bot (checked with the secret token). */
 @Controller('integrations/telegram')
 export class TelegramPublicController {
@@ -114,8 +172,8 @@ export class TelegramPublicController {
 
 @Module({
   imports: [TypeOrmModule.forFeature([BotChannelUser, BotConversation, BotMessage]), AuthModule, SalesBotModule],
-  controllers: [TelegramController, TelegramPublicController],
-  providers: [TelegramService],
+  controllers: [TelegramController, TelegramSpacesController, TelegramPublicController],
+  providers: [TelegramService, TelegramSpacesService],
   exports: [TelegramService],
 })
 export class TelegramModule {}

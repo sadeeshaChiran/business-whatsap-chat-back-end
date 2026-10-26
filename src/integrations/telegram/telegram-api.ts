@@ -52,7 +52,7 @@ export const getMe = (token: string) => telegramCall<TelegramBot>(token, 'getMe'
 export function setWebhook(token: string, url: string, secret: string) {
   return telegramCall<boolean>(token, 'setWebhook', {
     url, secret_token: secret, drop_pending_updates: false, max_connections: 40,
-    allowed_updates: ['message', 'edited_message', 'my_chat_member'],
+    allowed_updates: ['message', 'edited_message', 'my_chat_member', 'chat_join_request', 'chat_member'],
   });
 }
 export const deleteWebhook = (token: string) => telegramCall<boolean>(token, 'deleteWebhook', { drop_pending_updates: false });

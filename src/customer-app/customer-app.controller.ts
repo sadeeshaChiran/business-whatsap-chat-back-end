@@ -14,6 +14,13 @@ import { RawResponse } from '../common/decorators/raw-response.decorator';
 import { SalesBotModule } from '../sales-bot/sales-bot.module';
 import { CurrentCustomer, CustomerAuthGuard, type CustomerAccount } from './customer-auth';
 import { APP_MAX_FILE_MB, CustomerAppService } from './customer-app.service';
+import { CustomerCommunityBusinessController, CustomerCommunityController } from './customer-community.controller';
+import { CustomerCommunityService } from './customer-community.service';
+import { CustomerAppPart3Controller, CustomerAppPart3BusinessController, CustomerAppPublicController } from './customer-app-3.controller';
+import { CustomerBroadcastService } from './customer-broadcast.service';
+import { CustomerDmService } from './customer-dm.service';
+import { CustomerMembersService } from './customer-members.service';
+import { CustomerPushService } from './customer-push.service';
 
 /** Customer app – login (public, rate limited). */
 @Controller('ca/auth')
@@ -23,12 +30,12 @@ export class CustomerAuthController {
 
   @Post('start')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  start(@Body() body: { phone?: string }) { return this.app.startLogin(String(body?.phone ?? '')); }
+  start(@Body() body: { phone?: string; app?: string; link?: string }) { return this.app.startLogin(String(body?.phone ?? ''), { app: body?.app, link: body?.link }); }
 
   @Post('verify')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  verify(@Body() body: { phone?: string; code?: string; name?: string }) {
-    return this.app.verifyLogin(String(body?.phone ?? ''), String(body?.code ?? ''), body?.name);
+  verify(@Body() body: { phone?: string; code?: string; name?: string; app?: string; link?: string }) {
+    return this.app.verifyLogin(String(body?.phone ?? ''), String(body?.code ?? ''), body?.name, { app: body?.app, link: body?.link });
   }
 }
 
@@ -77,8 +84,8 @@ export class CustomerAppController {
   @Post('realtime/auth')
   @HttpCode(200)
   @RawResponse()
-  realtime(@CurrentCustomer() customer: CustomerAccount, @Body() body: { socket_id?: string; channel_name?: string }) {
-    const signature = this.app.authorizeRealtime(customer, String(body?.socket_id ?? ''), String(body?.channel_name ?? ''));
+  async realtime(@CurrentCustomer() customer: CustomerAccount, @Body() body: { socket_id?: string; channel_name?: string }) {
+    const signature = await this.app.authorizeRealtime(customer, String(body?.socket_id ?? ''), String(body?.channel_name ?? ''));
     if (!signature) throw new ServiceUnavailableException('Real-time updates are not configured.');
     return signature;
   }
@@ -98,15 +105,20 @@ export class CustomerAppBusinessController {
   }
 
   @Put('settings') @AdminOnly()
-  async save(@CurrentUser() user: AuthenticatedUser, @Body() body: { enabled?: boolean; welcome_text?: string | null }) {
+  async save(@CurrentUser() user: AuthenticatedUser, @Body() body: {
+    enabled?: boolean; welcome_text?: string | null; slug?: string; app_name?: string | null; theme_color?: string | null; access?: string; member_dm?: boolean;
+  }) {
     return { ...(await this.app.saveSettings(Number(user.company_id), body ?? {})), link_code: this.app.linkCode(Number(user.company_id)) };
   }
 }
 
 @Module({
   imports: [AuthModule, SalesBotModule],
-  controllers: [CustomerAuthController, CustomerAppController, CustomerAppBusinessController],
-  providers: [CustomerAppService, CustomerAuthGuard],
+  controllers: [
+    CustomerAuthController, CustomerAppPublicController, CustomerAppController, CustomerAppBusinessController, CustomerCommunityController,
+    CustomerCommunityBusinessController, CustomerAppPart3Controller, CustomerAppPart3BusinessController,
+  ],
+  providers: [CustomerAppService, CustomerCommunityService, CustomerMembersService, CustomerPushService, CustomerDmService, CustomerBroadcastService, CustomerAuthGuard],
   exports: [CustomerAppService],
 })
 export class CustomerAppModule {}

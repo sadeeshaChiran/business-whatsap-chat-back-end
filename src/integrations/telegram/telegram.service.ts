@@ -13,6 +13,7 @@ import {
   TelegramError, deleteWebhook, downloadTelegramFile, getMe, getWebhookInfo, looksLikeBotToken, sendMethodFor, setWebhook, telegramCall, telegramUpload,
   type TelegramChat,
 } from './telegram-api';
+import { TelegramSpacesService, type SpaceUpdate } from './telegram-spaces.service';
 
 export type TelegramConnection = {
   id: number; company_id: number; bot_id: string; bot_username: string | null; bot_name: string | null; bot_token: string; webhook_secret: string;
@@ -32,8 +33,8 @@ type TgMessage = {
 };
 export type TelegramUpdate = {
   update_id?: number; message?: TgMessage; edited_message?: TgMessage;
-  my_chat_member?: { chat: TelegramChat; from?: TgUser; new_chat_member?: { status?: string; user?: TgUser; can_post_messages?: boolean } };
-};
+  my_chat_member?: { chat: TelegramChat; from?: TgUser; new_chat_member?: { status?: string; user?: TgUser; can_post_messages?: boolean; can_invite_users?: boolean; can_restrict_members?: boolean } };
+} & Pick<SpaceUpdate, 'chat_join_request' | 'chat_member'>;
 
 /** Telegram limits: text 4096 characters, photo / file caption 1024, ~30 messages a second per bot. */
 export const TELEGRAM_LIMITS = { text: 4096, caption: 1024, perSecond: 20, photoBytes: 10 * 1024 * 1024, fileBytes: 50 * 1024 * 1024 };
@@ -56,6 +57,7 @@ export class TelegramService implements OnModuleInit {
     @InjectRepository(BotChannelUser) private readonly userRepository: Repository<BotChannelUser>,
     @InjectRepository(BotConversation) private readonly conversationRepository: Repository<BotConversation>,
     @InjectRepository(BotMessage) private readonly messageRepository: Repository<BotMessage>,
+    private readonly spaces: TelegramSpacesService,
   ) {}
 
   onModuleInit() {
@@ -344,7 +346,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   enqueue(row: TelegramConnection, update: TelegramUpdate): Promise<number> {
-    const chat = update.message?.chat.id ?? update.my_chat_member?.chat.id ?? 'other';
+    const chat = update.message?.chat.id ?? update.my_chat_member?.chat.id ?? update.chat_join_request?.chat.id ?? update.chat_member?.chat.id ?? 'other';
     const key = `${row.id}:${chat}`;
     const next = (this.queues.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => this.handleUpdate(row, update));
     this.queues.set(key, next);
@@ -357,8 +359,13 @@ export class TelegramService implements OnModuleInit {
     const companyId = Number(row.company_id);
     await this.dataSource.query(`UPDATE telegram_connection SET last_event_at = NOW() WHERE id = $1`, [row.id]).catch(() => undefined);
 
+    // the business's Telegram groups / channels: join requests and members (only for groups linked in Channels → Telegram)
+    if (update.chat_join_request) return this.spaces.onJoinRequest(row, update.chat_join_request);
+    if (update.chat_member) return this.spaces.onMember(row, update.chat_member);
+
     const member = update.my_chat_member;
     if (member) {
+      if (member.chat.type !== 'private') await this.spaces.onBotMember(row, member.chat, member.new_chat_member).catch((error) => this.logger.warn(`Telegram group update failed: ${this.why(error)}`));
       const status = member.new_chat_member?.status ?? '';
       if (member.chat.type === 'private') {
         await this.markBlocked(companyId, String(member.chat.id), status === 'kicked', row.bot_id);

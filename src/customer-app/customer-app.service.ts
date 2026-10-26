@@ -10,6 +10,7 @@ import { SalesBotHook } from '../common/sales-bot-hook';
 import { normalizeWhatsapp } from '../verification/verification';
 import { otpDevMode, sendPhoneCode } from '../verification/senders';
 import { signCustomerToken, type CustomerAccount } from './customer-auth';
+import { CustomerPushService } from './customer-push.service';
 
 const CODE_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
@@ -30,8 +31,8 @@ const firstRow = (result: unknown): Row | undefined => {
 };
 
 /**
- * Customer app: customers log in with their phone (SMS code) and see every business that knows their number (a WhatsApp
- * chat or a CRM contact) or that they opened from the business's link. Their chat with a business is an ordinary inbox
+ * Customer app: customers log in with their phone (SMS code). Every business has its own app (/app/<address>, own name and
+ * logo); only the numbers the business added can use it (or anyone with its link, when the business allows that). Their chat with a business is an ordinary inbox
  * chat with platform "app" – the team and the AI bot answer it from the Inbox. Free: nothing goes through Meta or SMS
  * except the login code. Nothing here runs for WhatsApp, Messenger, Instagram, TikTok or Telegram.
  */
@@ -40,10 +41,37 @@ export class CustomerAppService implements OnModuleInit {
   private readonly logger = new Logger(CustomerAppService.name);
   private readonly pusher = new PusherService();
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource, readonly push: CustomerPushService) {}
 
   onModuleInit() {
-    AppChatHook.register({ delivered: (companyId, external) => this.pingCustomer(accountOf(external), companyId) });
+    AppChatHook.register({
+      delivered: (companyId, external) => {
+        const accountId = accountOf(external);
+        this.pingCustomer(accountId, companyId);
+        void this.pushReply(accountId, companyId).catch(() => undefined);
+      },
+    });
+  }
+
+  /** The team / AI answered in the app chat → a phone notification with a short preview. */
+  private async pushReply(accountId: number | null, companyId: number) {
+    if (!accountId) return;
+    const [last] = await this.dataSource.query(`
+      SELECT m.message_type::text AS type, m.content, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name
+        FROM bot_channel_user cu JOIN bot_conversation bc ON bc.bot_channel_user_id = cu.id
+        JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
+        JOIN companies c ON c.id = cu.company_id LEFT JOIN ca_settings s ON s.company_id = cu.company_id
+       WHERE cu.company_id = $1 AND cu.platform = 'app' AND cu.external_user_id = $2 ORDER BY m.id DESC LIMIT 1`, [companyId, externalId(accountId)]);
+    if (!last) return;
+    this.push.notify([accountId], companyId, { title: String(last.name), body: this.preview(last.type, last.content) || 'New message', target: { kind: 'chat' } });
+  }
+
+  /** A member's short ID inside one business's app, e.g. "K7Q2MX" – shown instead of a phone number. */
+  memberCode(companyId: number, accountId: number) {
+    const secret = String(process.env.CUSTOMER_APP_SECRET || process.env.JWT_SECRET || '');
+    const digest = createHmac('sha256', secret).update(`ca-member:${companyId}:${accountId}`).digest();
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    return Array.from(digest.subarray(0, 6)).map((byte) => alphabet[byte % alphabet.length]).join('');
   }
 
   /* ───────────────────────── login ───────────────────────── */
@@ -70,8 +98,48 @@ export class CustomerAppService implements OnModuleInit {
     }
   }
 
-  async startLogin(rawPhone: string) {
+  /* ───────────────────────── which business app ───────────────────────── */
+
+  /** A business's own app: its address ("slug") or its chat link code. Null = the shared /chat app. */
+  async appCompany(input: { app?: string | null; link?: string | null }): Promise<{ id: number; name: string; access: string } | null> {
+    const slug = String(input.app ?? '').trim().toLowerCase();
+    const link = String(input.link ?? '').trim();
+    if (!slug && !link) return null;
+    const id = slug ? null : this.companyFromLink(link);
+    const [row] = await this.dataSource.query(`
+      SELECT c.id, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name, s.access FROM ca_settings s JOIN companies c ON c.id = s.company_id
+       WHERE s.enabled AND ${slug ? 's.slug = $1' : 's.company_id = $1'}`, [slug || id]);
+    if (!row) throw new NotFoundException('This app is not available. Ask the business for its link again.');
+    return { id: Number(row.id), name: String(row.name), access: String(row.access ?? 'invited') };
+  }
+
+  /** May this number use the business's app? Only numbers the business added (or that joined from its link, when it allows that). */
+  async isMember(companyId: number, phone: string): Promise<boolean> {
+    const rows = await this.dataSource.query(`SELECT 1 FROM ca_app_member WHERE company_id = $1 AND phone = $2`, [companyId, phone]);
+    return rows.length > 0;
+  }
+
+  /** Taken off the list by the business – the link does not bring them back. */
+  async wasRemoved(companyId: number, phone: string): Promise<boolean> {
+    const rows = await this.dataSource.query(`SELECT 1 FROM ca_app_removed WHERE company_id = $1 AND phone = $2`, [companyId, phone]);
+    return rows.length > 0;
+  }
+
+  private notOnList(name: string) {
+    return new ForbiddenException(`This number is not on ${name}'s list yet. Ask ${name} to add your number, then try again.`);
+  }
+
+  async startLogin(rawPhone: string, appInput: { app?: string | null; link?: string | null } = {}) {
     const phone = this.phoneOf(rawPhone);
+    // no SMS for numbers that could not use the app anyway
+    const company = await this.appCompany(appInput);
+    if (company) {
+      if (!(await this.isMember(company.id, phone)) && (company.access !== 'link' || (await this.wasRemoved(company.id, phone)))) throw this.notOnList(company.name);
+    } else {
+      const [any] = await this.dataSource.query(`
+        SELECT 1 FROM ca_app_member m JOIN ca_settings s ON s.company_id = m.company_id AND s.enabled WHERE m.phone = $1 LIMIT 1`, [phone]);
+      if (!any) throw new ForbiddenException('This number is not on any business\'s list yet. Ask the business to add your number, or open its link.');
+    }
     const [current] = await this.dataSource.query(`SELECT * FROM ca_login_code WHERE phone = $1`, [phone]);
     const now = Date.now();
     if (current) {
@@ -95,8 +163,9 @@ export class CustomerAppService implements OnModuleInit {
     return { phone, sent_via: via, resend_seconds: RESEND_SECONDS, ...(otpDevMode() ? { dev_code: code } : {}) };
   }
 
-  async verifyLogin(rawPhone: string, rawCode: string, name?: string) {
+  async verifyLogin(rawPhone: string, rawCode: string, name?: string, appInput: { app?: string | null; link?: string | null } = {}) {
     const phone = this.phoneOf(rawPhone);
+    const company = await this.appCompany(appInput);
     const code = String(rawCode ?? '').replace(/\D/g, '');
     // one try is used up BEFORE comparing (parallel guesses can never go past the limit)
     const row = firstRow(await this.dataSource.query(`
@@ -118,6 +187,9 @@ export class CustomerAppService implements OnModuleInit {
       INSERT INTO ca_account (phone, name, last_seen_at) VALUES ($1, $2, NOW())
       ON CONFLICT (phone) DO UPDATE SET name = COALESCE(EXCLUDED.name, ca_account.name), last_seen_at = NOW()
       RETURNING id, phone, name, token_version`, [phone, cleanName]);
+    if (company) await this.joinApp(company, { id: Number(account.id), phone, name: account.name ?? null } as CustomerAccount);
+    // the shared /chat app shows every business that added the number → they "have the app" for all of them
+    else await this.dataSource.query(`UPDATE ca_app_member SET joined_at = COALESCE(joined_at, NOW()), last_open_at = NOW() WHERE phone = $1`, [phone]);
     return { token: signCustomerToken(Number(account.id), Number(account.token_version)), account: this.publicAccount(account), new_account: !account.name };
   }
 
@@ -137,84 +209,118 @@ export class CustomerAppService implements OnModuleInit {
   /** "Log out on all devices": every older token stops working. */
   async logoutEverywhere(customer: CustomerAccount) {
     await this.dataSource.query(`UPDATE ca_account SET token_version = token_version + 1 WHERE id = $1`, [customer.id]);
+    await this.push.forget(customer.id);
     return { logged_out: true };
   }
 
   /* ───────────────────────── businesses ("places") ───────────────────────── */
 
-  private localPhone(phone: string) {
-    return phone.startsWith('94') ? `0${phone.slice(2)}` : phone;
+  /**
+   * The customer opened a business's app: added numbers are marked "on the app"; with "anyone with the link" the number is
+   * added now. Otherwise the number is not on the list → no access.
+   */
+  async joinApp(company: { id: number; name: string; access: string }, customer: CustomerAccount) {
+    const updated = await this.dataSource.query(`
+      UPDATE ca_app_member SET joined_at = COALESCE(joined_at, NOW()), last_open_at = NOW(), name = COALESCE(name, $3)
+       WHERE company_id = $1 AND phone = $2 RETURNING phone`, [company.id, customer.phone, customer.name ?? null]);
+    if (firstRow(updated)) return true;
+    if (company.access !== 'link' || (await this.wasRemoved(company.id, customer.phone))) return false;
+    await this.dataSource.query(`
+      INSERT INTO ca_app_member (company_id, phone, name, source, joined_at, last_open_at) VALUES ($1, $2, $3, 'link', NOW(), NOW()) ON CONFLICT DO NOTHING`,
+    [company.id, customer.phone, customer.name ?? null]);
+    return true;
   }
 
-  /** Businesses with the app on that know this number (WhatsApp chat / CRM contact) or that the customer opened. */
+  /** Opening a business's own app (/app/<address>): may this customer use it? */
+  async openApp(customer: CustomerAccount, slug: string) {
+    const company = await this.appCompany({ app: slug });
+    if (!(await this.joinApp(company!, customer))) throw this.notOnList(company!.name);
+    return { company_id: company!.id, name: company!.name };
+  }
+
+  /** Businesses whose app is on and that added this number. */
   async places(customer: CustomerAccount) {
+    // the shared app lists every business that added the number → "has the app" for each of them
+    await this.dataSource.query(`
+      UPDATE ca_app_member SET joined_at = COALESCE(joined_at, NOW()), last_open_at = NOW()
+       WHERE phone = $1 AND (joined_at IS NULL OR last_open_at IS NULL OR last_open_at < NOW() - INTERVAL '5 minutes')`, [customer.phone]);
     const rows: Row[] = await this.dataSource.query(`
-      SELECT c.id, c.company_name AS name, cu.id AS channel_user_id,
+      SELECT c.id, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name, s.slug, cu.id AS channel_user_id,
              last.content AS last_text, last.message_type AS last_type, last.direction AS last_direction, last.created_at AS last_at,
              (SELECT COUNT(*)::int FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
                WHERE bc.bot_channel_user_id = cu.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
-                 AND m.created_at > COALESCE(st.last_read_at, 'epoch'::timestamptz)) AS unread
+                 AND m.created_at > COALESCE(st.last_read_at, 'epoch'::timestamptz)) AS unread,
+             p.logo_key,
+             (SELECT COUNT(*)::int FROM ca_news n WHERE n.company_id = c.id AND n.deleted_at IS NULL
+                 AND n.created_at > NOW() - INTERVAL '60 days'
+                 AND NOT EXISTS (SELECT 1 FROM ca_news_view v WHERE v.news_id = n.id AND v.account_id = $3)) AS news_unread,
+             (SELECT COUNT(*)::int FROM ca_group_member gm JOIN ca_group g ON g.id = gm.group_id AND g.archived_at IS NULL
+                JOIN ca_group_message msg ON msg.group_id = g.id AND msg.id > gm.last_read_id AND msg.deleted_at IS NULL AND msg.sender_account_id IS DISTINCT FROM gm.account_id
+               WHERE gm.account_id = $3 AND g.company_id = c.id) AS groups_unread,
+             (SELECT COUNT(*)::int FROM ca_dm d JOIN ca_dm_message dm ON dm.dm_id = d.id AND dm.deleted_at IS NULL AND dm.sender_account_id <> $3
+                 AND dm.id > CASE WHEN d.account_a = $3 THEN d.a_last_read_id ELSE d.b_last_read_id END
+               WHERE d.company_id = c.id AND (d.account_a = $3 OR d.account_b = $3)) AS dms_unread
         FROM ca_settings s
         JOIN companies c ON c.id = s.company_id
+        LEFT JOIN ca_business_profile p ON p.company_id = c.id
         LEFT JOIN bot_channel_user cu ON cu.company_id = c.id AND cu.platform = 'app' AND cu.external_user_id = $1
         LEFT JOIN ca_chat_state st ON st.channel_user_id = cu.id
         LEFT JOIN LATERAL (
           SELECT m.content, m.message_type::text AS message_type, m.direction::text AS direction, m.created_at FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
            WHERE bc.bot_channel_user_id = cu.id AND m.message_type::text <> 'system' ORDER BY m.id DESC LIMIT 1) last ON TRUE
-       WHERE s.enabled
-         AND (cu.id IS NOT NULL
-           OR EXISTS (SELECT 1 FROM bot_channel_user w WHERE w.company_id = c.id AND w.platform = 'whatsapp' AND w.external_user_id IN ($2, $3))
-           OR EXISTS (SELECT 1 FROM crm_contact cc WHERE cc.company_id = c.id AND regexp_replace(COALESCE(cc.phone, ''), '\\D', '', 'g') IN ($2, $3)))
+       WHERE s.enabled AND EXISTS (SELECT 1 FROM ca_app_member am WHERE am.company_id = c.id AND am.phone = $2)
        ORDER BY last.created_at DESC NULLS LAST, c.company_name`,
-    [externalId(customer.id), customer.phone, this.localPhone(customer.phone)]);
+    [externalId(customer.id), customer.phone, customer.id]);
     return rows.map((row) => ({
-      id: Number(row.id), name: row.name, started: Boolean(row.channel_user_id), unread: Number(row.unread ?? 0),
+      id: Number(row.id), name: row.name, slug: row.slug ?? null, started: Boolean(row.channel_user_id), unread: Number(row.unread ?? 0),
+      logo_url: row.logo_key ? publicChatMediaUrl(row.logo_key, 24 * 3600) : null,
+      news_unread: Number(row.news_unread ?? 0), groups_unread: Number(row.groups_unread ?? 0), dms_unread: Number(row.dms_unread ?? 0),
       last: row.last_at ? { text: this.preview(row.last_type, row.last_text), from_me: row.last_direction === 'inbound', at: row.last_at } : null,
     }));
   }
 
-  private preview(type: string, text: string | null) {
+  preview(type: string, text: string | null) {
     if (type === 'image') return '📷 Photo';
     if (type === 'voice') return '🎤 Voice message';
     const value = String(text ?? '').trim();
     return /^\[(video|audio|document)\]/i.test(value) ? `📎 ${value.slice(1, value.indexOf(']'))}` : value.slice(0, 120);
   }
 
-  /** A business the customer may open: the app is on, and it knows the number or the customer came from its link. */
-  async place(customer: CustomerAccount, companyId: number, fromLink = false) {
-    const [row] = await this.dataSource.query(`SELECT c.id, c.company_name AS name, s.enabled, s.welcome_text FROM companies c JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId]);
+  /** A business the customer may open: the app is on and the business added the number (see joinApp). */
+  async place(customer: CustomerAccount, companyId: number) {
+    const [row] = await this.dataSource.query(`
+      SELECT c.id, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name, s.enabled, s.welcome_text, s.member_dm,
+             EXISTS (SELECT 1 FROM ca_app_member am WHERE am.company_id = c.id AND am.phone = $2) AS member
+        FROM companies c JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId, customer.phone]);
     if (!row?.enabled) throw new NotFoundException('This business does not use the app (yet).');
-    if (!fromLink) {
-      const known = (await this.places(customer)).some((place) => place.id === companyId);
-      if (!known) throw new ForbiddenException('Open this business from its link or QR code first.');
-    }
-    return { id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null };
+    if (!row.member) throw this.notOnList(String(row.name));
+    return { id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null, member_dm: Boolean(row.member_dm) };
   }
 
   /** The customer's inbox chat with a business (created the first time, with the business's welcome message). */
-  private async channelUser(customer: CustomerAccount, companyId: number, create: boolean, fromLink = false): Promise<Row | null> {
+  async channelUser(customer: CustomerAccount, companyId: number, create: boolean, options: { welcome?: boolean } = {}): Promise<Row | null> {
     const [existing] = await this.dataSource.query(`SELECT * FROM bot_channel_user WHERE company_id = $1 AND platform = 'app' AND external_user_id = $2`, [companyId, externalId(customer.id)]);
     if (existing || !create) return existing ?? null;
-    const place = await this.place(customer, companyId, fromLink);
+    const place = await this.place(customer, companyId);
     const [user] = await this.dataSource.query(`
       INSERT INTO bot_channel_user (company_id, app_user_id, platform, external_user_id, source_account_id, display_name, language, language_locked, session_state, bot_enabled, manual_mode, last_seen_at, created_at, updated_at)
       VALUES ($1, NULL, 'app', $2, NULL, $3, 'English', false, NULL, false, false, NOW(), NOW(), NOW())
       ON CONFLICT DO NOTHING RETURNING *`, [companyId, externalId(customer.id), customer.name || this.maskedPhone(customer.phone)]);
     if (!user) return (await this.dataSource.query(`SELECT * FROM bot_channel_user WHERE company_id = $1 AND platform = 'app' AND external_user_id = $2`, [companyId, externalId(customer.id)]))[0];
     const created = user;
-    if (place.welcome_text) {
+    if (place.welcome_text && options.welcome !== false) {
       const conversation = await this.conversation(Number(created.id));
       await this.saveMessage(conversation, 'outbound', 'text', place.welcome_text, null, 'app-welcome');
     }
     return created;
   }
 
-  private maskedPhone(phone: string) {
+  maskedPhone(phone: string) {
     return `+${phone.slice(0, -4).replace(/\d(?=\d{3})/g, '•')}${phone.slice(-4)}`;
   }
 
   /** latest open chat of this customer (a new one after the team closed the old one) */
-  private async conversation(channelUserId: number): Promise<Row> {
+  async conversation(channelUserId: number): Promise<Row> {
     const [open] = await this.dataSource.query(`SELECT * FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1`, [channelUserId]);
     if (open && open.status !== 'closed') return open;
     const [created] = await this.dataSource.query(`
@@ -238,7 +344,7 @@ export class CustomerAppService implements OnModuleInit {
     return `${companyId}-${createHmac('sha256', secret).update(`ca-link:${companyId}`).digest('base64url').slice(0, 12)}`;
   }
 
-  private companyFromLink(code: string): number {
+  companyFromLink(code: string): number {
     const id = Number(/^(\d+)-[\w-]{12}$/.exec(String(code ?? ''))?.[1] ?? 0);
     const expected = id ? Buffer.from(this.linkCode(id)) : Buffer.alloc(0);
     const given = Buffer.from(String(code ?? ''));
@@ -246,11 +352,12 @@ export class CustomerAppService implements OnModuleInit {
     return id;
   }
 
-  /** Opened from the business's link / QR: the business appears in the customer's list. */
+  /** Opened from the business's link / QR: the business appears in the customer's list (if it added the number, or allows its link). */
   async open(customer: CustomerAccount, link: string) {
-    const companyId = this.companyFromLink(link);
-    const place = await this.place(customer, companyId, true);
-    await this.channelUser(customer, companyId, true, true);
+    const company = await this.appCompany({ link });
+    if (!(await this.joinApp(company!, customer))) throw this.notOnList(company!.name);
+    const place = await this.place(customer, company!.id);
+    await this.channelUser(customer, company!.id, true);
     return place;
   }
 
@@ -290,7 +397,7 @@ export class CustomerAppService implements OnModuleInit {
   }
 
   /** Our stored chat files get a signed link (6 hours); product photos their public link; anything else is not shown. */
-  private mediaLink(value: string | null): string | null {
+  mediaLink(value: string | null): string | null {
     if (!value) return null;
     if (isChatMediaKey(value)) return publicChatMediaUrl(value, 6 * 3600);
     const absolute = absoluteProductImage(value);
@@ -334,6 +441,7 @@ export class CustomerAppService implements OnModuleInit {
 
   /** The customer opened the chat: the team sees "read" on its messages; the unread count goes to 0. */
   async markRead(customer: CustomerAccount, companyId: number) {
+    await this.place(customer, companyId);
     const user = await this.channelUser(customer, companyId, false);
     if (!user) return { ok: true };
     await this.dataSource.query(`
@@ -352,8 +460,12 @@ export class CustomerAppService implements OnModuleInit {
     return `private-customer-${accountId}`;
   }
 
-  authorizeRealtime(customer: CustomerAccount, socketId: string, channel: string) {
-    if (channel !== this.customerChannel(customer.id)) throw new ForbiddenException('You cannot listen to this channel.');
+  /** Own channel, or the channel of a group the customer is a member of. */
+  async authorizeRealtime(customer: CustomerAccount, socketId: string, channel: string) {
+    const group = /^private-ca-group-(\d+)$/.exec(channel)?.[1];
+    const allowed = channel === this.customerChannel(customer.id)
+      || (group ? (await this.dataSource.query(`SELECT 1 FROM ca_group_member gm JOIN ca_group g ON g.id = gm.group_id AND g.archived_at IS NULL WHERE gm.group_id = $1 AND gm.account_id = $2`, [Number(group), customer.id])).length > 0 : false);
+    if (!allowed) throw new ForbiddenException('You cannot listen to this channel.');
     return this.pusher.authorize(socketId, channel);
   }
 
@@ -369,20 +481,78 @@ export class CustomerAppService implements OnModuleInit {
 
   /* ───────────────────────── business side ───────────────────────── */
 
-  async settings(companyId: number) {
-    const [row] = await this.dataSource.query(`SELECT enabled, welcome_text FROM ca_settings WHERE company_id = $1`, [companyId]);
-    const [stats] = await this.dataSource.query(`
-      SELECT COUNT(*)::int AS customers, COUNT(*) FILTER (WHERE cu.last_seen_at > NOW() - INTERVAL '7 days')::int AS active_week
-        FROM bot_channel_user cu WHERE cu.company_id = $1 AND cu.platform = 'app'`, [companyId]);
-    return { enabled: Boolean(row?.enabled), welcome_text: row?.welcome_text ?? null, customers: Number(stats?.customers ?? 0), active_week: Number(stats?.active_week ?? 0) };
+  /** "VORA Kids" → "vora-kids" (made once; the business can change it). */
+  private async ensureSlug(companyId: number): Promise<string> {
+    const [row] = await this.dataSource.query(`SELECT s.slug, c.company_name FROM companies c LEFT JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId]);
+    if (row?.slug) return String(row.slug);
+    const base = String(row?.company_name ?? 'business').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'business';
+    for (const candidate of [base.length >= 3 ? base : `${base}-app`, `${base}-${companyId}`]) {
+      const saved = await this.dataSource.query(`
+        INSERT INTO ca_settings (company_id, enabled, slug, updated_at) VALUES ($1, FALSE, $2, NOW())
+        ON CONFLICT (company_id) DO UPDATE SET slug = COALESCE(ca_settings.slug, EXCLUDED.slug) RETURNING slug`, [companyId, candidate]).catch(() => null);
+      const slug = firstRow(saved)?.slug;
+      if (slug) return String(slug);
+    }
+    return `${base}-${companyId}`;
   }
 
-  async saveSettings(companyId: number, input: { enabled?: boolean; welcome_text?: string | null }) {
-    const welcome = input.welcome_text == null ? null : String(input.welcome_text).trim().slice(0, 1000) || null;
-    await this.dataSource.query(`
-      INSERT INTO ca_settings (company_id, enabled, welcome_text, updated_at) VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (company_id) DO UPDATE SET enabled = EXCLUDED.enabled, welcome_text = EXCLUDED.welcome_text, updated_at = NOW()`,
-    [companyId, Boolean(input.enabled), welcome]);
+  async settings(companyId: number) {
+    const slug = await this.ensureSlug(companyId);
+    const [row] = await this.dataSource.query(`
+      SELECT s.enabled, s.welcome_text, s.app_name, s.theme_color, s.access, s.member_dm, s.icon_key, c.company_name
+        FROM ca_settings s JOIN companies c ON c.id = s.company_id WHERE s.company_id = $1`, [companyId]);
+    const [stats] = await this.dataSource.query(`
+      SELECT (SELECT COUNT(*)::int FROM ca_app_member WHERE company_id = $1) AS members,
+             (SELECT COUNT(*)::int FROM ca_app_member m WHERE m.company_id = $1 AND m.joined_at IS NOT NULL) AS customers,
+             (SELECT COUNT(*)::int FROM ca_app_member m WHERE m.company_id = $1 AND m.last_open_at > NOW() - INTERVAL '7 days') AS active_week`, [companyId]);
+    return {
+      enabled: Boolean(row?.enabled), welcome_text: row?.welcome_text ?? null, slug,
+      app_name: row?.app_name ?? null, default_name: String(row?.company_name ?? ''), theme_color: row?.theme_color ?? null,
+      access: row?.access === 'link' ? 'link' : 'invited', member_dm: Boolean(row?.member_dm),
+      icon_url: row?.icon_key ? publicChatMediaUrl(row.icon_key, 24 * 3600) : null,
+      members: Number(stats?.members ?? 0), customers: Number(stats?.customers ?? 0), active_week: Number(stats?.active_week ?? 0),
+    };
+  }
+
+  async saveSettings(companyId: number, input: {
+    enabled?: boolean; welcome_text?: string | null; slug?: string; app_name?: string | null; theme_color?: string | null; access?: string; member_dm?: boolean;
+  }) {
+    await this.ensureSlug(companyId);
+    const sets: string[] = [];
+    const params: unknown[] = [companyId];
+    const set = (column: string, value: unknown) => { params.push(value); sets.push(`${column} = $${params.length}`); };
+    if (input.enabled !== undefined) set('enabled', Boolean(input.enabled));
+    if (input.welcome_text !== undefined) set('welcome_text', input.welcome_text == null ? null : String(input.welcome_text).trim().slice(0, 1000) || null);
+    if (input.app_name !== undefined) set('app_name', input.app_name == null ? null : String(input.app_name).trim().slice(0, 40) || null);
+    if (input.theme_color !== undefined) {
+      const color = input.theme_color == null ? null : String(input.theme_color).trim();
+      if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new BadRequestException('Pick a colour like #6d4dff.');
+      set('theme_color', color || null);
+    }
+    if (input.access !== undefined) set('access', input.access === 'link' ? 'link' : 'invited');
+    if (input.member_dm !== undefined) set('member_dm', Boolean(input.member_dm));
+    if (input.slug !== undefined) {
+      const slug = String(input.slug ?? '').trim().toLowerCase();
+      if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) throw new BadRequestException('The app address can have 3–40 small letters, numbers and dashes, e.g. vora-kids.');
+      if (['chat', 'app', 'admin', 'api', 'login', 'www'].includes(slug)) throw new BadRequestException('That address is reserved – try another one.');
+      const [taken] = await this.dataSource.query(`SELECT 1 FROM ca_settings WHERE slug = $1 AND company_id <> $2`, [slug, companyId]);
+      if (taken) throw new BadRequestException('Another business already uses this address – try another one.');
+      set('slug', slug);
+    }
+    if (sets.length) await this.dataSource.query(`UPDATE ca_settings SET ${sets.join(', ')}, updated_at = NOW() WHERE company_id = $1`, params);
+    return this.settings(companyId);
+  }
+
+  /** The home-screen icon (a square PNG the browser made from the logo). */
+  async setIcon(companyId: number, file: { buffer: Buffer; mimetype: string } | null) {
+    let key: string | null = null;
+    if (file?.buffer?.length) {
+      if (!/^image\/png$/i.test(String(file.mimetype))) throw new BadRequestException('The icon must be a PNG.');
+      if (file.buffer.length > 2 * 1024 * 1024) throw new BadRequestException('The icon must be smaller than 2 MB.');
+      key = saveChatMedia(companyId, file.buffer, 'image/png', 'app-icon.png');
+    }
+    await this.ensureSlug(companyId);
+    await this.dataSource.query(`UPDATE ca_settings SET icon_key = $2, updated_at = NOW() WHERE company_id = $1`, [companyId, key]);
     return this.settings(companyId);
   }
 }

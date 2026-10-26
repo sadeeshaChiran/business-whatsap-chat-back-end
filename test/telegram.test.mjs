@@ -116,7 +116,7 @@ test('connect: a wrong token is refused; the real one is saved and the webhook i
   assert.ok(!JSON.stringify(r.data).includes(TOKEN), 'the token never goes back to the browser');
   assert.match(webhook.url, /\/integrations\/telegram\/webhook\/\d+$/);
   assert.ok(webhook.secret_token?.length >= 32);
-  assert.deepEqual(webhook.allowed_updates, ['message', 'edited_message', 'my_chat_member']);
+  assert.deepEqual(webhook.allowed_updates, ['message', 'edited_message', 'my_chat_member', 'chat_join_request', 'chat_member']);
 
   const other = await createWorkspace('telegram-other');
   await sql(`UPDATE companies SET plan = 'growth' WHERE id = $1`, [other.companyId]);
