@@ -1,4 +1,4 @@
-# Connect WhatsApp, Messenger and Instagram
+# Connect WhatsApp, Messenger, Instagram and Telegram
 
 Open **Channels** in the menu. Each channel shows its status: **Connected**, **Needs attention** or **Not connected**.
 
@@ -58,6 +58,49 @@ Then: **Channels → Instagram → Connect Instagram**, log in with the Facebook
 
 > **Tip:** On Messenger and Instagram the bot always asks for a phone number before it confirms an order, so your delivery team can call the customer.
 
+## Customer app (free chat app for your customers)
+
+**{{brand}} Chat** is a free chat app for your customers. They log in with their **phone number** (a 6-digit SMS code), and the app works on any phone or computer. On the phone they can add it to the home screen like an app. Messages cost nothing, and there are no limits or approvals.
+
+**Switch it on:** **Channels → Customer app** → turn the switch on. Optionally write a **welcome message** – the first message a customer sees.
+
+**How customers find you:**
+
+- Everyone who has **messaged you on WhatsApp** (or is in your CRM with their phone) sees your business in the app as soon as they log in.
+- New customers open your **chat link** or scan the **QR code** shown on the page. Put it on WhatsApp, Facebook, posters or the class board.
+
+**In the Inbox:** app chats show the **App** mark, and an App filter appears once you have one. Reply like any other chat: text, photos, files, voice messages, locations and contacts. The **AI bot** can answer too. Order messages, invoices (as PDF) and notes you send reach the app chat. Customers see **✓✓** when your team has read their message, and you see when they read yours.
+
+**Privacy:** customers never see each other's numbers or chats. The app has its own login – it can never open your business account.
+
+> **Coming next:** groups and announcements for your customers (for example one group per class), and phone notifications.
+
+## Telegram
+
+Connect your **own Telegram bot**. It is **free** and needs no approval or business documents:
+
+- Customers who press **Start** on your bot reach the Inbox. You, your team and the AI bot reply. There is **no 24-hour window**.
+- **Announcements** go to your Telegram **channel** and / or to every follower's chat, **free**, with no daily limit.
+
+**Connect (2 minutes)**
+
+1. In Telegram, open **@BotFather** (the official one with the blue tick) and send **/newbot**.
+2. Give it a name (for example *VORA Kids*) and a username that ends in **bot** (for example *vorakids_bot*).
+3. Copy the **token** BotFather sends (it looks like `123456789:AAH…`).
+4. **Channels → Telegram**: paste the token → **Connect**.
+
+The page then shows your bot, the number of followers, a **start link** and a **QR code**. Put the link or QR on WhatsApp, Facebook, posters or the class board. Customers press **Start** once and they are in.
+
+> **Good to know:** Telegram does not let a bot message a phone number first. A customer must press **Start** on your bot once. After that you can message them any time, for free.
+
+**Welcome message:** sent automatically when someone presses Start. Use `{name}` and `{business}`.
+
+**Telegram channel (notice board):** create a channel in Telegram, make your bot an **admin** with *Post messages*, then type the channel's @username on the page and press **Link channel**. It often links by itself once the bot is admin.
+
+**Announcements:** write the message (optionally with a photo) and choose **Channel**, **Followers' chats** or both. To reach only some customers, add **tags** (for example *grade10*): tag customers in CRM first. `{name}` puts each follower's first name in their own chat. The page shows how many received it and how many failed (for example people who blocked the bot). You can **Stop** an announcement while it is sending.
+
+You can send text, photos (up to 10 MB), files, videos and audio (up to 50 MB), locations and contacts. Voice notes recorded in the app can't be sent to Telegram – send an audio file instead.
+
 ## TikTok
 
 > **Hidden for now.** This section is for when TikTok approves the app. Until then the TikTok menu, page and package switch are hidden (web app `VITE_TIKTOK_ENABLED=false`, API without `TIKTOK_APP_ID` / `TIKTOK_APP_SECRET`). The in-app guide does not show this section yet.
@@ -96,7 +139,7 @@ When something is red, press **Fix it** if the button is shown (for example *reg
 
 ## Package and channels
 
-Messenger, Instagram, TikTok and Social (comments and posts) depend on your package. On some packages, **buying AI credits switches them on** while your bought credits last. See [Billing and credits](#billing).
+Messenger, Instagram, Telegram, TikTok and Social (comments and posts) depend on your package. On some packages, **buying AI credits switches them on** while your bought credits last. See [Billing and credits](#billing).
 
 ## Meta's 24-hour rule
 

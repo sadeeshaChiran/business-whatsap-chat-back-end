@@ -77,7 +77,7 @@ describe('1. Authentication', () => {
   test('only the expected routes are public', () => {
     const allowed = [
       /^\/v1\/api$/, /^\/v1\/api\/auth\/(login|google|register|register\/start|register\/resend|register\/verify|password\/forgot|password\/reset)$/,
-      /^\/v1\/api\/integrations\/meta\/callback$/, /^\/v1\/api\/integrations\/meta\/messages\/webhook$/, /^\/v1\/api\/integrations\/tiktok\/(callback|webhook)$/,
+      /^\/v1\/api\/integrations\/meta\/callback$/, /^\/v1\/api\/integrations\/meta\/messages\/webhook$/, /^\/v1\/api\/integrations\/tiktok\/(callback|webhook)$/, /^\/v1\/api\/integrations\/telegram\/webhook\/:id$/, /^\/v1\/api\/ca\//,
       /^\/v1\/api\/integrations\/whatsapp\/(n8n\/send|webhook|webhook\/evolution|webhook\/meta)$/, /^\/v1\/api\/public\//,
       // short links (/l/:slug – served outside the /v1/api prefix; the route lister adds the prefix)
       /^\/v1\/api\/l\/:slug$/,
