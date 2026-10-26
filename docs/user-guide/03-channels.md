@@ -58,22 +58,51 @@ Then: **Channels → Instagram → Connect Instagram**, log in with the Facebook
 
 > **Tip:** On Messenger and Instagram the bot always asks for a phone number before it confirms an order, so your delivery team can call the customer.
 
-## Customer app (free chat app for your customers)
+## Customer app (your own free chat app)
 
-**{{brand}} Chat** is a free chat app for your customers. They log in with their **phone number** (a 6-digit SMS code), and the app works on any phone or computer. On the phone they can add it to the home screen like an app. Messages cost nothing, and there are no limits or approvals.
+Every business gets **its own app** – with **your name, your logo and your colour** – at its own address, for example `…/app/vora-kids`. Customers log in with their **phone number** (a 6-digit SMS code) and add it to their **home screen**: it shows **your logo** like a real app. Messages cost nothing, and there are no limits or approvals.
 
-**Switch it on:** **Channels → Customer app** → turn the switch on. Optionally write a **welcome message** – the first message a customer sees.
+**Switch it on:** **Channels → Customer app** → turn the switch on.
 
-**How customers find you:**
+**Your app** tab:
 
-- Everyone who has **messaged you on WhatsApp** (or is in your CRM with their phone) sees your business in the app as soon as they log in.
-- New customers open your **chat link** or scan the **QR code** shown on the page. Put it on WhatsApp, Facebook, posters or the class board.
+- **App name, address and colour** – the phone preview shows how the icon looks on a home screen.
+- **Icon:** made from the logo you upload in **Profile** (or pick another picture with *Change icon*).
+- **App link and QR code** – send them to your customers.
+- **Who can log in:** **Only people I add** (default) or **Anyone with the link** (new people who open your link join your list).
+- **Members can message each other:** off by default. When on, members of groups that show the member list can send each other private messages.
+- **Welcome message:** the first message a customer sees in your chat.
 
-**In the Inbox:** app chats show the **App** mark, and an App filter appears once you have one. Reply like any other chat: text, photos, files, voice messages, locations and contacts. The **AI bot** can answer too. Order messages, invoices (as PDF) and notes you send reach the app chat. Customers see **✓✓** when your team has read their message, and you see when they read yours.
+**Customers** tab – who may use your app:
 
-**Privacy:** customers never see each other's numbers or chats. The app has its own login – it can never open your business account.
+- **Add people** from your contacts: **by tag** (for example *grade10*), **choose contacts**, **type numbers**, or **all my contacts**. Only numbers on this list can log in – everyone else is told they are not on your list, and no SMS is sent to them.
+- See **who has the app** and **who doesn't yet**, and who turned notifications on. **Invite on WhatsApp** opens a normal WhatsApp chat from your phone with the app link (free). **Copy invite** gives you a text for WhatsApp, SMS or Facebook.
+- Remove someone: they can no longer open your app and they leave your groups.
 
-> **Coming next:** groups and announcements for your customers (for example one group per class), and phone notifications.
+**Broadcast** tab – offers, notices and reminders, **free and without limits**: write the message (with an optional photo) and send it to **everyone on the app**, to **customers with tags**, or to **members of groups**. It arrives in their app chat with a phone notification. The page shows how many have the app, how many on your list don't have it yet, and how many **read** each broadcast. Customers who reply simply continue the chat in your Inbox.
+
+**In the Inbox:** app chats show the **App** mark. Reply like any other chat: text, photos, files, voice messages, locations and contacts. The **AI bot** can answer too. Order messages, invoices and notes reach the app chat. Customers see **✓✓** when your team has read their message.
+
+**Profile, News, Groups** tabs:
+
+- **Profile:** logo, about, address, phone, open hours and website.
+- **News:** post notices and offers (with a photo) and **pin** the important ones. You see how many people saw each post.
+- **Groups:** communities of your customers, for example one per class. **📣 Announcements** or **💬 Everyone can chat**, **🔒 Private** or **🌐 Public**, and whether members can see the member list. Add members **by tag** or by hand (only people on your app list), make **admins**, remove people, delete any message.
+
+**Reports** tab: when a customer reports a member or a message, it appears here with a copy of the message, who reported it and who it is about. **Mark handled** or **Remove from app**.
+
+**What customers see** – a bottom menu like a real app:
+
+- **Chat** – the private chat with you (and your broadcasts).
+- **News** and **Groups**.
+- **Messages** – private chats with other members (only when you turned it on).
+- **Me** – photo, name, their **member ID** (for example *#K7Q2M*), *show my name in groups*, *members can message me*, **notifications**, *Add to Home Screen*, light / dark, log out, delete account.
+
+**Privacy:** customers never see each other's phone numbers. Other members see a name (if the customer allows it) or the **member ID**. Anyone can **block** or **report** another member. The app has its own login – it can never open your business account.
+
+**Phone notifications:** customers tap **Turn on** in the app. New replies, broadcasts, news, group and member messages then show on the phone, even when the app is closed. Muted groups and businesses send nothing. On iPhone this works after *Share → Add to Home Screen* (iOS 16.4 or newer).
+
+> The older shared app at `/chat` (all businesses in one list) still works for the same customers.
 
 ## Telegram
 
@@ -98,6 +127,15 @@ The page then shows your bot, the number of followers, a **start link** and a **
 **Telegram channel (notice board):** create a channel in Telegram, make your bot an **admin** with *Post messages*, then type the channel's @username on the page and press **Link channel**. It often links by itself once the bot is admin.
 
 **Announcements:** write the message (optionally with a photo) and choose **Channel**, **Followers' chats** or both. To reach only some customers, add **tags** (for example *grade10*): tag customers in CRM first. `{name}` puts each follower's first name in their own chat. The page shows how many received it and how many failed (for example people who blocked the bot). You can **Stop** an announcement while it is sending.
+
+**Groups & channels only for your customers:** make a private Telegram **group** or **channel** (for example *Grade 10 – 2026*), add your bot as an **admin** with *Invite users via link* and *Ban users* (channels: also *Post messages*). It appears under **Groups & channels for your customers** by itself.
+
+- **Invite** followers by **tag**, by hand or all of them: each gets a private message from your bot with a **Join** button.
+- The join link only sends a **join request**: the bot lets in the people you invited and **declines everyone else**, so a forwarded link is useless.
+- *Also let in followers with these tags* – people you tag later get in without a new invite.
+- **People:** who joined, who is invited, who left, who asked without an invite. **Remove** someone and they are taken out (and can't come back with the link).
+- **Post** into the group or channel from here.
+- Telegram does not let bots create groups – you make it in Telegram, and the bot manages who gets in.
 
 You can send text, photos (up to 10 MB), files, videos and audio (up to 50 MB), locations and contacts. Voice notes recorded in the app can't be sent to Telegram – send an audio file instead.
 

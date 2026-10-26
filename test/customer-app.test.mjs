@@ -47,7 +47,13 @@ test('business: the app is off until the owner switches it on', async () => {
   assert.equal(s.data.enabled, false);
   const on = await api('PUT', '/customer-app/settings', { token: shop.token, body: { enabled: true, welcome_text: 'Welcome to our shop! Ask us anything.' } });
   assert.equal(on.data.enabled, true);
-  await api('PUT', '/customer-app/settings', { token: other.token, body: { enabled: true } });
+  // part 3: only numbers on the app list may log in – the shop adds its contacts, "other" lets anyone with its link in
+  const added = await api('POST', '/customer-app/members', { token: shop.token, body: { all_contacts: true } });
+  assert.equal(added.status, 201, JSON.stringify(added.json));
+  assert.equal(added.data.added_now, 1);
+  await api('PUT', '/customer-app/settings', { token: other.token, body: { enabled: true, access: 'link' } });
+  await api('PUT', '/customer-app/settings', { token: off.token, body: { enabled: false } });
+  await api('POST', '/customer-app/members', { token: off.token, body: { all_contacts: true } });
 });
 
 test('login: SMS code, wrong codes are counted, a code works once', async () => {
@@ -74,6 +80,7 @@ test('login: SMS code, wrong codes are counted, a code works once', async () => 
 
 test('a code allows only 5 tries, even when guessed in parallel', async () => {
   const number = `07${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
+  await api('POST', '/customer-app/members', { token: shop.token, body: { phones: [number] } });
   const start = await api('POST', '/ca/auth/start', { body: { phone: number } });
   const wrong = start.data.dev_code === '000000' ? '000001' : '000000';
   const results = await Promise.all(Array.from({ length: 12 }, () => api('POST', '/ca/auth/verify', { body: { phone: number, code: wrong } })));
@@ -210,11 +217,11 @@ test('order messages from the team reach the app chat (saved as a message)', asy
 
 test('privacy: one customer never sees another customer\'s chat', async () => {
   const second = `07${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
+  const refused = await api('POST', '/ca/auth/start', { body: { phone: second } });
+  assert.equal(refused.status, 403, 'a number on no business\'s list gets no SMS');
+  assert.match(refused.json.message, /not on any business/);
+  await api('POST', '/customer-app/members', { token: shop.token, body: { phones: [second] } });
   const two = await login(second, 'Other person');
-  const places = await api('GET', '/ca/places', as(two.token));
-  assert.ok(!places.data.some((p) => p.id === shop.companyId), 'the shop does not know this number');
-  const shopLink = (await api('GET', '/customer-app/settings', as(shop.token))).data.link_code;
-  await api('POST', '/ca/open', { token: two.token, body: { link: shopLink } });
   const list = await api('GET', `/ca/places/${shop.companyId}/messages`, as(two.token));
   assert.ok(!JSON.stringify(list.data).includes('Kandy'), 'only their own chat');
 });
