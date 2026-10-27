@@ -6,8 +6,9 @@ import type { CustomerAccount } from './customer-auth';
 
 type Row = Record<string, any>;
 /** Where a tap on the notification opens: the chat, the news, a group or a member chat. */
-export type CaPushTarget = { kind: 'chat' } | { kind: 'news' } | { kind: 'group'; id: number } | { kind: 'dm'; id: number };
-export type CaPushMessage = { title: string; body: string; target: CaPushTarget; tag?: string; groupId?: number };
+export type CaPushTarget = { kind: 'chat' } | { kind: 'news' } | { kind: 'group'; id: number } | { kind: 'dm'; id: number } | { kind: 'team' };
+/** call: an incoming call – the phone shows it like a call (stays on screen, Answer / Decline). */
+export type CaPushMessage = { title: string; body: string; target: CaPushTarget; tag?: string; groupId?: number; call?: { id: number; video: boolean } };
 
 const CONCURRENCY = 8;
 
@@ -95,11 +96,11 @@ export class CustomerPushService {
   }
 
   private path(target: CaPushTarget) {
-    return target.kind === 'chat' ? 'chat' : target.kind === 'news' ? 'news' : target.kind === 'group' ? `g/${target.id}` : `dm/${target.id}`;
+    return target.kind === 'chat' ? 'chat' : target.kind === 'news' ? 'news' : target.kind === 'team' ? '' : target.kind === 'group' ? `g/${target.id}` : `dm/${target.id}`;
   }
 
   private hubPath(companyId: number, target: CaPushTarget) {
-    return target.kind === 'chat' ? `/chat/b/${companyId}` : target.kind === 'news' ? `/chat/b/${companyId}?tab=news`
+    return target.kind === 'chat' || target.kind === 'team' ? `/chat/b/${companyId}` : target.kind === 'news' ? `/chat/b/${companyId}?tab=news`
       : target.kind === 'group' ? `/chat/g/${target.id}` : `/chat/d/${target.id}`;
   }
 
@@ -122,7 +123,8 @@ export class CustomerPushService {
       try {
         await webpush.sendNotification({ endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } }, JSON.stringify({
           title: message.title.slice(0, 80), body: message.body.slice(0, 180), url, icon, tag: message.tag ?? `${companyId}:${this.path(message.target)}`,
-        }), { TTL: 24 * 3600, urgency: 'high', vapidDetails: keys, timeout: 15_000 });
+          ...(message.call ? { call: message.call } : {}),
+        }), { TTL: message.call ? 60 : 24 * 3600, urgency: 'high', vapidDetails: keys, timeout: 15_000 });
         sent += 1;
         await this.dataSource.query(`UPDATE ca_push_sub SET last_sent_at = NOW(), last_error = NULL WHERE id = $1`, [sub.id]);
       } catch (error) {

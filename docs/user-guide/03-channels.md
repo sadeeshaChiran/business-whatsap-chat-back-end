@@ -66,11 +66,11 @@ Every business gets **its own app** – with **your name, your logo and your col
 
 **Your app** tab:
 
-- **App name, address and colour** – the phone preview shows how the icon looks on a home screen.
+- **App name, address and colour** – the phone preview shows how the icon looks on a home screen. *Add to Home Screen* (iPhone and Android) installs **your app with your name and icon**, opening straight into it.
 - **Icon:** made from the logo you upload in **Profile** (or pick another picture with *Change icon*).
 - **App link and QR code** – send them to your customers.
 - **Who can log in:** **Only people I add** (default) or **Anyone with the link** (new people who open your link join your list).
-- **Member messages** (private chats between your customers): **Off** (default), **Same group** (members of a group that shows the member list), or **By roles** – you choose exactly which roles may message which (for example *parent ↔ teacher*, *teacher ↔ teacher*; `*` = anyone).
+- **Member messages** (private chats between your customers): **Off** (default), **Same group** (people in the same group – even when the group hides its member list, each member sees the people they may message), or **By roles** – you choose exactly which roles may message which (for example *parent ↔ teacher*, *teacher ↔ teacher*; `*` = anyone).
 - **Welcome message:** the first message a customer sees in your chat.
 
 **Customers** tab – who may use your app:
@@ -91,7 +91,9 @@ Every business gets **its own app** – with **your name, your logo and your col
 - **News:** post notices and offers (with a photo) and **pin** the important ones. You see how many people saw each post.
 - **Groups:** communities of your customers, for example one per class. **📣 Announcements** or **💬 Everyone can chat**, **🔒 Private** or **🌐 Public**, and whether members can see the member list. Add members **by tag** or by hand (only people on your app list), make **admins**, remove people, delete any message.
 
-**Calls** (voice and video, like WhatsApp): customers tap 📞 or 📹 in your chat – it rings on the dashboard of **everyone in your team** (*Answer* / *Ignore*). Your team can also call a customer from an app chat in the Inbox (📞 / 📹 at the top). Each call is noted in the chat (*📹 Video call · 4:12* or *missed*).
+**Calls** (voice and video, like WhatsApp): customers tap 📞 or 📹 in your chat – it rings on the dashboard of **everyone in your team** (*Answer* / *Ignore*), in the Agent Metra phone app and in your own app on your team's phones (as a notification with *Answer* / *Decline*, even when the app is closed – after notifications are turned on). Customers get calls the same way; a call nobody answers becomes a *Missed call* notification. Your team can also call a customer from an app chat in the Inbox (📞 / 📹 at the top). Each call is noted in the chat (*📹 Video call · 4:12* or *missed*).
+
+**Team** tab – **you and your agents use the app as the business**: you (the owner) log into your app with the **mobile number of your Agent Metra account**; for each agent type their mobile number here. They open your app link, log in with that number (SMS code – this also confirms the number) and get the **business side** of the app: an **Inbox** of app chats and group chats (answer as the business – customers never see their number), **incoming customer calls ring their phone**, and **Meetings**. Agents see only the chats assigned to them; the owner and supervisors see everything and can plan meetings. Remove someone's access in Team → Agents and they are out of the app too.
 
 **Meetings** tab (like Google Meet – camera, screen sharing, chat): **New meeting** → name, time, length and **who can join** (everyone, groups and/or roles). Invited people get a notification and see it on their Chats page; the meeting opens 15 minutes before the start. **Copy link** or **Share to groups** posts a Join link in group chats – **only invited people can join**, even if the link is passed on. **Who else can make meetings:** pick roles (for example *teacher*) – those customers can make meetings for their own groups and the people they may message.
 

@@ -4,6 +4,9 @@ import { randomBytes } from 'crypto';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { DataSource } from 'typeorm';
 import { PusherService } from '../common/pusher.service';
+import { PushService } from '../mobile/mobile';
+import { WebPushService } from '../mobile/web-push';
+import { normalizeWhatsapp } from '../verification/verification';
 import { CustomerAppService } from './customer-app.service';
 import type { CustomerAccount } from './customer-auth';
 import { CustomerDmService } from './customer-dm.service';
@@ -32,7 +35,48 @@ export class CustomerCallsService {
     private readonly app: CustomerAppService,
     private readonly dms: CustomerDmService,
     private readonly push: CustomerPushService,
+    private readonly phonePush: PushService,
+    private readonly webPush: WebPushService,
   ) {}
+
+  /**
+   * A customer is calling: ring the whole team – dashboard browsers, the Agent Metra phone app and the team's own
+   * business app (owner / agents logged in with their mobile number) – like an incoming WhatsApp call.
+   */
+  private async ringTeam(companyId: number, callId: number, name: string, video: boolean, missed = false) {
+    // who may answer: the owner and supervisors always; agents only when the chat is theirs (or nobody's yet)
+    const [call] = await this.dataSource.query(`SELECT account_id FROM ca_call WHERE id = $1`, [callId]);
+    const assigned = call?.account_id ? await this.assignedAgent(companyId, Number(call.account_id)) : null;
+    const team: Row[] = (await this.dataSource.query(`
+      SELECT u.id, u.whatsapp_number, u.team_role, (u.id = c.admin_user_id) AS owner
+        FROM app_user u JOIN companies c ON c.id = u.company_id
+       WHERE u.company_id = $1 AND u.is_active AND NOT u.access_disabled AND NOT u.is_super_admin`, [companyId]) as Row[])
+      .filter((u) => u.owner || u.team_role === 'supervisor' || !assigned || Number(u.id) === assigned);
+    if (!team.length) return;
+    const title = missed ? `Missed ${video ? 'video' : 'voice'} call` : `${video ? '📹' : '📞'} ${name} is calling`;
+    const body = missed ? `${name} · Customer app` : `Customer app · ${video ? 'video call' : 'voice call'} – tap to answer`;
+    const ids = team.map((u) => Number(u.id));
+    // the team's own business app first (it rings like a call), then the dashboard and the Agent Metra phone app – in parallel
+    const phones = [...new Set(team.map((u) => u.whatsapp_number).filter(Boolean).map((p) => normalizeWhatsapp(String(p))))];
+    if (phones.length) {
+      const accounts: Row[] = await this.dataSource.query(`SELECT id FROM ca_account WHERE phone = ANY($1::text[])`, [phones]);
+      this.push.notify(accounts.map((a) => Number(a.id)), companyId, {
+        title, body, target: { kind: 'team' }, tag: `call-${callId}`, ...(missed ? {} : { call: { id: callId, video } }),
+      });
+    }
+    await Promise.all([
+      this.webPush.sendToUsers(ids, { title, body, url: '/inbox', tag: `app-call-${callId}`, kind: 'alert' }).catch(() => 0),
+      this.phonePush.sendToUsers(ids, title, body, { kind: 'app_call', call_id: String(callId) }).catch(() => undefined),
+    ]);
+  }
+
+  /** The agent a customer's app chat is assigned to (null = nobody yet). */
+  async assignedAgent(companyId: number, accountId: number): Promise<number | null> {
+    const [row] = await this.dataSource.query(`
+      SELECT bc.assigned_agent_id FROM bot_channel_user cu JOIN bot_conversation bc ON bc.bot_channel_user_id = cu.id
+       WHERE cu.company_id = $1 AND cu.platform = 'app' AND cu.external_user_id = $2 ORDER BY bc.id DESC LIMIT 1`, [companyId, `ca:${accountId}`]);
+    return row?.assigned_agent_id ? Number(row.assigned_agent_id) : null;
+  }
 
   /* ───────────────────────── LiveKit ───────────────────────── */
 
@@ -95,6 +139,7 @@ export class CustomerCallsService {
     [companyId, customer.id, video, room]);
     const name = await this.customerName(companyId, customer.id);
     this.pusher.trigger(`company-${companyId}`, 'app_call', { call_id: Number(c.id), name, video });
+    void this.ringTeam(companyId, Number(c.id), name, video).catch(() => undefined);
     return { call: this.view(c, { accountId: customer.id }), ...(await this.token(room, `ca-${customer.id}`, name)) };
   }
 
@@ -115,7 +160,7 @@ export class CustomerCallsService {
     await this.dataSource.query(`UPDATE ca_call SET e2ee = $2::jsonb WHERE id = $1`, [c.id, JSON.stringify(sealed)]);
     const name = await this.customerName(companyId, customer.id);
     this.app.pingCustomer(other, companyId);
-    this.push.notify([other], companyId, { title: name, body: video ? '📹 Incoming video call' : '📞 Incoming call', target: { kind: 'dm', id: dmId }, tag: `call-${c.id}` });
+    this.push.notify([other], companyId, { title: name, body: video ? '📹 Incoming video call · end-to-end encrypted' : '📞 Incoming voice call · end-to-end encrypted', target: { kind: 'dm', id: dmId }, tag: `call-${c.id}`, call: { id: Number(c.id), video } });
     return { call: { ...this.view(c, { accountId: customer.id }), e2ee: sealed }, ...(await this.token(room, `ca-${customer.id}`, name)) };
   }
 
@@ -159,11 +204,11 @@ export class CustomerCallsService {
 
   async end(customer: CustomerAccount, callId: number) {
     const c = await this.ownCall(customer, callId);
-    return this.finish(c);
+    return this.finish(c, { accountId: customer.id });
   }
 
   /** Hang up / decline / cancel: ringing → missed (or declined), active → ended. A line goes into the business chat. */
-  private async finish(c: Row) {
+  private async finish(c: Row, by: { accountId?: number; staff?: boolean } = {}) {
     // decided in the UPDATE itself: if the other side answered a moment ago, this is "ended", not "missed"
     const result = await this.dataSource.query(`
       UPDATE ca_call SET status = CASE WHEN status = 'active' THEN 'ended' ELSE 'missed' END, ended_at = NOW()
@@ -177,9 +222,32 @@ export class CustomerCallsService {
       const text = `${done.video ? '📹 Video call' : '📞 Voice call'}${done.answered_at ? ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : ' · missed'}`;
       await this.logInChat(Number(c.company_id), Number(c.account_id), done.caller_user_id ? 'outbound' : 'inbound', text).catch(() => undefined);
     }
+    if (status === 'missed') void this.missedNotice(done, by).catch(() => undefined);
     this.pusher.trigger(`company-${c.company_id}`, 'app_call', { call_id: Number(c.id), status });
     for (const id of [c.caller_account_id, c.callee_account_id, c.account_id]) if (id) this.app.pingCustomer(Number(id), Number(c.company_id));
     return { status };
+  }
+
+  /** "Missed call" on the phone of whoever did not answer (replaces the ringing notification: same tag). */
+  private async missedNotice(c: Row, by: { accountId?: number; staff?: boolean }) {
+    const companyId = Number(c.company_id);
+    const video = Boolean(c.video);
+    if (c.scope === 'business' && c.caller_account_id) {
+      if (by.staff) return; // the team declined it themselves
+      return this.ringTeam(companyId, Number(c.id), await this.customerName(companyId, Number(c.caller_account_id)), video, true);
+    }
+    const callee = Number(c.callee_account_id ?? 0);
+    if (!callee || by.accountId === callee) return; // they pressed Decline – not a missed call for them
+    let from = 'Business';
+    if (c.scope === 'dm' && c.caller_account_id) from = await this.customerName(companyId, Number(c.caller_account_id));
+    else {
+      const [co] = await this.dataSource.query(`SELECT COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name FROM companies c LEFT JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId]);
+      from = String(co?.name ?? from);
+    }
+    this.push.notify([callee], companyId, {
+      title: `Missed ${video ? 'video' : 'voice'} call`, body: from,
+      target: c.scope === 'dm' && c.dm_id ? { kind: 'dm', id: Number(c.dm_id) } : { kind: 'chat' }, tag: `call-${c.id}`,
+    });
   }
 
   private async logInChat(companyId: number, accountId: number, direction: 'inbound' | 'outbound', text: string) {
@@ -241,7 +309,7 @@ export class CustomerCallsService {
     [companyId, accountId, userId, Boolean(input.video), room]);
     const [co] = await this.dataSource.query(`SELECT COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name FROM companies c LEFT JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId]);
     this.app.pingCustomer(accountId, companyId);
-    this.push.notify([accountId], companyId, { title: String(co?.name ?? 'Business'), body: input.video ? '📹 Incoming video call' : '📞 Incoming call', target: { kind: 'chat' }, tag: `call-${c.id}` });
+    this.push.notify([accountId], companyId, { title: String(co?.name ?? 'Business'), body: input.video ? '📹 Incoming video call' : '📞 Incoming voice call', target: { kind: 'chat' }, tag: `call-${c.id}`, call: { id: Number(c.id), video: Boolean(input.video) } });
     return { call: this.view(c, {}), ...(await this.token(room, `staff-${userId}`, `${await this.staffName(userId)} · ${co?.name ?? ''}`)) };
   }
 
@@ -265,7 +333,7 @@ export class CustomerCallsService {
   async staffEnd(companyId: number, callId: number) {
     const [c] = await this.dataSource.query(`SELECT * FROM ca_call WHERE id = $1 AND company_id = $2 AND scope = 'business'`, [callId, companyId]);
     if (!c) throw new NotFoundException('Call not found.');
-    return this.finish(c);
+    return this.finish(c, { staff: true });
   }
 
   async callStatus(companyId: number, callId: number) {
@@ -379,11 +447,12 @@ export class CustomerCallsService {
     return { host_roles: clean };
   }
 
-  async staffJoin(companyId: number, userId: number, meetingId: number) {
+  /** host = may mute / remove people (owner and supervisors); agents join as normal participants. */
+  async staffJoin(companyId: number, userId: number, meetingId: number, host = true) {
     const [m] = await this.dataSource.query(`SELECT * FROM ca_meeting WHERE id = $1 AND company_id = $2`, [meetingId, companyId]);
     if (!m || m.cancelled_at) throw new NotFoundException('Meeting not found.');
     if (this.meetingView(m).state === 'over') throw new BadRequestException('This meeting is over.');
-    return { meeting: this.meetingView(m), ...(await this.token(String(m.room), `staff-${userId}`, await this.staffName(userId), { admin: true, minutes: this.minutesLeft(m) })) };
+    return { meeting: this.meetingView(m), ...(await this.token(String(m.room), `staff-${userId}`, await this.staffName(userId), { admin: host, minutes: this.minutesLeft(m) })) };
   }
 
   /** Share the meeting link into groups (posted as the business). */

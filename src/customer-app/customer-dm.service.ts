@@ -65,7 +65,7 @@ export class CustomerDmService {
              (SELECT COALESCE(mm.roles, '{}') FROM ca_account ma JOIN ca_app_member mm ON mm.company_id = $1 AND mm.phone = ma.phone WHERE ma.id = $2) AS my_roles,
              EXISTS (SELECT 1 FROM ca_block b WHERE b.account_id = $2 AND b.blocked_account_id = a.id) AS i_blocked,
              EXISTS (SELECT 1 FROM ca_block b WHERE b.account_id = a.id AND b.blocked_account_id = $2) AS they_blocked,
-             EXISTS (SELECT 1 FROM ca_group_member x JOIN ca_group g ON g.id = x.group_id AND g.archived_at IS NULL AND g.show_members AND g.company_id = $1
+             EXISTS (SELECT 1 FROM ca_group_member x JOIN ca_group g ON g.id = x.group_id AND g.archived_at IS NULL AND g.company_id = $1
                        JOIN ca_group_member y ON y.group_id = x.group_id AND y.account_id = a.id WHERE x.account_id = $2) AS shared
         FROM ca_account a LEFT JOIN ca_app_member am ON am.company_id = $1 AND am.phone = a.phone WHERE a.id = $3`, [companyId, me, other]);
     if (!row || !row.member) return 'This member is no longer here.';
@@ -119,7 +119,7 @@ export class CustomerDmService {
     const q = `%${search.trim().toLowerCase()}%`;
     const rows: Row[] = await this.dataSource.query(`
       SELECT a.id, a.name, a.show_name, a.avatar_key, a.last_active_at, a.show_last_seen, COALESCE(am.roles, '{}') AS roles,
-             EXISTS (SELECT 1 FROM ca_group_member x JOIN ca_group g ON g.id = x.group_id AND g.archived_at IS NULL AND g.show_members AND g.company_id = $1
+             EXISTS (SELECT 1 FROM ca_group_member x JOIN ca_group g ON g.id = x.group_id AND g.archived_at IS NULL AND g.company_id = $1
                        JOIN ca_group_member y ON y.group_id = x.group_id AND y.account_id = a.id WHERE x.account_id = $2) AS shared
         FROM ca_app_member am JOIN ca_account a ON a.phone = am.phone
        WHERE am.company_id = $1 AND am.joined_at IS NOT NULL AND a.id <> $2 AND a.allow_dm
