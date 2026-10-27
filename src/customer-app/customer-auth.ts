@@ -56,7 +56,10 @@ export class CustomerAuthGuard implements CanActivate {
     const [account] = await this.dataSource.query(`SELECT id, phone, name, token_version FROM ca_account WHERE id = $1`, [claims.aid]);
     if (!account || Number(account.token_version) !== claims.v) throw new UnauthorizedException('Please log in again.');
     request.customer = { ...account, id: Number(account.id), token_version: Number(account.token_version) };
-    void this.dataSource.query(`UPDATE ca_account SET last_seen_at = NOW() WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '5 minutes')`, [account.id]).catch(() => undefined);
+    // "online" / "last seen" (every request of the open app counts; written at most every 20 seconds)
+    void this.dataSource.query(`
+      UPDATE ca_account SET last_active_at = NOW(), last_seen_at = NOW()
+       WHERE id = $1 AND (last_active_at IS NULL OR last_active_at < NOW() - INTERVAL '20 seconds')`, [account.id]).catch(() => undefined);
     return true;
   }
 }

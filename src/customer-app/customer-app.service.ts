@@ -46,10 +46,22 @@ export class CustomerAppService implements OnModuleInit {
   onModuleInit() {
     AppChatHook.register({
       delivered: (companyId, external) => {
+        const group = /^cag:(\d+)$/.exec(external)?.[1];
+        if (group) { void this.groupDelivered?.(companyId, Number(group)).catch((error: unknown) => this.logger.warn(`inbox → group failed: ${String(error)}`)); return; }
         const accountId = accountOf(external);
         this.pingCustomer(accountId, companyId);
         void this.pushReply(accountId, companyId).catch(() => undefined);
       },
+    });
+  }
+
+  /** Set by the community service: a reply in a group's Inbox chat is posted in the group. */
+  groupDelivered?: (companyId: number, groupId: number) => Promise<void>;
+
+  /** Inbox lists update (new group message etc.). */
+  notifyInbox(companyId: number, conversationId: number, direction: 'inbound' | 'outbound', preview: string) {
+    this.pusher.trigger(`company-${companyId}`, 'conversation_updated', {
+      conversation_id: conversationId, platform: 'app', direction, ...(direction === 'inbound' ? { client_message: true, inbound: true } : {}), preview: preview.slice(0, 120),
     });
   }
 
@@ -210,6 +222,8 @@ export class CustomerAppService implements OnModuleInit {
   async logoutEverywhere(customer: CustomerAccount) {
     await this.dataSource.query(`UPDATE ca_account SET token_version = token_version + 1 WHERE id = $1`, [customer.id]);
     await this.push.forget(customer.id);
+    // encrypted member chats: those devices can't read new messages any more
+    await this.dataSource.query(`UPDATE ca_device_key SET revoked_at = NOW() WHERE account_id = $1 AND revoked_at IS NULL`, [customer.id]);
     return { logged_out: true };
   }
 
@@ -290,11 +304,12 @@ export class CustomerAppService implements OnModuleInit {
   async place(customer: CustomerAccount, companyId: number) {
     const [row] = await this.dataSource.query(`
       SELECT c.id, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name, s.enabled, s.welcome_text, s.member_dm,
+             EXISTS (SELECT 1 FROM app_user u WHERE u.company_id = c.id AND COALESCE(u.is_active, TRUE) AND COALESCE(u.is_agent_active, FALSE)) AS team_online,
              EXISTS (SELECT 1 FROM ca_app_member am WHERE am.company_id = c.id AND am.phone = $2) AS member
         FROM companies c JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId, customer.phone]);
     if (!row?.enabled) throw new NotFoundException('This business does not use the app (yet).');
     if (!row.member) throw this.notOnList(String(row.name));
-    return { id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null, member_dm: Boolean(row.member_dm) };
+    return { id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null, member_dm: Boolean(row.member_dm), team_online: Boolean(row.team_online) };
   }
 
   /** The customer's inbox chat with a business (created the first time, with the business's welcome message). */
@@ -499,7 +514,7 @@ export class CustomerAppService implements OnModuleInit {
   async settings(companyId: number) {
     const slug = await this.ensureSlug(companyId);
     const [row] = await this.dataSource.query(`
-      SELECT s.enabled, s.welcome_text, s.app_name, s.theme_color, s.access, s.member_dm, s.icon_key, c.company_name
+      SELECT s.enabled, s.welcome_text, s.app_name, s.theme_color, s.access, s.member_dm, s.icon_key, s.dm_mode, s.dm_rules, c.company_name
         FROM ca_settings s JOIN companies c ON c.id = s.company_id WHERE s.company_id = $1`, [companyId]);
     const [stats] = await this.dataSource.query(`
       SELECT (SELECT COUNT(*)::int FROM ca_app_member WHERE company_id = $1) AS members,
@@ -509,6 +524,7 @@ export class CustomerAppService implements OnModuleInit {
       enabled: Boolean(row?.enabled), welcome_text: row?.welcome_text ?? null, slug,
       app_name: row?.app_name ?? null, default_name: String(row?.company_name ?? ''), theme_color: row?.theme_color ?? null,
       access: row?.access === 'link' ? 'link' : 'invited', member_dm: Boolean(row?.member_dm),
+      dm_mode: row?.dm_mode === 'roles' ? 'roles' : 'groups', dm_rules: Array.isArray(row?.dm_rules) ? row.dm_rules : [],
       icon_url: row?.icon_key ? publicChatMediaUrl(row.icon_key, 24 * 3600) : null,
       members: Number(stats?.members ?? 0), customers: Number(stats?.customers ?? 0), active_week: Number(stats?.active_week ?? 0),
     };
@@ -516,6 +532,7 @@ export class CustomerAppService implements OnModuleInit {
 
   async saveSettings(companyId: number, input: {
     enabled?: boolean; welcome_text?: string | null; slug?: string; app_name?: string | null; theme_color?: string | null; access?: string; member_dm?: boolean;
+    dm_mode?: string; dm_rules?: unknown;
   }) {
     await this.ensureSlug(companyId);
     const sets: string[] = [];
@@ -531,6 +548,13 @@ export class CustomerAppService implements OnModuleInit {
     }
     if (input.access !== undefined) set('access', input.access === 'link' ? 'link' : 'invited');
     if (input.member_dm !== undefined) set('member_dm', Boolean(input.member_dm));
+    if (input.dm_mode !== undefined) set('dm_mode', input.dm_mode === 'roles' ? 'roles' : 'groups');
+    if (input.dm_rules !== undefined) {
+      const role = (v: unknown) => String(v ?? '').trim().toLowerCase().replace(/[^a-z0-9 _*-]/g, '').slice(0, 30);
+      const rules = (Array.isArray(input.dm_rules) ? input.dm_rules : []).filter((p): p is unknown[] => Array.isArray(p) && p.length === 2)
+        .map((p) => [role(p[0]), role(p[1])]).filter(([a, b]) => a && b).slice(0, 50);
+      params.push(JSON.stringify(rules)); sets.push(`dm_rules = $${params.length}::jsonb`);
+    }
     if (input.slug !== undefined) {
       const slug = String(input.slug ?? '').trim().toLowerCase();
       if (!/^[a-z0-9](?:[a-z0-9-]{1,38}[a-z0-9])$/.test(slug)) throw new BadRequestException('The app address can have 3–40 small letters, numbers and dashes, e.g. vora-kids.');

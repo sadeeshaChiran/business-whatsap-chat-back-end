@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createECDH, randomBytes } from 'node:crypto';
 import { api, closeDb, createWorkspace, sql } from './helpers.mjs';
+import { phone, readDm, sendDm } from './e2ee.mjs';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const rnd = () => `07${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
@@ -197,7 +198,11 @@ test('member messages: off by default; on → only with group members; block; "d
   dmId = start.data.id;
   const again = await api('POST', `/ca/places/${shop.companyId}/dms`, { token: people.b.token, body: { member: `m${people.a.id}` } });
   assert.equal(again.data.id, dmId, 'one chat per pair');
-  const sent = await api('POST', `/ca/dms/${dmId}/messages`, { token: people.a.token, body: { text: 'Hi! Do you have the maths paper?' } });
+  // member chats are end-to-end encrypted: each phone has its own key
+  const phoneA = await phone(api, people.a.token);
+  const phoneB = await phone(api, people.b.token);
+  assert.equal((await api('POST', `/ca/dms/${dmId}/messages`, { token: people.a.token, body: { text: 'plain text' } })).status, 400, 'plain text is refused');
+  const sent = await sendDm(api, phoneA, dmId, 'Hi! Do you have the maths paper?');
   assert.equal(sent.status, 201, JSON.stringify(sent.json));
   dmMessage = sent.data.id;
 
@@ -207,8 +212,9 @@ test('member messages: off by default; on → only with group members; block; "d
   assert.equal((await api('GET', '/ca/places', as(people.b.token))).data.find((p) => p.id === shop.companyId).dms_unread, 1);
   const aList = await api('GET', `/ca/places/${shop.companyId}/dms`, as(people.a.token));
   assert.match(aList.data.items[0].name, /^Member #/, 'Binura hides her name');
-  const read = await api('GET', `/ca/dms/${dmId}/messages`, as(people.b.token));
-  assert.equal(read.data.messages[0].text, 'Hi! Do you have the maths paper?');
+  const read = await readDm(api, phoneB, dmId);
+  assert.equal(read.data.messages[0].plain, 'Hi! Do you have the maths paper?');
+  assert.equal(read.data.messages[0].text, '', 'the server only has the encrypted message');
   assert.equal(read.data.can_send, true);
   assert.ok(!JSON.stringify(read.json).includes(intl(people.a.local)), 'no numbers');
   assert.equal((await api('GET', `/ca/dms/${dmId}/messages`, as(people.c.token))).status, 404, 'others can not read it');
@@ -216,14 +222,14 @@ test('member messages: off by default; on → only with group members; block; "d
 
   // block
   assert.equal((await api('PUT', `/ca/blocks/m${people.a.id}`, { token: people.b.token, body: { blocked: true } })).status, 200);
-  const blocked = await api('POST', `/ca/dms/${dmId}/messages`, { token: people.a.token, body: { text: 'hello?' } });
+  const blocked = await sendDm(api, phoneA, dmId, 'hello?');
   assert.equal(blocked.status, 403);
   assert.match(blocked.json.message, /does not take messages/);
   assert.equal((await api('GET', `/ca/groups/${group}/members`, as(people.a.token))).data.find((m) => m.id === `m${people.b.id}`).can_message, false);
   await api('PUT', `/ca/blocks/m${people.a.id}`, { token: people.b.token, body: { blocked: false } });
   // "don't message me"
   await api('PATCH', '/ca/profile', { token: people.b.token, body: { allow_dm: false } });
-  assert.equal((await api('POST', `/ca/dms/${dmId}/messages`, { token: people.a.token, body: { text: 'hello?' } })).status, 403);
+  assert.equal((await sendDm(api, phoneA, dmId, 'hello?')).status, 403);
   await api('PATCH', '/ca/profile', { token: people.b.token, body: { allow_dm: true } });
 
   // reports can't be used to look up other businesses' customers or groups
@@ -232,11 +238,11 @@ test('member messages: off by default; on → only with group members; block; "d
   assert.equal((await api('POST', `/ca/places/${shop.companyId}/report`, { token: people.b.token, body: { group_id: clubGroup, reason: 'x' } })).status, 404);
   // report → the business sees it with a copy of the message
   assert.equal((await api('POST', `/ca/places/${shop.companyId}/report`, { token: people.b.token, body: { dm_message_id: dmMessage } })).status, 400, 'a reason is needed');
-  const rep = await api('POST', `/ca/places/${shop.companyId}/report`, { token: people.b.token, body: { dm_message_id: dmMessage, reason: 'Spam' } });
+  const rep = await api('POST', `/ca/places/${shop.companyId}/report`, { token: people.b.token, body: { dm_message_id: dmMessage, reason: 'Spam', excerpt: 'Hi! Do you have the maths paper?' } });
   assert.equal(rep.status, 201, JSON.stringify(rep.json));
   assert.equal((await api('POST', `/ca/places/${shop.companyId}/report`, { token: people.c.token, body: { dm_message_id: dmMessage, reason: 'x' } })).status, 404, 'only people in that chat');
   const reports = await api('GET', '/customer-app/reports', as(shop.token));
-  assert.equal(reports.data[0].excerpt, 'Hi! Do you have the maths paper?');
+  assert.equal(reports.data[0].excerpt, '(as reported) Hi! Do you have the maths paper?', "encrypted: the reporter's phone shares the text");
   assert.equal(reports.data[0].target.phone, `+${intl(people.a.local)}`, 'the business sees who it was');
   assert.equal((await api('PATCH', `/customer-app/reports/${reports.data[0].id}`, as(shop.token))).status, 200);
   assert.equal((await api('GET', '/customer-app/reports', as(shop.token))).data.length, 0);
@@ -246,7 +252,7 @@ test('member messages: off by default; on → only with group members; block; "d
   await api('PUT', '/customer-app/settings', { token: shop.token, body: { member_dm: false } });
   const off = await api('GET', `/ca/dms/${dmId}/messages`, as(people.a.token));
   assert.equal(off.data.can_send, false);
-  assert.equal((await api('POST', `/ca/dms/${dmId}/messages`, { token: people.a.token, body: { text: 'x' } })).status, 403);
+  assert.equal((await sendDm(api, phoneA, dmId, 'x')).status, 403);
 });
 
 test('broadcast: only to people on the list who have the app; counts who does not; lands in their chat; read count', async () => {

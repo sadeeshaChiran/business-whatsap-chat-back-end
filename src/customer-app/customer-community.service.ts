@@ -1,10 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
 import { PusherService } from '../common/pusher.service';
 import { CustomerAppService } from './customer-app.service';
 import { CONTACT_PHONES_SQL } from './customer-members.service';
+import { CustomerDmService } from './customer-dm.service';
 import { CustomerPushService } from './customer-push.service';
 import type { CustomerAccount } from './customer-auth';
 
@@ -35,10 +36,17 @@ function imageOnly(file: Upload | null | undefined, maxMb = 10) {
  * other customers. Nothing here touches WhatsApp, Messenger, Instagram, TikTok or Telegram.
  */
 @Injectable()
-export class CustomerCommunityService {
+export class CustomerCommunityService implements OnModuleInit {
   private readonly pusher = new PusherService();
 
+  private readonly logger = new Logger(CustomerCommunityService.name);
+
   constructor(@InjectDataSource() private readonly dataSource: DataSource, private readonly app: CustomerAppService, private readonly push: CustomerPushService) {}
+
+  onModuleInit() {
+    // a reply typed in the Inbox chat of a group → posted in the group
+    this.app.groupDelivered = (companyId, groupId) => this.fromInbox(companyId, groupId);
+  }
 
   /* ═════════════════════════ customer side ═════════════════════════ */
 
@@ -59,12 +67,13 @@ export class CustomerCommunityService {
                 JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
                 LEFT JOIN ca_chat_state st ON st.channel_user_id = cu.id
                WHERE cu.company_id = $1 AND cu.platform = 'app' AND cu.external_user_id = 'ca:' || $2 AND m.created_at > COALESCE(st.last_read_at, 'epoch'::timestamptz)) AS chat_unread,
-             EXISTS (SELECT 1 FROM ca_business_mute WHERE account_id = $2 AND company_id = $1) AS muted`, [companyId, customer.id]);
+             EXISTS (SELECT 1 FROM ca_business_mute WHERE account_id = $2 AND company_id = $1) AS muted,
+             (SELECT COALESCE(roles, '{}') FROM ca_app_member WHERE company_id = $1 AND phone = $3) AS roles`, [companyId, customer.id, customer.phone]);
     return {
       id: place.id, name: place.name, logo_url: link(p?.logo_key, 24), member_code: this.app.memberCode(companyId, customer.id), member_dm: place.member_dm,
       about: p?.about ?? null, address: p?.address ?? null, phone: p?.phone ?? null, hours: p?.hours ?? null, website: p?.website ?? null,
       news_unread: Number(counts?.news_unread ?? 0), groups_unread: Number(counts?.groups_unread ?? 0), muted: Boolean(counts?.muted),
-      dms_unread: Number(counts?.dms_unread ?? 0), chat_unread: Number(counts?.chat_unread ?? 0),
+      dms_unread: Number(counts?.dms_unread ?? 0), chat_unread: Number(counts?.chat_unread ?? 0), my_roles: counts?.roles ?? [], team_online: place.team_online,
     };
   }
 
@@ -183,16 +192,34 @@ export class CustomerCommunityService {
     if (!beforeId && newest > Number(g.last_read_id)) {
       await this.dataSource.query(`UPDATE ca_group_member SET last_read_id = GREATEST(last_read_id, $3) WHERE group_id = $1 AND account_id = $2`, [groupId, customer.id, newest]);
     }
+    const seen = await this.readState(groupId);
     return {
       group: this.groupInfo(g, String(company?.company_name ?? '')),
       can_post: g.mode === 'chat' || g.role === 'admin',
-      can_message_members: Boolean(company?.member_dm) && Boolean(g.show_members),
+      can_message_members: Boolean(company?.member_dm),
       has_more: rows.length === 40,
       messages: rows.reverse().map((m) => ({
         id: Number(m.id), type: m.type, deleted: Boolean(m.deleted_at),
         text: m.deleted_at ? '' : m.text, media_url: m.deleted_at ? null : link(m.media_key), created_at: m.created_at,
         sender: this.senderLabel(m, String(company?.company_name ?? 'Business'), customer.id, Number(g.company_id)),
+        // my own messages: how many of the other members got / read it
+        ...(Number(m.sender_account_id) === customer.id && !m.deleted_at ? { seen: seen(m) } : {}),
       })),
+    };
+  }
+
+  /** For a message: members it went to (everyone but the sender), how many opened the app since, how many read it. */
+  private async readState(groupId: number) {
+    const members: Row[] = await this.dataSource.query(`
+      SELECT gm.account_id, gm.last_read_id, a.last_active_at FROM ca_group_member gm JOIN ca_account a ON a.id = gm.account_id WHERE gm.group_id = $1`, [groupId]);
+    return (m: Row) => {
+      const others = members.filter((x) => Number(x.account_id) !== Number(m.sender_account_id ?? 0));
+      const at = new Date(m.created_at).getTime();
+      return {
+        total: others.length,
+        read: others.filter((x) => Number(x.last_read_id) >= Number(m.id)).length,
+        delivered: others.filter((x) => Number(x.last_read_id) >= Number(m.id) || (x.last_active_at && new Date(x.last_active_at).getTime() >= at)).length,
+      };
     };
   }
 
@@ -224,13 +251,17 @@ export class CustomerCommunityService {
     const g = await this.group(customer, groupId);
     if (!g.show_members && g.role !== 'admin') throw new ForbiddenException('The business keeps the member list private.');
     const companyId = Number(g.company_id);
-    const [settings] = await this.dataSource.query(`SELECT member_dm FROM ca_settings WHERE company_id = $1`, [companyId]);
-    const dm = Boolean(settings?.member_dm) && Boolean(g.show_members);
+    const [settings] = await this.dataSource.query(`SELECT member_dm, dm_mode, dm_rules FROM ca_settings WHERE company_id = $1`, [companyId]);
+    const byRoles = settings?.dm_mode === 'roles';
+    const rules = (Array.isArray(settings?.dm_rules) ? settings.dm_rules : []) as Array<[string, string]>;
+    const dm = Boolean(settings?.member_dm) && (byRoles || Boolean(g.show_members));
+    const [mine] = await this.dataSource.query(`SELECT COALESCE(roles, '{}') AS roles FROM ca_app_member WHERE company_id = $1 AND phone = $2`, [companyId, customer.phone]);
     const rows: Row[] = await this.dataSource.query(`
-      SELECT a.id, a.name, a.show_name, a.avatar_key, a.allow_dm, gm.role,
+      SELECT a.id, a.name, a.show_name, a.avatar_key, a.allow_dm, gm.role, COALESCE(am.roles, '{}') AS roles,
              EXISTS (SELECT 1 FROM ca_block b WHERE (b.account_id = $2 AND b.blocked_account_id = a.id) OR (b.account_id = a.id AND b.blocked_account_id = $2)) AS blocked
         FROM ca_group_member gm JOIN ca_account a ON a.id = gm.account_id
-       WHERE gm.group_id = $1 ORDER BY (gm.role = 'admin') DESC, a.name NULLS LAST LIMIT 500`, [groupId, customer.id]);
+        LEFT JOIN ca_app_member am ON am.company_id = $3 AND am.phone = a.phone
+       WHERE gm.group_id = $1 ORDER BY (gm.role = 'admin') DESC, a.name NULLS LAST LIMIT 500`, [groupId, customer.id, Number(g.company_id)]);
     return rows.map((r) => {
       const me = Number(r.id) === customer.id;
       const code = this.app.memberCode(companyId, Number(r.id));
@@ -238,7 +269,8 @@ export class CustomerCommunityService {
         id: me ? 'me' : `m${r.id}`, me, role: r.role, code,
         name: me ? 'You' : r.show_name && r.name ? r.name : `Member #${code}`,
         avatar_url: r.show_name || me ? link(r.avatar_key, 24) : null,
-        can_message: !me && dm && Boolean(r.allow_dm) && !r.blocked,
+        can_message: !me && dm && Boolean(r.allow_dm) && !r.blocked && (!byRoles || CustomerDmService.rolesAllowed(rules, mine?.roles ?? [], r.roles ?? [])),
+        roles: r.roles ?? [],
       };
     });
   }
@@ -246,11 +278,12 @@ export class CustomerCommunityService {
   /* ───────── customer's own profile ───────── */
 
   async me(customer: CustomerAccount) {
-    const [a] = await this.dataSource.query(`SELECT id, phone, name, avatar_key, show_name, allow_dm FROM ca_account WHERE id = $1`, [customer.id]);
-    return { id: Number(a.id), phone: a.phone, name: a.name, avatar_url: link(a.avatar_key, 24), show_name: Boolean(a.show_name), allow_dm: Boolean(a.allow_dm) };
+    const [a] = await this.dataSource.query(`SELECT id, phone, name, avatar_key, show_name, allow_dm, show_last_seen FROM ca_account WHERE id = $1`, [customer.id]);
+    return { id: Number(a.id), phone: a.phone, name: a.name, avatar_url: link(a.avatar_key, 24), show_name: Boolean(a.show_name), allow_dm: Boolean(a.allow_dm), show_last_seen: a.show_last_seen !== false };
   }
 
-  async updateSettings(customer: CustomerAccount, input: { show_name?: boolean; allow_dm?: boolean }) {
+  async updateSettings(customer: CustomerAccount, input: { show_name?: boolean; allow_dm?: boolean; show_last_seen?: boolean }) {
+    if (typeof input.show_last_seen === 'boolean') await this.dataSource.query(`UPDATE ca_account SET show_last_seen = $2 WHERE id = $1`, [customer.id, input.show_last_seen]);
     if (typeof input.show_name === 'boolean') await this.dataSource.query(`UPDATE ca_account SET show_name = $2 WHERE id = $1`, [customer.id, input.show_name]);
     if (typeof input.allow_dm === 'boolean') await this.dataSource.query(`UPDATE ca_account SET allow_dm = $2 WHERE id = $1`, [customer.id, input.allow_dm]);
     return this.me(customer);
@@ -271,6 +304,7 @@ export class CustomerCommunityService {
       await db.query(`DELETE FROM ca_business_mute WHERE account_id = $1`, [customer.id]);
       await db.query(`DELETE FROM ca_chat_state WHERE account_id = $1`, [customer.id]);
       await db.query(`DELETE FROM ca_push_sub WHERE account_id = $1`, [customer.id]);
+      await db.query(`DELETE FROM ca_device_key WHERE account_id = $1`, [customer.id]);
       await db.query(`DELETE FROM ca_block WHERE account_id = $1 OR blocked_account_id = $1`, [customer.id]);
       await db.query(`UPDATE bot_channel_user SET display_name = 'Deleted customer', updated_at = NOW() WHERE platform = 'app' AND external_user_id = $1`, [`ca:${customer.id}`]);
       await db.query(`DELETE FROM ca_account WHERE id = $1`, [customer.id]);
@@ -473,10 +507,12 @@ export class CustomerCommunityService {
       SELECT m.*, a.name AS sender_name, u.name AS staff_name FROM ca_group_message m
         LEFT JOIN ca_account a ON a.id = m.sender_account_id LEFT JOIN app_user u ON u.id = m.sender_user_id
        WHERE m.group_id = $1 AND ($2::bigint IS NULL OR m.id < $2) ORDER BY m.id DESC LIMIT 50`, [groupId, beforeId ?? null]);
+    const seen = await this.readState(groupId);
     return {
       group: { id: Number(g.id), name: g.name, mode: g.mode },
       has_more: rows.length === 50,
       messages: rows.reverse().map((m) => ({
+        ...(m.sender_user_id && !m.deleted_at ? { seen: seen(m) } : {}),
         id: Number(m.id), type: m.type, text: m.deleted_at ? '' : m.text, media_url: m.deleted_at ? null : link(m.media_key), deleted: Boolean(m.deleted_at),
         created_at: m.created_at, from_business: Boolean(m.sender_user_id), sender: m.sender_user_id ? String(m.staff_name ?? 'Team') : String(m.sender_name ?? 'Customer'),
       })),
@@ -520,7 +556,73 @@ export class CustomerCommunityService {
     if (from.accountId) await this.dataSource.query(`UPDATE ca_group_member SET last_read_id = $3 WHERE group_id = $1 AND account_id = $2`, [g.id, from.accountId, row.id]);
     this.pingGroup(Number(g.id), Number(g.company_id));
     void this.pushGroup(g, from, type === 'image' ? '📷 Photo' : type === 'file' ? '📎 File' : body).catch(() => undefined);
+    void this.toInbox(g, Number(row.id), from, type, body, key).catch((error) => this.logger.warn(`group → inbox failed: ${error instanceof Error ? error.message : String(error)}`));
     return { id: Number(row.id), created_at: row.created_at };
+  }
+
+  /* ───────── groups in the business Inbox ───────── */
+
+  /** The group's chat in the Inbox (one per group, the AI bot never answers it). */
+  private async groupInboxUser(g: Row): Promise<Row> {
+    const external = `cag:${g.id}`;
+    const [existing] = await this.dataSource.query(`SELECT * FROM bot_channel_user WHERE company_id = $1 AND platform = 'app' AND external_user_id = $2`, [g.company_id, external]);
+    if (existing) {
+      if (existing.display_name !== `${g.name} · group`) await this.dataSource.query(`UPDATE bot_channel_user SET display_name = $2 WHERE id = $1`, [existing.id, `${g.name} · group`]);
+      return existing;
+    }
+    const [created] = await this.dataSource.query(`
+      INSERT INTO bot_channel_user (company_id, app_user_id, platform, external_user_id, source_account_id, display_name, language, language_locked, session_state, bot_enabled, manual_mode, last_seen_at, created_at, updated_at)
+      VALUES ($1, NULL, 'app', $2, NULL, $3, 'English', false, NULL, false, true, NOW(), NOW(), NOW())
+      ON CONFLICT DO NOTHING RETURNING *`, [g.company_id, external, `${g.name} · group`]);
+    return created ?? (await this.dataSource.query(`SELECT * FROM bot_channel_user WHERE company_id = $1 AND platform = 'app' AND external_user_id = $2`, [g.company_id, external]))[0];
+  }
+
+  /** Every group message also shows in the group's Inbox chat: "Name: message" (the team sees real names). */
+  private async toInbox(g: Row, groupMessageId: number, from: { accountId?: number; userId?: number; fromInbox?: boolean }, type: string, body: string, key: string | null) {
+    if (from.fromInbox) return;
+    const user = await this.groupInboxUser(g);
+    const conversation = await this.app.conversation(Number(user.id));
+    const companyId = Number(g.company_id);
+    let content = body;
+    let direction: 'inbound' | 'outbound' = 'outbound';
+    if (from.accountId) {
+      direction = 'inbound';
+      const [a] = await this.dataSource.query(`
+        SELECT COALESCE(am.name, a.name, 'Member') AS name FROM ca_account a LEFT JOIN ca_app_member am ON am.company_id = $2 AND am.phone = a.phone WHERE a.id = $1`, [from.accountId, companyId]);
+      const who = `${a?.name ?? 'Member'} (#${this.app.memberCode(companyId, from.accountId)})`;
+      content = type === 'image' ? `${who}${body ? `: ${body}` : ''}` : `${who}: ${body}`;
+    }
+    const [m] = await this.dataSource.query(`
+      INSERT INTO bot_message (conversation_id, direction, message_type, platform, provider_message_id, delivery_status, content, media_url, source, sender_user_id, created_at, updated_at)
+      VALUES ($1, $2, $3, 'app', $4, $5, $6, $7, $8, $9, NOW(), NOW()) RETURNING id`,
+    [conversation.id, direction, type === 'image' ? 'image' : 'text', `app:grp${groupMessageId}`, direction === 'outbound' ? 'sent' : null,
+      content || (type === 'image' ? '[image]' : ''), key, direction === 'inbound' ? 'app-group' : 'app-group-staff', from.userId ?? null]);
+    await this.dataSource.query(`UPDATE ca_group_message SET bot_message_id = $2 WHERE id = $1`, [groupMessageId, m.id]);
+    await this.dataSource.query(`UPDATE bot_conversation SET last_message_at = NOW(), updated_at = NOW() WHERE id = $1`, [conversation.id]);
+    this.app.notifyInbox(companyId, Number(conversation.id), direction, content);
+  }
+
+  /** Replies typed in the group's Inbox chat → posted in the group as the business. */
+  async fromInbox(companyId: number, groupId: number) {
+    const [g] = await this.dataSource.query(`SELECT * FROM ca_group WHERE id = $1 AND company_id = $2 AND archived_at IS NULL`, [groupId, companyId]);
+    if (!g) return;
+    const user = await this.groupInboxUser(g);
+    const rows: Row[] = await this.dataSource.query(`
+      SELECT m.* FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
+       WHERE bc.bot_channel_user_id = $1 AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
+         AND COALESCE(m.source, '') <> 'app-group-staff' AND m.created_at > NOW() - INTERVAL '1 hour'
+         AND NOT EXISTS (SELECT 1 FROM ca_group_message x WHERE x.bot_message_id = m.id)
+       ORDER BY m.id`, [user.id]);
+    for (const m of rows) {
+      const type = m.message_type === 'image' ? 'image' : m.media_url ? 'file' : 'text';
+      const [row] = await this.dataSource.query(`
+        INSERT INTO ca_group_message (group_id, sender_account_id, sender_user_id, type, text, media_key, bot_message_id)
+        SELECT $1, NULL, $2, $3, $4, $5, $6 WHERE NOT EXISTS (SELECT 1 FROM ca_group_message WHERE bot_message_id = $6) RETURNING id`,
+      [groupId, m.sender_user_id ?? null, type, type === 'image' && m.content === '[image]' ? '' : String(m.content ?? ''), m.media_url ?? null, m.id]);
+      if (!row) continue;
+      this.pingGroup(groupId, companyId);
+      void this.pushGroup(g, { userId: Number(m.sender_user_id ?? 0) || -1 }, type === 'image' ? '📷 Photo' : type === 'file' ? '📎 File' : String(m.content ?? '')).catch(() => undefined);
+    }
   }
 
   private async appName(companyId: number) {

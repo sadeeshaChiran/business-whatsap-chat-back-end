@@ -62,7 +62,7 @@ Then: **Channels → Instagram → Connect Instagram**, log in with the Facebook
 
 Every business gets **its own app** – with **your name, your logo and your colour** – at its own address, for example `…/app/vora-kids`. Customers log in with their **phone number** (a 6-digit SMS code) and add it to their **home screen**: it shows **your logo** like a real app. Messages cost nothing, and there are no limits or approvals.
 
-**Switch it on:** **Channels → Customer app** → turn the switch on.
+**Switch it on:** **Customer app** (its own section in the menu) → turn the switch on.
 
 **Your app** tab:
 
@@ -70,18 +70,20 @@ Every business gets **its own app** – with **your name, your logo and your col
 - **Icon:** made from the logo you upload in **Profile** (or pick another picture with *Change icon*).
 - **App link and QR code** – send them to your customers.
 - **Who can log in:** **Only people I add** (default) or **Anyone with the link** (new people who open your link join your list).
-- **Members can message each other:** off by default. When on, members of groups that show the member list can send each other private messages.
+- **Member messages** (private chats between your customers): **Off** (default), **Same group** (members of a group that shows the member list), or **By roles** – you choose exactly which roles may message which (for example *parent ↔ teacher*, *teacher ↔ teacher*; `*` = anyone).
 - **Welcome message:** the first message a customer sees in your chat.
 
 **Customers** tab – who may use your app:
 
 - **Add people** from your contacts: **by tag** (for example *grade10*), **choose contacts**, **type numbers**, or **all my contacts**. Only numbers on this list can log in – everyone else is told they are not on your list, and no SMS is sent to them.
 - See **who has the app** and **who doesn't yet**, and who turned notifications on. **Invite on WhatsApp** opens a normal WhatsApp chat from your phone with the app link (free). **Copy invite** gives you a text for WhatsApp, SMS or Facebook.
+- **Roles:** give customers role tags such as *parent*, *teacher* or *vip* (**Roles** on a customer, or pick several and set roles together). Roles decide who may message whom and who may make meetings, and you can filter the list by role.
+- **Online:** see who is online now or when they were last active.
 - Remove someone: they can no longer open your app and they leave your groups.
 
 **Broadcast** tab – offers, notices and reminders, **free and without limits**: write the message (with an optional photo) and send it to **everyone on the app**, to **customers with tags**, or to **members of groups**. It arrives in their app chat with a phone notification. The page shows how many have the app, how many on your list don't have it yet, and how many **read** each broadcast. Customers who reply simply continue the chat in your Inbox.
 
-**In the Inbox:** app chats show the **App** mark. Reply like any other chat: text, photos, files, voice messages, locations and contacts. The **AI bot** can answer too. Order messages, invoices and notes reach the app chat. Customers see **✓✓** when your team has read their message.
+**In the Inbox:** app chats show the **App** mark. **Group chats come into the Inbox too** (shown as *<group> · group*) – your team can read and answer them there. Reply like any other chat: text, photos, files, voice messages, locations and contacts. The **AI bot** can answer too. Order messages, invoices and notes reach the app chat. Customers see **✓✓** when your team has read their message.
 
 **Profile, News, Groups** tabs:
 
@@ -89,18 +91,25 @@ Every business gets **its own app** – with **your name, your logo and your col
 - **News:** post notices and offers (with a photo) and **pin** the important ones. You see how many people saw each post.
 - **Groups:** communities of your customers, for example one per class. **📣 Announcements** or **💬 Everyone can chat**, **🔒 Private** or **🌐 Public**, and whether members can see the member list. Add members **by tag** or by hand (only people on your app list), make **admins**, remove people, delete any message.
 
+**Calls** (voice and video, like WhatsApp): customers tap 📞 or 📹 in your chat – it rings on the dashboard of **everyone in your team** (*Answer* / *Ignore*). Your team can also call a customer from an app chat in the Inbox (📞 / 📹 at the top). Each call is noted in the chat (*📹 Video call · 4:12* or *missed*).
+
+**Meetings** tab (like Google Meet – camera, screen sharing, chat): **New meeting** → name, time, length and **who can join** (everyone, groups and/or roles). Invited people get a notification and see it on their Chats page; the meeting opens 15 minutes before the start. **Copy link** or **Share to groups** posts a Join link in group chats – **only invited people can join**, even if the link is passed on. **Who else can make meetings:** pick roles (for example *teacher*) – those customers can make meetings for their own groups and the people they may message.
+
 **Reports** tab: when a customer reports a member or a message, it appears here with a copy of the message, who reported it and who it is about. **Mark handled** or **Remove from app**.
 
 **What customers see** – a bottom menu like a real app:
 
-- **Chat** – the private chat with you (and your broadcasts).
+- **Chats** – your business chat **pinned at the top** (with your broadcasts), then their private chats with other members (when you allow it) and the meetings they are invited to. **New message** starts a chat with someone they may message.
 - **News** and **Groups**.
-- **Messages** – private chats with other members (only when you turned it on).
 - **Me** – photo, name, their **member ID** (for example *#K7Q2M*), *show my name in groups*, *members can message me*, **notifications**, *Add to Home Screen*, light / dark, log out, delete account.
+
+**Ticks and online:** ✓ sent, ✓✓ delivered, **blue ✓✓** read. In groups, your own messages show how many members **got** and **read** them. Chats show **online** / *last seen* – customers can hide it under **Me → Show when I'm online** (then they don't see others' either).
+
+**Security of member chats (end-to-end encrypted, like WhatsApp):** private messages, photos and files between members are locked on the phone and can be opened **only on the two people's phones** – not by your business and not by us. Calls between members are encrypted the same way. A **security code** in the chat lets two people check they are really talking to each other. If someone reports a message, the report carries the text **as the reporter shared it**. Logging out on a phone removes its key, so old member messages can't be read there any more. Your own chat with customers, group chats and meetings are protected in transit but your team can read them (so you can answer in the Inbox).
 
 **Privacy:** customers never see each other's phone numbers. Other members see a name (if the customer allows it) or the **member ID**. Anyone can **block** or **report** another member. The app has its own login – it can never open your business account.
 
-**Phone notifications:** customers tap **Turn on** in the app. New replies, broadcasts, news, group and member messages then show on the phone, even when the app is closed. Muted groups and businesses send nothing. On iPhone this works after *Share → Add to Home Screen* (iOS 16.4 or newer).
+**Phone notifications:** customers tap **Turn on** in the app. New replies, broadcasts, news, group messages, member messages (shown as *🔒 New message*), calls and meetings then show on the phone, even when the app is closed. Muted groups and businesses send nothing. On iPhone this works after *Share → Add to Home Screen* (iOS 16.4 or newer).
 
 > The older shared app at `/chat` (all businesses in one list) still works for the same customers.
 
