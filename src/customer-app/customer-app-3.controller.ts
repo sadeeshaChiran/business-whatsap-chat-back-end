@@ -40,6 +40,18 @@ export class CustomerAppPublicController {
   @Header('Cache-Control', 'public, max-age=300')
   manifest(@Param('slug') slug: string, @Query('o') origin?: string) { return this.members.manifest(slug, origin); }
 
+  /**
+   * Loaded by the web app's index.html (a blocking script) when the page is /app/<slug>: writes the business's own
+   * manifest, home-screen icon and name into <head> BEFORE the browser reads them – iPhone "Add to Home Screen" only
+   * looks at what the page had when it loaded, so changing them later from React is not enough.
+   */
+  @Get(':slug/head.js')
+  @RawResponse()
+  @Header('Content-Type', 'application/javascript; charset=utf-8')
+  @Header('Cache-Control', 'public, max-age=300')
+  @Header('Cross-Origin-Resource-Policy', 'cross-origin')
+  headScript(@Param('slug') slug: string, @Query('o') origin?: string, @Query('api') api?: string) { return this.members.headScript(slug, origin, api); }
+
   @Get(':slug/icon.png')
   async icon(@Param('slug') slug: string, @Res() res: Response) {
     const file = await this.members.icon(slug);

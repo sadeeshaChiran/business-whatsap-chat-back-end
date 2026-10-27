@@ -23,6 +23,10 @@ import { CustomerCallsService } from './customer-calls.service';
 import { CustomerDmService } from './customer-dm.service';
 import { CustomerMembersService } from './customer-members.service';
 import { CustomerPushService } from './customer-push.service';
+import { BotAdminModule } from '../bot-admin/bot-admin.module';
+import { MobileModule } from '../mobile/mobile';
+import { CustomerTeamBusinessController, CustomerTeamController } from './customer-team.controller';
+import { CustomerTeamService } from './customer-team.service';
 
 /** Customer app – login (public, rate limited). */
 @Controller('ca/auth')
@@ -116,12 +120,13 @@ export class CustomerAppBusinessController {
 }
 
 @Module({
-  imports: [AuthModule, SalesBotModule],
+  imports: [AuthModule, SalesBotModule, BotAdminModule, MobileModule],
   controllers: [
     CustomerAuthController, CustomerAppPublicController, CustomerAppController, CustomerAppBusinessController, CustomerCommunityController,
     CustomerCommunityBusinessController, CustomerAppPart3Controller, CustomerAppPart3BusinessController, CustomerCallsController, CustomerCallsBusinessController,
+    CustomerTeamController, CustomerTeamBusinessController,
   ],
-  providers: [CustomerAppService, CustomerCommunityService, CustomerMembersService, CustomerPushService, CustomerDmService, CustomerBroadcastService, CustomerCallsService, CustomerAuthGuard],
+  providers: [CustomerAppService, CustomerCommunityService, CustomerMembersService, CustomerPushService, CustomerDmService, CustomerBroadcastService, CustomerCallsService, CustomerTeamService, CustomerAuthGuard],
   exports: [CustomerAppService],
 })
 export class CustomerAppModule {}

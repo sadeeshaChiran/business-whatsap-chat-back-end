@@ -20,6 +20,7 @@ const MAX_TEXT = 4000;
 export const APP_MAX_FILE_MB = 25;
 
 const externalId = (accountId: number) => `ca:${accountId}`;
+export type TeamMember = { id: number; name: string; email: string; role: 'admin' | 'supervisor' | 'agent' };
 const accountOf = (externalUserId: string) => (/^ca:(\d+)$/.exec(externalUserId)?.[1] ? Number(/^ca:(\d+)$/.exec(externalUserId)![1]) : null);
 const hashCode = (phone: string, code: string) => createHash('sha256').update(`${phone}:${code}:${process.env.JWT_SECRET ?? ''}`).digest('hex');
 
@@ -137,6 +138,43 @@ export class CustomerAppService implements OnModuleInit {
     return rows.length > 0;
   }
 
+  /**
+   * The business's own team on its app: the owner (the mobile number of the Agent Metra account / company) and agents
+   * whose mobile number the owner saved (Customer app → Team). They log in with the same SMS code as customers and then
+   * work as the business (chats, groups, calls, meetings). Agents' numbers count as verified once the SMS login worked.
+   */
+  async teamMember(companyId: number, phone: string): Promise<TeamMember | null> {
+    if (!phone) return null;
+    const key = `${companyId}:${phone}`;
+    const cached = this.teamCache.get(key);
+    if (cached && cached.until > Date.now()) return cached.value;
+    const value = await this.findTeamMember(companyId, phone);
+    if (this.teamCache.size > 2000) this.teamCache.clear();
+    // short: access removed in the dashboard stops working within seconds
+    this.teamCache.set(key, { value, until: Date.now() + 5_000 });
+    return value;
+  }
+
+  /** After the owner changes a team member's mobile number. */
+  forgetTeam() { this.teamCache.clear(); }
+
+  private readonly teamCache = new Map<string, { value: TeamMember | null; until: number }>();
+
+  private async findTeamMember(companyId: number, phone: string): Promise<TeamMember | null> {
+    // owner and agents by their own mobile number (the owner's was checked with a code at sign-up / in Settings;
+    // the free-text business phone of the company is NOT used – nobody confirmed it)
+    const rows: Row[] = await this.dataSource.query(`
+      SELECT u.id, u.name, u.email, u.team_role, u.whatsapp_number, c.admin_user_id
+        FROM app_user u JOIN companies c ON c.id = u.company_id
+       WHERE u.company_id = $1 AND u.is_active AND NOT u.access_disabled AND NOT u.is_super_admin AND u.whatsapp_number IS NOT NULL
+         AND UPPER(COALESCE(c.status, '')) <> 'SUSPENDED'
+       ORDER BY (u.id = c.admin_user_id) DESC, u.id`, [companyId]);
+    const hit = rows.find((r) => normalizeWhatsapp(String(r.whatsapp_number)) === phone);
+    if (!hit) return null;
+    const owner = Number(hit.id) === Number(hit.admin_user_id);
+    return { id: Number(hit.id), name: String(hit.name), email: String(hit.email), role: owner ? 'admin' : hit.team_role === 'supervisor' ? 'supervisor' : 'agent' };
+  }
+
   private notOnList(name: string) {
     return new ForbiddenException(`This number is not on ${name}'s list yet. Ask ${name} to add your number, then try again.`);
   }
@@ -146,7 +184,8 @@ export class CustomerAppService implements OnModuleInit {
     // no SMS for numbers that could not use the app anyway
     const company = await this.appCompany(appInput);
     if (company) {
-      if (!(await this.isMember(company.id, phone)) && (company.access !== 'link' || (await this.wasRemoved(company.id, phone)))) throw this.notOnList(company.name);
+      if (!(await this.isMember(company.id, phone)) && !(await this.teamMember(company.id, phone))
+        && (company.access !== 'link' || (await this.wasRemoved(company.id, phone)))) throw this.notOnList(company.name);
     } else {
       const [any] = await this.dataSource.query(`
         SELECT 1 FROM ca_app_member m JOIN ca_settings s ON s.company_id = m.company_id AND s.enabled WHERE m.phone = $1 LIMIT 1`, [phone]);
@@ -234,10 +273,15 @@ export class CustomerAppService implements OnModuleInit {
    * added now. Otherwise the number is not on the list → no access.
    */
   async joinApp(company: { id: number; name: string; access: string }, customer: CustomerAccount) {
+    const team = await this.teamMember(company.id, customer.phone);
+    if (team) {
+      // the SMS code proved the number → the agent's mobile counts as verified
+      await this.dataSource.query(`UPDATE app_user SET whatsapp_verified_at = COALESCE(whatsapp_verified_at, NOW()) WHERE id = $1 AND whatsapp_number IS NOT NULL`, [team.id]);
+    }
     const updated = await this.dataSource.query(`
       UPDATE ca_app_member SET joined_at = COALESCE(joined_at, NOW()), last_open_at = NOW(), name = COALESCE(name, $3)
        WHERE company_id = $1 AND phone = $2 RETURNING phone`, [company.id, customer.phone, customer.name ?? null]);
-    if (firstRow(updated)) return true;
+    if (firstRow(updated) || team) return true;
     if (company.access !== 'link' || (await this.wasRemoved(company.id, customer.phone))) return false;
     await this.dataSource.query(`
       INSERT INTO ca_app_member (company_id, phone, name, source, joined_at, last_open_at) VALUES ($1, $2, $3, 'link', NOW(), NOW()) ON CONFLICT DO NOTHING`,
@@ -308,8 +352,12 @@ export class CustomerAppService implements OnModuleInit {
              EXISTS (SELECT 1 FROM ca_app_member am WHERE am.company_id = c.id AND am.phone = $2) AS member
         FROM companies c JOIN ca_settings s ON s.company_id = c.id WHERE c.id = $1`, [companyId, customer.phone]);
     if (!row?.enabled) throw new NotFoundException('This business does not use the app (yet).');
-    if (!row.member) throw this.notOnList(String(row.name));
-    return { id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null, member_dm: Boolean(row.member_dm), team_online: Boolean(row.team_online) };
+    const team = await this.teamMember(Number(row.id), customer.phone);
+    if (!row.member && !team) throw this.notOnList(String(row.name));
+    return {
+      id: Number(row.id), name: String(row.name), welcome_text: row.welcome_text as string | null, member_dm: Boolean(row.member_dm), team_online: Boolean(row.team_online),
+      team: team ? { role: team.role, name: team.name } : null, member: Boolean(row.member),
+    };
   }
 
   /** The customer's inbox chat with a business (created the first time, with the business's welcome message). */

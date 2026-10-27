@@ -300,5 +300,7 @@ export class MobileController {
   remove(@CurrentUser() user: AuthenticatedUser, @Param('token') token: string) { return this.mobile.removeDevice(user, token); }
 }
 
-@Module({ imports: [AuthModule], controllers: [MobileController, WebPushController, NotificationPreferencesController], providers: [MobileService, PushService, WebPushService, NotificationPreferencesService] })
+@Module({ imports: [AuthModule], controllers: [MobileController, WebPushController, NotificationPreferencesController], providers: [MobileService, PushService, WebPushService, NotificationPreferencesService],
+  // the customer app rings the team's phones / browsers for incoming app calls
+  exports: [PushService, WebPushService] })
 export class MobileModule {}

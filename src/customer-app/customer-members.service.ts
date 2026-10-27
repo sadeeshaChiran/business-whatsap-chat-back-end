@@ -67,6 +67,32 @@ export class CustomerMembersService {
     return (process.env.APP_PUBLIC_URL ?? list[0] ?? '').trim().replace(/\/+$/, '');
   }
 
+  /** See CustomerAppPublicController.headScript. Unknown address → nothing is written (the page shows its own error). */
+  async headScript(slug: string, origin?: string, api?: string) {
+    let row: Row;
+    try { row = await this.bySlug(slug); } catch { return '/* app not found */'; }
+    const front = this.appOrigin(origin);
+    const self = /^https?:\/\/[a-z0-9.-]+(:\d+)?(\/[a-z0-9/_-]*)?$/i.test(String(api ?? '')) ? String(api).replace(/\/+$/, '') : String(process.env.PUBLIC_API_BASE_URL ?? '').replace(/\/+$/, '');
+    const base = `${self}/ca/app/${row.slug}`;
+    const name = String(row.app_name || row.company_name);
+    const color = String(row.theme_color || '#6d4dff');
+    const own = Boolean(row.icon_key || row.logo_key);
+    const v = this.iconVersion(row);
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const icon = own ? `${base}/icon.png?v=${v}` : `${front}/icons/apple-touch-icon.png`;
+    const html = [
+      `<link rel="manifest" href="${esc(`${base}/manifest.webmanifest?o=${encodeURIComponent(front)}`)}" crossorigin="anonymous">`,
+      `<link rel="apple-touch-icon" href="${esc(icon)}">`,
+      `<link rel="icon" href="${esc(icon)}">`,
+      `<meta name="apple-mobile-web-app-title" content="${esc(name)}">`,
+      `<meta name="application-name" content="${esc(name)}">`,
+      `<meta name="theme-color" content="${esc(color)}">`,
+      `<title>${esc(name)}</title>`,
+    ].join('');
+    const app = { slug: String(row.slug), name, color, icon: own ? icon : null };
+    return `window.__caApp=${JSON.stringify(app).replace(/</g, '\\u003c')};document.write(${JSON.stringify(html).replace(/</g, '\\u003c')});`;
+  }
+
   /** "Add to Home Screen": the business's own name and icon, opening straight into its app. */
   async manifest(slug: string, origin?: string) {
     const row = await this.bySlug(slug);
@@ -87,7 +113,7 @@ export class CustomerMembersService {
         { src: `${base}/icons/icon-maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       ];
     return {
-      id: `/app/${row.slug}/`, name, short_name: Array.from(name).slice(0, 12).join(''),
+      id: `${base}/app/${row.slug}/`, name, short_name: Array.from(name).slice(0, 12).join(''),
       description: row.about ? String(row.about).slice(0, 200) : `Chat with ${name}`,
       start_url: `${base}/app/${row.slug}/`, scope: `${base}/app/${row.slug}/`,
       display: 'standalone', orientation: 'portrait', background_color: '#ffffff', theme_color: color, icons,

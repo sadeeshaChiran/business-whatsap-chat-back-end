@@ -249,20 +249,22 @@ export class CustomerCommunityService implements OnModuleInit {
   /** Members – only when the business allows it (or for group admins). Name (if they allow it) and member ID, never phone numbers. */
   async groupMembers(customer: CustomerAccount, groupId: number) {
     const g = await this.group(customer, groupId);
-    if (!g.show_members && g.role !== 'admin') throw new ForbiddenException('The business keeps the member list private.');
     const companyId = Number(g.company_id);
     const [settings] = await this.dataSource.query(`SELECT member_dm, dm_mode, dm_rules FROM ca_settings WHERE company_id = $1`, [companyId]);
     const byRoles = settings?.dm_mode === 'roles';
     const rules = (Array.isArray(settings?.dm_rules) ? settings.dm_rules : []) as Array<[string, string]>;
-    const dm = Boolean(settings?.member_dm) && (byRoles || Boolean(g.show_members));
+    // the business allowed member messages → people in the same group may message each other (the list is not needed for that)
+    const dm = Boolean(settings?.member_dm);
+    const fullList = Boolean(g.show_members) || g.role === 'admin';
+    if (!fullList && !dm) throw new ForbiddenException('The business keeps the member list private.');
     const [mine] = await this.dataSource.query(`SELECT COALESCE(roles, '{}') AS roles FROM ca_app_member WHERE company_id = $1 AND phone = $2`, [companyId, customer.phone]);
     const rows: Row[] = await this.dataSource.query(`
-      SELECT a.id, a.name, a.show_name, a.avatar_key, a.allow_dm, gm.role, COALESCE(am.roles, '{}') AS roles,
+      SELECT a.id, a.name, a.show_name, a.avatar_key, a.allow_dm, a.last_active_at, a.show_last_seen, gm.role, COALESCE(am.roles, '{}') AS roles,
              EXISTS (SELECT 1 FROM ca_block b WHERE (b.account_id = $2 AND b.blocked_account_id = a.id) OR (b.account_id = a.id AND b.blocked_account_id = $2)) AS blocked
         FROM ca_group_member gm JOIN ca_account a ON a.id = gm.account_id
         LEFT JOIN ca_app_member am ON am.company_id = $3 AND am.phone = a.phone
-       WHERE gm.group_id = $1 ORDER BY (gm.role = 'admin') DESC, a.name NULLS LAST LIMIT 500`, [groupId, customer.id, Number(g.company_id)]);
-    return rows.map((r) => {
+       WHERE gm.group_id = $1 ORDER BY (gm.role = 'admin') DESC, a.name NULLS LAST LIMIT 500`, [groupId, customer.id, companyId]);
+    const items = rows.map((r) => {
       const me = Number(r.id) === customer.id;
       const code = this.app.memberCode(companyId, Number(r.id));
       return {
@@ -271,8 +273,11 @@ export class CustomerCommunityService implements OnModuleInit {
         avatar_url: r.show_name || me ? link(r.avatar_key, 24) : null,
         can_message: !me && dm && Boolean(r.allow_dm) && !r.blocked && (!byRoles || CustomerDmService.rolesAllowed(rules, mine?.roles ?? [], r.roles ?? [])),
         roles: r.roles ?? [],
+        online: !me && r.show_last_seen !== false && r.last_active_at ? Date.now() - new Date(r.last_active_at).getTime() < 70_000 : false,
       };
     });
+    // private member list: you see yourself and the people you may message
+    return fullList ? items : items.filter((m) => m.me || m.can_message);
   }
 
   /* ───────── customer's own profile ───────── */
