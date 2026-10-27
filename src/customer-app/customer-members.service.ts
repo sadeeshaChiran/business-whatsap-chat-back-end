@@ -104,22 +104,23 @@ export class CustomerMembersService {
   /* ───────────────────────── business: who may use the app ───────────────────────── */
 
   /** Added numbers, with who has the app / turned notifications on. */
-  async members(companyId: number, query: { status?: string; q?: string; page?: number }) {
+  async members(companyId: number, query: { status?: string; q?: string; page?: number; role?: string }) {
     const status = ['on_app', 'not_on_app'].includes(String(query.status)) ? String(query.status) : 'all';
     const search = String(query.q ?? '').trim().toLowerCase();
     const digits = search.replace(/\D/g, '');
     const page = Math.max(1, Number(query.page) || 1);
     const rows: Row[] = await this.dataSource.query(`
-      SELECT m.phone, COALESCE(m.name, CASE WHEN m.joined_at IS NOT NULL THEN a.name END) AS name, m.source, m.added_at, m.joined_at, m.last_open_at,
+      SELECT m.phone, COALESCE(m.name, CASE WHEN m.joined_at IS NOT NULL THEN a.name END) AS name, m.source, m.added_at, m.joined_at, m.last_open_at, m.roles,
+             CASE WHEN m.joined_at IS NOT NULL THEN a.last_active_at END AS last_active_at,
              (m.joined_at IS NOT NULL) AS on_app,
              (m.joined_at IS NOT NULL AND EXISTS (SELECT 1 FROM ca_push_sub p WHERE p.account_id = a.id AND (p.company_id IS NULL OR p.company_id = $1))) AS push,
              COUNT(*) OVER() AS total
         FROM ca_app_member m LEFT JOIN ca_account a ON a.phone = m.phone
-       WHERE m.company_id = $1
+       WHERE m.company_id = $1 AND ($6 = '' OR $6 = ANY(m.roles))
          AND ($2 = 'all' OR ($2 = 'on_app' AND m.joined_at IS NOT NULL) OR ($2 = 'not_on_app' AND m.joined_at IS NULL))
          AND ($3 = '' OR LOWER(COALESCE(m.name, '')) LIKE '%' || $3 || '%' OR ($4 <> '' AND (m.phone LIKE '%' || $4 || '%' OR ca_norm_phone($4) = m.phone)))
        ORDER BY (m.joined_at IS NULL), m.last_open_at DESC NULLS LAST, m.added_at DESC
-       LIMIT 50 OFFSET $5`, [companyId, status, search, digits, (page - 1) * 50]);
+       LIMIT 50 OFFSET $5`, [companyId, status, search, digits, (page - 1) * 50, String(query.role ?? '').trim().toLowerCase()]);
     const [counts] = await this.dataSource.query(`
       SELECT COUNT(*)::int AS added, COUNT(*) FILTER (WHERE m.joined_at IS NOT NULL)::int AS on_app,
              COUNT(*) FILTER (WHERE m.joined_at IS NOT NULL AND EXISTS (SELECT 1 FROM ca_push_sub p WHERE p.account_id = a.id AND (p.company_id IS NULL OR p.company_id = $1)))::int AS notifications
@@ -135,8 +136,10 @@ export class CustomerMembersService {
       },
       items: rows.map((r) => ({
         phone: `+${r.phone}`, name: r.name || null, source: r.source, added_at: r.added_at, on_app: Boolean(r.on_app),
-        joined_at: r.joined_at, last_open_at: r.last_open_at, notifications: Boolean(r.push),
+        joined_at: r.joined_at, last_open_at: r.last_open_at, notifications: Boolean(r.push), roles: r.roles ?? [],
+        online: r.last_active_at ? Date.now() - new Date(r.last_active_at).getTime() < 70_000 : false, last_active_at: r.last_active_at ?? null,
       })),
+      roles: await this.roles(companyId),
     };
   }
 
@@ -194,6 +197,29 @@ export class CustomerMembersService {
     // added again by the business → no longer "removed"
     if (added) await this.dataSource.query(`DELETE FROM ca_app_removed WHERE company_id = $1 AND phone = ANY($2::text[])`, [companyId, returned(result).map((r) => String(r.phone))]);
     return { added_now: added, invalid: bad.slice(0, 20), counts: (await this.members(companyId, {})).counts };
+  }
+
+  /** The roles in use, with how many people have each. */
+  async roles(companyId: number): Promise<Array<{ role: string; n: number }>> {
+    return this.dataSource.query(`SELECT role, COUNT(*)::int AS n FROM ca_app_member, UNNEST(roles) AS role WHERE company_id = $1 GROUP BY role ORDER BY n DESC, role LIMIT 100`, [companyId]);
+  }
+
+  /** Give people roles (e.g. teacher, parent, vip) – used for who may message whom and shown next to their name. */
+  async setRoles(companyId: number, input: { phones?: unknown; roles?: unknown; add?: unknown; remove?: unknown }) {
+    const clean = (value: unknown) => (Array.isArray(value) ? value : String(value ?? '').split(','))
+      .map((r) => String(r).trim().toLowerCase().replace(/[^a-z0-9 _-]/g, '').slice(0, 30)).filter(Boolean).slice(0, 10);
+    const phones = (Array.isArray(input.phones) ? input.phones : [input.phones]).map((p) => normalizeWhatsapp(String(p ?? ''))).filter((p) => /^\d{9,15}$/.test(p)).slice(0, 5000);
+    if (!phones.length) throw new BadRequestException('Choose people.');
+    if (input.roles !== undefined) {
+      await this.dataSource.query(`UPDATE ca_app_member SET roles = $3 WHERE company_id = $1 AND phone = ANY($2::text[])`, [companyId, phones, clean(input.roles)]);
+    } else {
+      const add = clean(input.add);
+      const remove = clean(input.remove);
+      await this.dataSource.query(`
+        UPDATE ca_app_member SET roles = ARRAY(SELECT DISTINCT r FROM UNNEST(roles || $3::text[]) AS r WHERE NOT (r = ANY($4::text[])) ORDER BY r)
+         WHERE company_id = $1 AND phone = ANY($2::text[])`, [companyId, phones, add, remove]);
+    }
+    return { updated: phones.length, roles: await this.roles(companyId) };
   }
 
   /** Take a number's access away: it can no longer open the app, and it leaves the business's groups. */

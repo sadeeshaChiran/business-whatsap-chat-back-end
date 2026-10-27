@@ -73,6 +73,11 @@ export class CustomerAppPart3Controller {
   @Delete('push')
   unsubscribe(@CurrentCustomer() customer: CustomerAccount, @Body() body: { endpoint?: string }) { return this.push.unsubscribe(customer, String(body?.endpoint ?? '')); }
 
+  @Get('places/:companyId/people')
+  people(@CurrentCustomer() customer: CustomerAccount, @Param('companyId', ParseIntPipe) companyId: number, @Query('q') q?: string) {
+    return this.dms.people(customer, companyId, q ?? '');
+  }
+
   @Get('places/:companyId/dms')
   dmList(@CurrentCustomer() customer: CustomerAccount, @Param('companyId', ParseIntPipe) companyId: number) { return this.dms.list(customer, companyId); }
 
@@ -89,9 +94,22 @@ export class CustomerAppPart3Controller {
   @Post('dms/:id/messages')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @upload('file', 25)
-  dmSend(@CurrentCustomer() customer: CustomerAccount, @Param('id', ParseIntPipe) id: number, @Body() body: { text?: string }, @UploadedFile() file?: Upload) {
-    return this.dms.send(customer, id, { text: body?.text, file: file ?? null });
+  dmSend(@CurrentCustomer() customer: CustomerAccount, @Param('id', ParseIntPipe) id: number, @Body() body: { text?: string; cipher?: unknown; kind?: string }, @UploadedFile() file?: Upload) {
+    return this.dms.send(customer, id, { text: body?.text, cipher: body?.cipher, kind: body?.kind, file: file ?? null });
   }
+
+  @Get('dms/:id/keys')
+  dmKeys(@CurrentCustomer() customer: CustomerAccount, @Param('id', ParseIntPipe) id: number) { return this.dms.keys(customer, id); }
+
+  @Post('dms/:id/wraps')
+  dmWraps(@CurrentCustomer() customer: CustomerAccount, @Param('id', ParseIntPipe) id: number, @Body() body: { messages?: unknown }) { return this.dms.addWraps(customer, id, body ?? {}); }
+
+  @Post('keys')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  registerKey(@CurrentCustomer() customer: CustomerAccount, @Body() body: { device_id?: unknown; public_key?: unknown }) { return this.dms.registerKey(customer, body ?? {}); }
+
+  @Delete('keys/:deviceId')
+  revokeKey(@CurrentCustomer() customer: CustomerAccount, @Param('deviceId') deviceId: string) { return this.dms.revokeKey(customer, deviceId); }
 
   @Delete('dms/:id/messages/:messageId')
   dmDelete(@CurrentCustomer() customer: CustomerAccount, @Param('id', ParseIntPipe) id: number, @Param('messageId', ParseIntPipe) messageId: number) {
@@ -106,7 +124,7 @@ export class CustomerAppPart3Controller {
   @Post('places/:companyId/report')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   report(@CurrentCustomer() customer: CustomerAccount, @Param('companyId', ParseIntPipe) companyId: number,
-    @Body() body: { member?: string; group_id?: number; group_message_id?: number; dm_message_id?: number; reason?: string }) {
+    @Body() body: { member?: string; group_id?: number; group_message_id?: number; dm_message_id?: number; reason?: string; excerpt?: string }) {
     return this.dms.report(customer, companyId, body ?? {});
   }
 }
@@ -133,13 +151,18 @@ export class CustomerAppPart3BusinessController {
   }
 
   @Get('members') @AdminOnly()
-  list(@CurrentUser() user: AuthenticatedUser, @Query('status') status?: string, @Query('q') q?: string, @Query('page') page?: string) {
-    return this.members.members(this.company(user), { status, q, page: Number(page) || 1 });
+  list(@CurrentUser() user: AuthenticatedUser, @Query('status') status?: string, @Query('q') q?: string, @Query('page') page?: string, @Query('role') role?: string) {
+    return this.members.members(this.company(user), { status, q, page: Number(page) || 1, role });
   }
 
   @Post('members') @AdminOnly()
   add(@CurrentUser() user: AuthenticatedUser, @Body() body: { contact_ids?: unknown; tags?: unknown; all_contacts?: unknown; phones?: unknown }) {
     return this.members.addMembers(this.company(user), Number(user.id), body ?? {});
+  }
+
+  @Patch('members/roles') @AdminOnly()
+  roles(@CurrentUser() user: AuthenticatedUser, @Body() body: { phones?: unknown; roles?: unknown; add?: unknown; remove?: unknown }) {
+    return this.members.setRoles(this.company(user), body ?? {});
   }
 
   @Delete('members/:phone') @AdminOnly()

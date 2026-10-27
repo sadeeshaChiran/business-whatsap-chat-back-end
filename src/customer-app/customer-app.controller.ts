@@ -18,6 +18,8 @@ import { CustomerCommunityBusinessController, CustomerCommunityController } from
 import { CustomerCommunityService } from './customer-community.service';
 import { CustomerAppPart3Controller, CustomerAppPart3BusinessController, CustomerAppPublicController } from './customer-app-3.controller';
 import { CustomerBroadcastService } from './customer-broadcast.service';
+import { CustomerCallsBusinessController, CustomerCallsController } from './customer-calls.controller';
+import { CustomerCallsService } from './customer-calls.service';
 import { CustomerDmService } from './customer-dm.service';
 import { CustomerMembersService } from './customer-members.service';
 import { CustomerPushService } from './customer-push.service';
@@ -107,6 +109,7 @@ export class CustomerAppBusinessController {
   @Put('settings') @AdminOnly()
   async save(@CurrentUser() user: AuthenticatedUser, @Body() body: {
     enabled?: boolean; welcome_text?: string | null; slug?: string; app_name?: string | null; theme_color?: string | null; access?: string; member_dm?: boolean;
+    dm_mode?: string; dm_rules?: unknown;
   }) {
     return { ...(await this.app.saveSettings(Number(user.company_id), body ?? {})), link_code: this.app.linkCode(Number(user.company_id)) };
   }
@@ -116,9 +119,9 @@ export class CustomerAppBusinessController {
   imports: [AuthModule, SalesBotModule],
   controllers: [
     CustomerAuthController, CustomerAppPublicController, CustomerAppController, CustomerAppBusinessController, CustomerCommunityController,
-    CustomerCommunityBusinessController, CustomerAppPart3Controller, CustomerAppPart3BusinessController,
+    CustomerCommunityBusinessController, CustomerAppPart3Controller, CustomerAppPart3BusinessController, CustomerCallsController, CustomerCallsBusinessController,
   ],
-  providers: [CustomerAppService, CustomerCommunityService, CustomerMembersService, CustomerPushService, CustomerDmService, CustomerBroadcastService, CustomerAuthGuard],
+  providers: [CustomerAppService, CustomerCommunityService, CustomerMembersService, CustomerPushService, CustomerDmService, CustomerBroadcastService, CustomerCallsService, CustomerAuthGuard],
   exports: [CustomerAppService],
 })
 export class CustomerAppModule {}

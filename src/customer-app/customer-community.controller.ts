@@ -26,7 +26,7 @@ export class CustomerCommunityController {
   me(@CurrentCustomer() customer: CustomerAccount) { return this.community.me(customer); }
 
   @Patch('profile')
-  settings(@CurrentCustomer() customer: CustomerAccount, @Body() body: { show_name?: boolean; allow_dm?: boolean }) { return this.community.updateSettings(customer, body ?? {}); }
+  settings(@CurrentCustomer() customer: CustomerAccount, @Body() body: { show_name?: boolean; allow_dm?: boolean; show_last_seen?: boolean }) { return this.community.updateSettings(customer, body ?? {}); }
 
   @Post('profile/photo')
   @upload('photo', 5)
