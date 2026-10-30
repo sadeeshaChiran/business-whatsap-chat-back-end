@@ -64,7 +64,7 @@ export class CustomerCommunityService implements OnModuleInit {
                  AND dm.id > CASE WHEN d.account_a = $2 THEN d.a_last_read_id ELSE d.b_last_read_id END
                WHERE d.company_id = $1 AND (d.account_a = $2 OR d.account_b = $2)) AS dms_unread,
              (SELECT COUNT(*)::int FROM bot_channel_user cu JOIN bot_conversation bc ON bc.bot_channel_user_id = cu.id
-                JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
+                JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system' AND m.source IS DISTINCT FROM 'sms'
                 LEFT JOIN ca_chat_state st ON st.channel_user_id = cu.id
                WHERE cu.company_id = $1 AND cu.platform = 'app' AND cu.external_user_id = 'ca:' || $2 AND m.created_at > COALESCE(st.last_read_at, 'epoch'::timestamptz)) AS chat_unread,
              EXISTS (SELECT 1 FROM ca_business_mute WHERE account_id = $2 AND company_id = $1) AS muted,

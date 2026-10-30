@@ -413,8 +413,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const [marks] = await this.messageRepository.query(`
       SELECT c.bot_answered_inbound_id AS answered,
              (SELECT MAX(m.id) FROM bot_message m WHERE m.conversation_id = c.id AND m.direction::text = 'outbound'
-                 AND COALESCE(m.source, '') NOT IN ($2, 'meta-context')) AS handled,
-             (SELECT MAX(m.id) FROM bot_message m WHERE m.conversation_id = c.id AND m.direction::text = 'outbound') AS last_out
+                 AND COALESCE(m.source, '') NOT IN ($2, 'meta-context', 'sms')) AS handled,
+             (SELECT MAX(m.id) FROM bot_message m WHERE m.conversation_id = c.id AND m.direction::text = 'outbound' AND COALESCE(m.source, '') <> 'sms') AS last_out
         FROM bot_conversation c WHERE c.id = $1`, [conversationId, BOT_SOURCE]);
     const after = marks?.answered != null
       ? Math.max(Number(marks.answered), Number(marks.handled ?? 0))
@@ -1341,6 +1341,7 @@ export class SalesBotEngineService implements OnModuleInit {
       .where('m.conversation_id = :conversationId AND m.id > :after', { conversationId, after: lastIn.id })
       .andWhere("m.direction::text = 'outbound'")
       .andWhere("COALESCE(m.source, '') <> :bot", { bot: BOT_SOURCE })
+      .andWhere("COALESCE(m.source, '') <> 'sms'") // an SMS (campaign / one-off) is not an answer in this chat
       .getCount();
     const handedOver = Number((this.readSessionState(channelUser.session_state).sales_bot as BotSession | undefined)?.handoff_at ?? 0) > Date.now() / 1000 - 24 * 3600;
     if (others || handedOver || channelUser.manual_mode) return end('stopped');

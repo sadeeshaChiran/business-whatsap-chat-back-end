@@ -174,6 +174,22 @@ In the Inbox, TikTok chats have the TikTok mark, and a **TikTok** filter button 
 
 > **Tip:** For the AI bot a TikTok chat is like an Instagram chat – same answers, same order steps (it asks for a phone number before it confirms an order).
 
+## SMS
+
+Send **SMS** with **your own Notify.lk account** – your sender name (for example *VORAKIDS*), your SMS credit. Good for offers, reminders and notices to customers who are not on WhatsApp or your app, and for one-off messages from a chat.
+
+**Connect (2 minutes):** make an account at **app.notify.lk** and add credit. Ask Notify.lk for your **sender name** (until it is approved, *NotifyDEMO* only sends to your own test numbers). Copy the **User ID** and **API key** (Settings → API Keys), then **Channels → SMS** → paste them with your sender name → **Check and connect**. The page shows your **Notify.lk balance**, SMS sent in the last 30 days, and has a **test SMS** button. The API key is never shown again after saving.
+
+**Line added to every SMS** (optional): for example *Reply on WhatsApp 077 123 4567*. SMS from a sender name **can't be answered**, so tell customers where to reply.
+
+**SMS campaigns** (**Marketing → SMS campaigns**): write the message (`{name}` = the customer's first name), choose **contacts with tags**, **all contacts with a number**, or **type / paste numbers** (one per line, optionally `0771234567, Nimal`). The page counts the numbers and the SMS: **160 characters per SMS in English, 70 in Sinhala / Tamil / emoji** (longer messages are sent as 2, 3 … SMS). A phone preview shows exactly what arrives. While sending you see sent / failed / waiting, and you can **Stop**. If Notify.lk says there is no credit, the campaign stops by itself.
+
+**From a chat:** in the Inbox, open a chat → **⋯ → Send SMS** – it goes to the customer's mobile number (WhatsApp number, app number, or the number saved in the contact). Agents can do this for their own chats.
+
+**In the chat:** every SMS you send (campaign or one-off) also shows in that customer's chat with the label *Sent by SMS*, so the team sees it. It is not shown inside the customer app.
+
+**Do-not-SMS list:** numbers that must never get SMS from you (Channels → SMS). Campaigns skip them, and so are WhatsApp customers who said STOP.
+
 ## The connection check
 
 Every channel page has a live **connection check**. It asks Meta what is working right now and shows each item in plain words:

@@ -72,7 +72,7 @@ export class CustomerAppService implements OnModuleInit {
     const [last] = await this.dataSource.query(`
       SELECT m.message_type::text AS type, m.content, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name
         FROM bot_channel_user cu JOIN bot_conversation bc ON bc.bot_channel_user_id = cu.id
-        JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
+        JOIN bot_message m ON m.conversation_id = bc.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system' AND m.source IS DISTINCT FROM 'sms'
         JOIN companies c ON c.id = cu.company_id LEFT JOIN ca_settings s ON s.company_id = cu.company_id
        WHERE cu.company_id = $1 AND cu.platform = 'app' AND cu.external_user_id = $2 ORDER BY m.id DESC LIMIT 1`, [companyId, externalId(accountId)]);
     if (!last) return;
@@ -306,7 +306,7 @@ export class CustomerAppService implements OnModuleInit {
       SELECT c.id, COALESCE(NULLIF(s.app_name, ''), c.company_name) AS name, s.slug, cu.id AS channel_user_id,
              last.content AS last_text, last.message_type AS last_type, last.direction AS last_direction, last.created_at AS last_at,
              (SELECT COUNT(*)::int FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
-               WHERE bc.bot_channel_user_id = cu.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system'
+               WHERE bc.bot_channel_user_id = cu.id AND m.direction::text = 'outbound' AND m.message_type::text <> 'system' AND m.source IS DISTINCT FROM 'sms'
                  AND m.created_at > COALESCE(st.last_read_at, 'epoch'::timestamptz)) AS unread,
              p.logo_key,
              (SELECT COUNT(*)::int FROM ca_news n WHERE n.company_id = c.id AND n.deleted_at IS NULL
@@ -325,7 +325,7 @@ export class CustomerAppService implements OnModuleInit {
         LEFT JOIN ca_chat_state st ON st.channel_user_id = cu.id
         LEFT JOIN LATERAL (
           SELECT m.content, m.message_type::text AS message_type, m.direction::text AS direction, m.created_at FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
-           WHERE bc.bot_channel_user_id = cu.id AND m.message_type::text <> 'system' ORDER BY m.id DESC LIMIT 1) last ON TRUE
+           WHERE bc.bot_channel_user_id = cu.id AND m.message_type::text <> 'system' AND m.source IS DISTINCT FROM 'sms' ORDER BY m.id DESC LIMIT 1) last ON TRUE
        WHERE s.enabled AND EXISTS (SELECT 1 FROM ca_app_member am WHERE am.company_id = c.id AND am.phone = $2)
        ORDER BY last.created_at DESC NULLS LAST, c.company_name`,
     [externalId(customer.id), customer.phone, customer.id]);
@@ -440,7 +440,7 @@ export class CustomerAppService implements OnModuleInit {
              m.reply_to_message_id, u.name AS agent_name
         FROM bot_message m JOIN bot_conversation bc ON bc.id = m.conversation_id
         LEFT JOIN app_user u ON u.id = m.sender_user_id
-       WHERE bc.bot_channel_user_id = $1 AND m.message_type::text <> 'system' AND ($2::bigint IS NULL OR m.id < $2)
+       WHERE bc.bot_channel_user_id = $1 AND m.message_type::text <> 'system' AND m.source IS DISTINCT FROM 'sms' AND ($2::bigint IS NULL OR m.id < $2)
        ORDER BY m.id DESC LIMIT 40`, [user!.id, beforeId ?? null]);
     const agentRead = conversation?.agent_last_read_at ? new Date(conversation.agent_last_read_at).getTime() : 0;
     return {
