@@ -3,7 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { Observable, tap } from 'rxjs';
 import { DataSource } from 'typeorm';
 
-const SECRET = /pass|secret|token|pin|hash/i;
+const SECRET = /pass|secret|token|pin|hash|api_key/i;
 
 /** Records every change a super admin makes (POST / PUT / PATCH / DELETE) in platform_audit_log. */
 @Injectable()

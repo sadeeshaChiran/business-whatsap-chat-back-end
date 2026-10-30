@@ -3,7 +3,9 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { PusherService } from '../common/pusher.service';
+import { PlanService } from '../platform/plan.service';
 import { normalizeWhatsapp } from '../verification/verification';
+import { addSmsCredits, smsMonth } from './sms-wallet';
 
 type Row = Record<string, any>;
 export type SmsAudience = { all?: boolean; tags?: string[]; exclude_tags?: string[]; numbers?: string };
@@ -16,6 +18,12 @@ const returned = (result: unknown): Row[] => (Array.isArray(result) && Array.isA
 /** Pasted numbers: whole lines only (never cut a number in half), at most 50,000 lines. */
 const pastedLines = (value: unknown) => String(value ?? '').split(/[\n;]+/).map((l) => l.trim()).filter(Boolean).slice(0, 50_000);
 const manager = (user: AuthenticatedUser) => user.role === 'admin' || user.role === 'supervisor';
+const SENDER = /^[A-Za-z0-9 .&_-]{3,11}$/;
+/** How an SMS goes out: the business's own Notify.lk account, or the Agent Metra account paid with SMS credits. */
+type Route = { via: 'own' | 'platform'; user_id: string; api_key: string; sender_id: string; footer: string | null };
+/** Credits taken for one SMS (free = the part from this month's free credits). */
+type Paid = { credits: number; free: number; month: string };
+type Platform = { enabled: boolean; user_id: string; api_key: string; default_sender: string; balance: number | null; checked_at: string | null; last_error: string | null };
 
 /** GSM-7 characters (one SMS = 160); anything else (Sinhala, Tamil, emoji) is Unicode (one SMS = 70). */
 const GSM = /^[@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&'()*+,\-./0-9:;<=>?¡A-ZÄÖÑÜ§¿a-zäöñüà^{}\\[~\]|€]*$/;
@@ -35,8 +43,10 @@ export function smsNumber(value: unknown): string | null {
 }
 
 /**
- * SMS with the business's own Notify.lk account: offers / reminders to contacts (campaigns) and single SMS from the
- * Inbox. Every SMS sent to someone with a chat is also saved in that chat (source "sms"), so the team sees it there.
+ * SMS: offers / reminders to contacts (campaigns) and single SMS from the Inbox. Sent with the Agent Metra Notify.lk
+ * account and paid with SMS credits (1 credit = 1 SMS part; free credits every month from the package, more from SMS
+ * packs in Billing) – or with the business's own Notify.lk account (then no credits are used).
+ * Every SMS sent to someone with a chat is also saved in that chat (source "sms"), so the team sees it there.
  * SMS sender names are one-way: replies can't come back, customers answer on WhatsApp / the app.
  */
 @Injectable()
@@ -46,7 +56,7 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource, private readonly plan: PlanService) {}
 
   onModuleInit() { this.timer = setInterval(() => void this.tick(), 2_000); }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
@@ -56,6 +66,130 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
   private async account(companyId: number): Promise<Row | null> {
     const [a] = await this.dataSource.query(`SELECT * FROM sms_account WHERE company_id = $1`, [companyId]);
     return a ?? null;
+  }
+
+  /* ───────── Agent Metra SMS (credits) ───────── */
+
+  private platformCache: { at: number; value: Platform } | null = null;
+
+  /** The Agent Metra Notify.lk account (Super admin → SMS). */
+  async platform(fresh = false): Promise<Platform> {
+    if (!fresh && this.platformCache && Date.now() - this.platformCache.at < 10_000) return this.platformCache.value;
+    const [row] = await this.dataSource.query(`SELECT value FROM platform_setting WHERE key = 'sms'`);
+    const v = (row?.value ?? {}) as Row;
+    // empty = the Notify.lk account the API already uses for login codes (NOTIFYLK_* in .env)
+    const env = (key: string) => String(process.env[key] ?? '').trim();
+    const value: Platform = {
+      enabled: v.enabled === true, user_id: String(v.user_id || env('NOTIFYLK_USER_ID')), api_key: String(v.api_key || env('NOTIFYLK_API_KEY')),
+      default_sender: String(v.default_sender || env('NOTIFYLK_SENDER_ID')),
+      balance: v.balance != null ? Number(v.balance) : null, checked_at: v.checked_at ?? null, last_error: v.last_error ?? null,
+    };
+    this.platformCache = { at: Date.now(), value };
+    return value;
+  }
+
+  private platformReady(p: Platform) { return p.enabled && Boolean(p.user_id && p.api_key && p.default_sender); }
+
+  /** The business's credits row (made on first use; free credits start again in a new month). */
+  private async wallet(companyId: number): Promise<Row> {
+    const month = smsMonth();
+    await this.dataSource.query(`INSERT INTO sms_wallet (company_id, free_month) VALUES ($1, $2) ON CONFLICT (company_id) DO NOTHING`, [companyId, month]);
+    await this.dataSource.query(`UPDATE sms_wallet SET free_month = $2, free_used = 0 WHERE company_id = $1 AND free_month IS DISTINCT FROM $2`, [companyId, month]);
+    const [w] = await this.dataSource.query(`SELECT * FROM sms_wallet WHERE company_id = $1`, [companyId]);
+    return w;
+  }
+
+  /** Free SMS credits a month from the package (empty = none). */
+  private async freeAllowance(companyId: number) {
+    const limits = await this.plan.limitsForCompany(companyId).catch(() => null);
+    return Math.max(0, Number(limits?.numbers?.sms_free_per_month ?? 0) || 0);
+  }
+
+  async credits(companyId: number) {
+    const [w, free] = await Promise.all([this.wallet(companyId), this.freeAllowance(companyId)]);
+    const freeLeft = Math.max(0, free - Number(w.free_used));
+    const [used] = await this.dataSource.query(`
+      SELECT COALESCE(SUM(credits) FILTER (WHERE created_at >= date_trunc('month', NOW() AT TIME ZONE 'Asia/Colombo') AT TIME ZONE 'Asia/Colombo'), 0)::int AS month,
+             COALESCE(SUM(credits) FILTER (WHERE created_at > NOW() - INTERVAL '30 days'), 0)::int AS d30
+        FROM sms_message WHERE company_id = $1 AND via = 'platform' AND credits > 0`, [companyId]);
+    return {
+      balance: Number(w.balance), free_per_month: free, free_left: freeLeft, available: freeLeft + Number(w.balance),
+      used_this_month: Number(used?.month ?? 0), used_30d: Number(used?.d30 ?? 0), month: w.free_month,
+    };
+  }
+
+  /** Takes credits for one SMS: free credits of this month first, then bought ones. null = not enough. */
+  private async spend(companyId: number, n: number): Promise<Paid | null> {
+    const free = await this.freeAllowance(companyId);
+    await this.wallet(companyId);
+    return this.dataSource.transaction(async (m) => {
+      const [w] = await m.query(`SELECT balance, free_used, free_month FROM sms_wallet WHERE company_id = $1 FOR UPDATE`, [companyId]);
+      const freeLeft = Math.max(0, free - Number(w.free_used));
+      if (freeLeft + Number(w.balance) < n) return null;
+      const fromFree = Math.min(n, freeLeft);
+      await m.query(`UPDATE sms_wallet SET free_used = free_used + $2, balance = balance - $3, updated_at = NOW() WHERE company_id = $1`, [companyId, fromFree, n - fromFree]);
+      return { credits: n, free: fromFree, month: String(w.free_month ?? smsMonth()) };
+    });
+  }
+
+  /** Gives the credits of an SMS that was not sent back (free ones only within the month they were taken in). */
+  private async refund(companyId: number, paid: Paid) {
+    await this.dataSource.query(`
+      UPDATE sms_wallet SET free_used = CASE WHEN free_month = $4 THEN GREATEST(0, free_used - $2) ELSE free_used END,
+                            balance = balance + $3, updated_at = NOW() WHERE company_id = $1`,
+    [companyId, paid.free, paid.credits - paid.free, paid.month]);
+  }
+
+  /** How this business sends: its own account first, else Agent Metra SMS (when switched on). null = cannot send. */
+  private async route(companyId: number): Promise<Route | null> {
+    const own = await this.account(companyId);
+    if (own) return { via: 'own', user_id: own.user_id, api_key: own.api_key, sender_id: own.sender_id, footer: own.footer ?? null };
+    const p = await this.platform();
+    if (!this.platformReady(p)) return null;
+    const w = await this.wallet(companyId);
+    // sender_id is set only on approval: it stays in use while a new name waits for approval
+    const sender = w.sender_id ? String(w.sender_id) : p.default_sender;
+    return { via: 'platform', user_id: p.user_id, api_key: p.api_key, sender_id: sender, footer: w.footer ?? null };
+  }
+
+  /** The SMS as it goes out (with the footer line) and the credits it takes. */
+  private body(r: Route | null, text: string) {
+    const body = r?.footer ? `${text}\n${r.footer}` : text;
+    return { body, parts: smsParts(body).segments };
+  }
+
+  /** Agent Metra SMS: ask for your own sender name (Super admin approves it with Notify.lk). */
+  async requestSender(user: AuthenticatedUser, raw: unknown) {
+    const companyId = Number(user.company_id);
+    const sender = String(raw ?? '').trim();
+    if (!SENDER.test(sender)) throw new BadRequestException('A sender name has 3–11 letters or numbers, e.g. VORAKIDS.');
+    await this.wallet(companyId);
+    await this.dataSource.query(`
+      UPDATE sms_wallet SET sender_requested = $2, sender_status = 'requested', sender_note = NULL, sender_requested_at = NOW(), updated_at = NOW() WHERE company_id = $1`,
+    [companyId, sender]);
+    return this.settings(companyId);
+  }
+
+  /** Agent Metra SMS: the line added to every SMS (own accounts keep theirs on the account). */
+  async setFooter(companyId: number, raw: unknown) {
+    const footer = String(raw ?? '').trim().slice(0, 80) || null;
+    await this.wallet(companyId);
+    await this.dataSource.query(`UPDATE sms_wallet SET footer = $2, updated_at = NOW() WHERE company_id = $1`, [companyId, footer]);
+    return this.settings(companyId);
+  }
+
+  /** Bought / given credits and what each campaign used. */
+  async history(companyId: number) {
+    const tx: Row[] = await this.dataSource.query(`SELECT credits, kind, note, created_at FROM sms_wallet_tx WHERE company_id = $1 ORDER BY id DESC LIMIT 50`, [companyId]);
+    const used: Row[] = await this.dataSource.query(`
+      SELECT COALESCE(c.name, 'Single SMS from the Inbox') AS name, SUM(m.credits)::int AS credits, MAX(m.created_at) AS created_at
+        FROM sms_message m LEFT JOIN sms_campaign c ON c.id = m.campaign_id
+       WHERE m.company_id = $1 AND m.via = 'platform' AND m.credits > 0
+       GROUP BY m.campaign_id, c.name ORDER BY MAX(m.created_at) DESC LIMIT 50`, [companyId]);
+    return [
+      ...tx.map((t) => ({ credits: Number(t.credits), kind: String(t.kind), note: String(t.note), created_at: t.created_at })),
+      ...used.map((u) => ({ credits: -Number(u.credits), kind: 'used', note: String(u.name), created_at: u.created_at })),
+    ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 60);
   }
 
   private view(a: Row | null) {
@@ -69,18 +203,30 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
 
   /** For everyone in the team (the Inbox shows "Send SMS" when it is on) – no account details. */
   async ready(companyId: number) {
-    const a = await this.account(companyId);
-    return { connected: Boolean(a), sender_id: a?.sender_id ?? null };
+    const r = await this.route(companyId);
+    return { connected: Boolean(r), sender_id: r?.sender_id ?? null, via: r?.via ?? null };
   }
 
   async settings(companyId: number) {
     const a = await this.account(companyId);
+    const p = await this.platform();
+    const platformOn = this.platformReady(p);
+    const w = await this.wallet(companyId);
+    const packs: Row[] = platformOn ? await this.dataSource.query(`SELECT id, name, credits, price FROM sms_pack WHERE is_active ORDER BY sort_order, id`) : [];
+    const agentMetra = {
+      available: platformOn, default_sender: platformOn ? p.default_sender : null,
+      sender_id: w.sender_id ? w.sender_id : platformOn ? p.default_sender : null,
+      own_sender: w.sender_id ?? null, sender_requested: w.sender_requested ?? null, sender_status: w.sender_status,
+      sender_note: w.sender_note ?? null, footer: w.footer ?? null,
+      credits: await this.credits(companyId), packs: packs.map((k) => ({ id: Number(k.id), name: k.name, credits: Number(k.credits), price: Number(k.price) })),
+    };
+    const mode = a ? 'own' : platformOn ? 'platform' : 'off';
     const [stats] = await this.dataSource.query(`
       SELECT COUNT(*) FILTER (WHERE status = 'sent' AND sent_at > NOW() - INTERVAL '30 days')::int AS sent_30d,
              COUNT(*) FILTER (WHERE status = 'failed' AND created_at > NOW() - INTERVAL '30 days')::int AS failed_30d
         FROM sms_message WHERE company_id = $1`, [companyId]);
     const [opt] = await this.dataSource.query(`SELECT COUNT(*)::int AS n FROM sms_optout WHERE company_id = $1`, [companyId]);
-    return { ...this.view(a), sent_30d: Number(stats?.sent_30d ?? 0), failed_30d: Number(stats?.failed_30d ?? 0), opted_out: Number(opt?.n ?? 0) };
+    return { ...this.view(a), mode, agent_metra: agentMetra, sent_30d: Number(stats?.sent_30d ?? 0), failed_30d: Number(stats?.failed_30d ?? 0), opted_out: Number(opt?.n ?? 0) };
   }
 
   /** Asks Notify.lk for the account status (also checks the keys). */
@@ -105,7 +251,7 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     const sender = String(input.sender_id ?? '').trim();
     if (!/^\d{1,20}$/.test(userId)) throw new BadRequestException('Enter the User ID from Notify.lk (Settings → API Keys) – numbers only.');
     if (apiKey.length < 8) throw new BadRequestException('Enter the API key from Notify.lk (Settings → API Keys).');
-    if (!/^[A-Za-z0-9 .&_-]{3,11}$/.test(sender)) throw new BadRequestException('Enter your approved sender name (3–11 letters or numbers, e.g. VORAKIDS). "NotifyDEMO" works only for your test numbers.');
+    if (!SENDER.test(sender)) throw new BadRequestException('Enter your approved sender name (3–11 letters or numbers, e.g. VORAKIDS). "NotifyDEMO" works only for your test numbers.');
     const footer = input.footer == null ? (current?.footer ?? null) : String(input.footer).trim().slice(0, 80) || null;
     const check = await this.status(userId, apiKey);
     if (!check.ok) throw new BadRequestException(check.error);
@@ -135,8 +281,8 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Sends one SMS now. */
-  private async deliver(a: Row, phone: string, text: string): Promise<{ ok: boolean; error?: string }> {
-    const body = a.footer ? `${text}\n${a.footer}` : text;
+  private async deliver(a: Route, phone: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    const { body } = this.body(a, text);
     const q = new URLSearchParams({ user_id: a.user_id, api_key: a.api_key, sender_id: a.sender_id, to: phone, message: body });
     if (smsParts(body).unicode) q.set('type', 'unicode');
     try {
@@ -151,13 +297,26 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
 
   async test(user: AuthenticatedUser, to: unknown) {
     const companyId = Number(user.company_id);
-    const a = await this.account(companyId);
+    const a = await this.route(companyId);
     if (!a) throw new NotFoundException('Connect your SMS account first.');
     const phone = smsNumber(to);
     if (!phone) throw new BadRequestException('Enter a mobile number, e.g. 077 123 4567.');
-    const r = await this.deliver(a, phone, `Test SMS from ${a.sender_id} – your SMS account works.`);
-    if (!r.ok) throw new BadRequestException(`Notify.lk did not send it: ${r.error}`);
-    return { sent: true };
+    const text = `Test SMS from ${a.sender_id} - your SMS works.`;
+    const paid = a.via === 'platform' ? await this.spend(companyId, this.body(a, text).parts) : null;
+    if (a.via === 'platform' && !paid) throw new BadRequestException('No SMS credits left – buy an SMS pack in Billing.');
+    const r = await this.deliver(a, phone, text);
+    if (!r.ok) {
+      if (paid) await this.refund(companyId, paid);
+      throw new BadRequestException(a.via === 'platform' ? this.platformError(r.error) : `Notify.lk did not send it: ${r.error}`);
+    }
+    return { sent: true, credits: paid?.credits ?? 0 };
+  }
+
+  /** Errors of the Agent Metra account are ours, not the business's: a plain message (and a log line for us). */
+  private platformError(error?: string) {
+    this.logger.warn(`Agent Metra SMS account: ${error ?? 'failed'}`);
+    if (/balance|credit|insufficient|api key|unauthor/i.test(error ?? '')) return 'SMS can\'t be sent right now – we are fixing it. Your credits were not used.';
+    return `The SMS was not sent: ${error ?? 'unknown error'}. Your credits were not used.`;
   }
 
   /* ───────── who gets it ───────── */
@@ -211,10 +370,21 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
 
   async preview(companyId: number, audience: SmsAudience, text = '') {
     const list = await this.contacts(companyId, audience ?? {});
-    const parts = smsParts(this.fill(text || ' ', 'Nimal'));
-    const a = await this.account(companyId);
-    const withFooter = a?.footer ? smsParts(`${this.fill(text || ' ', 'Nimal')}\n${a.footer}`) : parts;
-    return { count: list.length, sample: list.slice(0, 5).map((c) => ({ phone: c.phone, name: c.name })), segments: withFooter.segments, unicode: withFooter.unicode, length: withFooter.length, total_sms: list.length * withFooter.segments };
+    const a = await this.route(companyId);
+    const withFooter = smsParts(this.body(a, this.fill(text || ' ', 'Nimal')).body);
+    // every name has its own length: the exact number of SMS is counted person by person
+    const total = text.trim() ? this.totalParts(a, text, list) : list.length * withFooter.segments;
+    const credits = a?.via === 'platform' ? await this.credits(companyId) : null;
+    return {
+      count: list.length, sample: list.slice(0, 5).map((c) => ({ phone: c.phone, name: c.name })), segments: withFooter.segments, unicode: withFooter.unicode,
+      length: withFooter.length, total_sms: total, via: a?.via ?? null, credits_needed: a?.via === 'platform' ? total : 0, credits_available: credits?.available ?? null,
+    };
+  }
+
+  private totalParts(a: Route | null, text: string, list: Array<{ name: string }>) {
+    let total = 0;
+    for (const c of list) total += this.body(a, this.fill(text, c.name)).parts;
+    return total;
   }
 
   private fill(text: string, name: string) {
@@ -226,7 +396,7 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
 
   async createCampaign(user: AuthenticatedUser, input: { name?: string; text?: string; audience?: SmsAudience }) {
     const companyId = Number(user.company_id);
-    const a = await this.account(companyId);
+    const a = await this.route(companyId);
     if (!a) throw new BadRequestException('Connect your SMS account first (Channels → SMS).');
     const text = String(input.text ?? '').trim();
     if (!text) throw new BadRequestException('Write the message.');
@@ -239,7 +409,12 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     const list = await this.contacts(companyId, audience);
     if (!list.length) throw new BadRequestException('Nobody with a mobile number matches. Pick tags, "all contacts", or type numbers.');
     if (list.length > 50_000) throw new BadRequestException('Up to 50,000 numbers per campaign.');
-    const parts = smsParts(a.footer ? `${this.fill(text, 'Nimal')}\n${a.footer}` : this.fill(text, 'Nimal'));
+    if (a.via === 'platform') {
+      const need = this.totalParts(a, text, list);
+      const { available } = await this.credits(companyId);
+      if (need > available) throw new BadRequestException(`This campaign needs ${need.toLocaleString('en-US')} SMS credits – you have ${available.toLocaleString('en-US')}. Buy an SMS pack in Billing, shorten the message or pick fewer people.`);
+    }
+    const parts = smsParts(this.body(a, this.fill(text, 'Nimal')).body);
     const [c] = await this.dataSource.query(`
       INSERT INTO sms_campaign (company_id, name, text, audience, status, total, segments, created_by) VALUES ($1, $2, $3, $4::jsonb, 'sending', $5, $6, $7) RETURNING *`,
     [companyId, name, text, JSON.stringify({ ...audience, numbers: audience.numbers ? `${audience.numbers.split(/\n/).length} typed` : '' }), list.length, parts.segments, user.id]);
@@ -259,6 +434,7 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
       id: Number(c.id), name: c.name, text: c.text, status: c.status, total: Number(c.total), segments: Number(c.segments), created_at: c.created_at,
       finished_at: c.finished_at ?? null, error: c.error ?? null,
       sent: Number(stats?.sent ?? 0), failed: Number(stats?.failed ?? 0), queued: Number(stats?.queued ?? (c.status === 'sending' ? c.total : 0)),
+      credits: Number(stats?.credits ?? 0),
     };
   }
 
@@ -267,7 +443,7 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     if (!rows.length) return [];
     const stats: Row[] = await this.dataSource.query(`
       SELECT campaign_id, COUNT(*) FILTER (WHERE status = 'sent')::int AS sent, COUNT(*) FILTER (WHERE status = 'failed')::int AS failed,
-             COUNT(*) FILTER (WHERE status = 'queued')::int AS queued
+             COUNT(*) FILTER (WHERE status = 'queued')::int AS queued, COALESCE(SUM(credits), 0)::int AS credits
         FROM sms_message WHERE campaign_id = ANY($1::bigint[]) GROUP BY campaign_id`, [rows.map((r) => r.id)]);
     const by = new Map(stats.map((s) => [Number(s.campaign_id), s]));
     return rows.map((r) => this.campaignView(r, by.get(Number(r.id))));
@@ -277,7 +453,8 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     const [c] = await this.dataSource.query(`SELECT * FROM sms_campaign WHERE id = $1 AND company_id = $2`, [id, companyId]);
     if (!c) throw new NotFoundException('Campaign not found.');
     const [stats] = await this.dataSource.query(`
-      SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent, COUNT(*) FILTER (WHERE status = 'failed')::int AS failed, COUNT(*) FILTER (WHERE status = 'queued')::int AS queued
+      SELECT COUNT(*) FILTER (WHERE status = 'sent')::int AS sent, COUNT(*) FILTER (WHERE status = 'failed')::int AS failed, COUNT(*) FILTER (WHERE status = 'queued')::int AS queued,
+             COALESCE(SUM(credits), 0)::int AS credits
         FROM sms_message WHERE campaign_id = $1`, [id]);
     const failed: Row[] = await this.dataSource.query(`SELECT phone, name, error FROM sms_message WHERE campaign_id = $1 AND status = 'failed' ORDER BY id LIMIT 200`, [id]);
     return { ...this.campaignView(c, stats), failures: failed.map((f) => ({ phone: f.phone, name: f.name, error: f.error })) };
@@ -321,23 +498,41 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async sendRows(companyId: number, rows: Row[]) {
-    const a = await this.account(companyId);
+    const a = await this.route(companyId);
     const stopped = new Set<number>();
+    const stop = async (campaignId: number, error: string) => {
+      stopped.add(campaignId);
+      await this.dataSource.query(`UPDATE sms_campaign SET status = 'stopped', finished_at = NOW(), error = $2 WHERE id = $1 AND status = 'sending'`, [campaignId, error]);
+      await this.dataSource.query(`UPDATE sms_message SET status = 'skipped', error = 'Stopped – see campaign error' WHERE campaign_id = $1 AND status = 'queued'`, [campaignId]);
+    };
     for (const m of rows) {
       if (m.campaign_id && stopped.has(Number(m.campaign_id))) continue;
       const claim = returned(await this.dataSource.query(`UPDATE sms_message SET status = 'sending', claimed_at = NOW() WHERE id = $1 AND status = 'queued' RETURNING id`, [m.id]));
       if (!claim.length) continue;
       if (!a) { await this.dataSource.query(`UPDATE sms_message SET status = 'failed', error = 'No SMS account' WHERE id = $1`, [m.id]); continue; }
       const text = this.fill(String(m.text), String(m.name ?? ''));
+      let paid: Paid | null = null;
+      if (a.via === 'platform') {
+        paid = await this.spend(companyId, this.body(a, text).parts);
+        if (!paid) {
+          await this.dataSource.query(`UPDATE sms_message SET status = 'failed', error = 'No SMS credits left', via = 'platform' WHERE id = $1`, [m.id]);
+          if (m.campaign_id) await stop(Number(m.campaign_id), 'Out of SMS credits – buy an SMS pack in Billing and send the rest again.');
+          continue;
+        }
+        // written before sending: if the server stops mid-send the SMS may have gone out, so the row keeps what it cost
+        await this.dataSource.query(`UPDATE sms_message SET credits = $2, credits_free = $3, via = 'platform' WHERE id = $1`, [m.id, paid.credits, paid.free]);
+      }
       const r = await this.deliver(a, String(m.phone), text);
-      await this.dataSource.query(`UPDATE sms_message SET status = $2::varchar, error = $3, sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE NULL END WHERE id = $1`,
-        [m.id, r.ok ? 'sent' : 'failed', r.ok ? null : r.error ?? 'Failed']);
+      if (!r.ok && paid) await this.refund(companyId, paid);
+      const kept = r.ok && paid ? paid : { credits: 0, free: 0 };
+      await this.dataSource.query(`
+        UPDATE sms_message SET status = $2::varchar, error = $3, sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE NULL END, credits = $4, credits_free = $5, via = $6 WHERE id = $1`,
+      [m.id, r.ok ? 'sent' : 'failed', r.ok ? null : (a.via === 'platform' ? 'Not sent – no credits used' : r.error ?? 'Failed'), kept.credits, kept.free, a.via]);
+      if (!r.ok && a.via === 'platform') this.logger.warn(`Agent Metra SMS account: ${r.error ?? 'failed'}`);
       if (r.ok && m.bot_channel_user_id) await this.logInChat(Number(m.id), companyId, Number(m.bot_channel_user_id), text, m.sent_by ? Number(m.sent_by) : null).catch(() => undefined);
       // no credit / wrong key: stop the rest of this campaign instead of failing thousands of numbers
       if (!r.ok && m.campaign_id && /balance|credit|insufficient|api key|unauthor/i.test(r.error ?? '')) {
-        stopped.add(Number(m.campaign_id));
-        await this.dataSource.query(`UPDATE sms_campaign SET status = 'stopped', finished_at = NOW(), error = $2 WHERE id = $1 AND status = 'sending'`, [m.campaign_id, r.error]);
-        await this.dataSource.query(`UPDATE sms_message SET status = 'skipped', error = 'Stopped – see campaign error' WHERE campaign_id = $1 AND status = 'queued'`, [m.campaign_id]);
+        await stop(Number(m.campaign_id), a.via === 'platform' ? 'SMS can\'t be sent right now – we are fixing it. Your credits were not used.' : String(r.error));
       }
     }
   }
@@ -377,14 +572,16 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
 
   async chatInfo(user: AuthenticatedUser, conversationId: number) {
     const { chat, phone } = await this.chatTarget(user, conversationId);
-    const a = await this.account(Number(user.company_id));
-    const [opt] = phone ? await this.dataSource.query(`SELECT 1 FROM sms_optout WHERE company_id = $1 AND phone = $2`, [Number(user.company_id), phone]) : [];
-    return { connected: Boolean(a), sender_id: a?.sender_id ?? null, phone, name: chat.display_name ?? '', opted_out: Boolean(opt), footer: a?.footer ?? null };
+    const companyId = Number(user.company_id);
+    const a = await this.route(companyId);
+    const [opt] = phone ? await this.dataSource.query(`SELECT 1 FROM sms_optout WHERE company_id = $1 AND phone = $2`, [companyId, phone]) : [];
+    const credits = a?.via === 'platform' ? (await this.credits(companyId)).available : null;
+    return { connected: Boolean(a), sender_id: a?.sender_id ?? null, phone, name: chat.display_name ?? '', opted_out: Boolean(opt), footer: a?.footer ?? null, via: a?.via ?? null, credits_available: credits };
   }
 
   async sendToChat(user: AuthenticatedUser, conversationId: number, rawText: unknown) {
     const companyId = Number(user.company_id);
-    const a = await this.account(companyId);
+    const a = await this.route(companyId);
     if (!a) throw new BadRequestException('Connect your SMS account first (Channels → SMS).');
     const { chat, phone } = await this.chatTarget(user, conversationId);
     if (!phone) throw new BadRequestException('This chat has no mobile number. Add one in the contact details (CRM).');
@@ -399,16 +596,23 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     const [same] = await this.dataSource.query(`
       SELECT 1 FROM sms_message WHERE company_id = $1 AND phone = $2 AND text = $3 AND status IN ('sent', 'sending') AND created_at > NOW() - INTERVAL '2 minutes'`, [companyId, phone, text]);
     if (same) throw new BadRequestException('This SMS was just sent to this number.');
+    const paid = a.via === 'platform' ? await this.spend(companyId, this.body(a, text).parts) : null;
+    if (a.via === 'platform' && !paid) throw new BadRequestException('No SMS credits left – ask the admin to buy an SMS pack in Billing.');
+    // the row carries what it cost from the start (claimed_at: closed by the sender loop if the server stops mid-send)
     const [m] = await this.dataSource.query(`
-      INSERT INTO sms_message (company_id, bot_channel_user_id, phone, name, text, status, sent_by) VALUES ($1, $2, $3, $4, $5, 'sending', $6) RETURNING id`,
-    [companyId, chat.channel_user_id, phone, String(chat.display_name ?? ''), text, user.id]);
+      INSERT INTO sms_message (company_id, bot_channel_user_id, phone, name, text, status, sent_by, via, credits, credits_free, claimed_at)
+      VALUES ($1, $2, $3, $4, $5, 'sending', $6, $7, $8, $9, NOW()) RETURNING id`,
+    [companyId, chat.channel_user_id, phone, String(chat.display_name ?? ''), text, user.id, a.via, paid?.credits ?? 0, paid?.free ?? 0]);
     const r = await this.deliver(a, phone, text);
-    await this.dataSource.query(`UPDATE sms_message SET status = $2::varchar, error = $3, sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE NULL END WHERE id = $1`,
-      [m.id, r.ok ? 'sent' : 'failed', r.ok ? null : r.error ?? 'Failed']);
-    if (!r.ok) throw new BadRequestException(`The SMS was not sent: ${r.error}`);
+    if (!r.ok && paid) await this.refund(companyId, paid);
+    const kept = r.ok && paid ? paid : { credits: 0, free: 0 };
+    await this.dataSource.query(`
+      UPDATE sms_message SET status = $2::varchar, error = $3, sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE NULL END, credits = $4, credits_free = $5 WHERE id = $1`,
+    [m.id, r.ok ? 'sent' : 'failed', r.ok ? null : r.error ?? 'Failed', kept.credits, kept.free]);
+    if (!r.ok) throw new BadRequestException(a.via === 'platform' ? this.platformError(r.error) : `The SMS was not sent: ${r.error}`);
     await this.logInChat(Number(m.id), companyId, Number(chat.channel_user_id), text, Number(user.id))
       .catch((error) => this.logger.warn(`sms sent but not saved in the chat: ${error instanceof Error ? error.message : String(error)}`));
-    return { sent: true, phone };
+    return { sent: true, phone, credits: kept.credits };
   }
 
   /* ───────── do-not-SMS list ───────── */
@@ -425,6 +629,132 @@ export class SmsService implements OnModuleInit, OnModuleDestroy {
     else await this.dataSource.query(`DELETE FROM sms_optout WHERE company_id = $1 AND phone = $2`, [companyId, phone]);
     await this.dataSource.query(`UPDATE sms_message SET status = 'skipped', error = 'Asked not to get SMS' WHERE company_id = $1 AND phone = $2 AND status = 'queued'`, [companyId, phone]);
     return { phone, opted_out: out };
+  }
+
+  /* ───────── Super admin: the Agent Metra SMS account, packs, sender names, credits ───────── */
+
+  private platformView(p: Platform, raw: Row) {
+    return {
+      enabled: p.enabled, user_id: String(raw.user_id ?? ''), api_key_hint: raw.api_key ? `••••${String(raw.api_key).slice(-4)}` : null,
+      default_sender: String(raw.default_sender ?? ''), sender_in_use: p.default_sender,
+      balance: p.balance, checked_at: p.checked_at, last_error: p.last_error, ready: this.platformReady(p),
+      env_account: Boolean(String(process.env.NOTIFYLK_USER_ID ?? '').trim() && String(process.env.NOTIFYLK_API_KEY ?? '').trim()),
+    };
+  }
+
+  private async savePlatformValue(value: Record<string, unknown>) {
+    await this.dataSource.query(`
+      INSERT INTO platform_setting (key, value, updated_at) VALUES ('sms', $1::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify(value)]);
+    this.platformCache = null;
+  }
+
+  async adminOverview() {
+    const p = await this.platform(true);
+    const [totals] = await this.dataSource.query(`
+      SELECT COALESCE(SUM(credits) FILTER (WHERE created_at > NOW() - INTERVAL '30 days'), 0)::int AS used_30d,
+             COALESCE(SUM(credits - credits_free) FILTER (WHERE created_at > NOW() - INTERVAL '30 days'), 0)::int AS paid_30d
+        FROM sms_message WHERE via = 'platform' AND credits > 0`);
+    const [sold] = await this.dataSource.query(`SELECT COALESCE(SUM(balance), 0)::int AS unused FROM sms_wallet`);
+    return { account: this.platformView(p, await this.rawPlatform()), used_30d: Number(totals?.used_30d ?? 0), paid_30d: Number(totals?.paid_30d ?? 0), unused_bought: Number(sold?.unused ?? 0) };
+  }
+
+  /** What the super admin saved (without the .env fallback). */
+  private async rawPlatform(): Promise<Row> {
+    const [row] = await this.dataSource.query(`SELECT value FROM platform_setting WHERE key = 'sms'`);
+    return (row?.value ?? {}) as Row;
+  }
+
+  async savePlatform(input: { enabled?: boolean; user_id?: string; api_key?: string; default_sender?: string }) {
+    const raw = await this.rawPlatform();
+    const env = (key: string) => String(process.env[key] ?? '').trim();
+    const savedUser = input.user_id !== undefined ? String(input.user_id).trim() : String(raw.user_id ?? '');
+    const savedKey = String(input.api_key ?? '').trim() || String(raw.api_key ?? '');
+    const savedSender = input.default_sender !== undefined ? String(input.default_sender).trim() : String(raw.default_sender ?? '');
+    const userId = savedUser || env('NOTIFYLK_USER_ID');
+    const apiKey = savedKey || env('NOTIFYLK_API_KEY');
+    const sender = savedSender || env('NOTIFYLK_SENDER_ID');
+    const enabled = input.enabled ?? raw.enabled === true;
+    if (userId && !/^\d{1,20}$/.test(userId)) throw new BadRequestException('User ID: numbers only (Notify.lk → Settings → API Keys).');
+    if (sender && !SENDER.test(sender)) throw new BadRequestException('Default sender name: 3–11 letters or numbers.');
+    if (enabled && (!userId || !apiKey || !sender)) throw new BadRequestException('Add the User ID, API key and default sender name before switching Agent Metra SMS on.');
+    let check: { ok: boolean; balance: number | null; error?: string } = { ok: true, balance: raw.balance ?? null };
+    if (userId && apiKey && (input.user_id !== undefined || input.api_key || enabled)) {
+      check = await this.status(userId, apiKey);
+      if (!check.ok) throw new BadRequestException(check.error);
+    }
+    await this.savePlatformValue({ enabled, user_id: savedUser, api_key: savedKey, default_sender: savedSender, balance: check.balance, checked_at: new Date().toISOString(), last_error: null });
+    return this.adminOverview();
+  }
+
+  async refreshPlatform() {
+    const p = await this.platform(true);
+    if (!p.user_id || !p.api_key) throw new BadRequestException('Add the Notify.lk User ID and API key first.');
+    const check = await this.status(p.user_id, p.api_key);
+    await this.savePlatformValue({ ...(await this.rawPlatform()), balance: check.ok ? check.balance : p.balance, checked_at: new Date().toISOString(), last_error: check.ok ? null : check.error });
+    return this.adminOverview();
+  }
+
+  async adminPacks() {
+    const rows: Row[] = await this.dataSource.query(`SELECT * FROM sms_pack ORDER BY sort_order, id`);
+    return rows.map((k) => ({ id: Number(k.id), name: k.name, credits: Number(k.credits), price: Number(k.price), is_active: k.is_active, sort_order: Number(k.sort_order) }));
+  }
+
+  async savePack(input: { name?: string; credits?: number; price?: number; is_active?: boolean; sort_order?: number }, id?: number) {
+    const name = String(input.name ?? '').trim().slice(0, 120);
+    const credits = Math.trunc(Number(input.credits));
+    const price = Number(input.price);
+    if (!name || !(credits > 0) || !(price > 0)) throw new BadRequestException('A pack needs a name, credits and a price (more than 0).');
+    if (id) {
+      const r = returned(await this.dataSource.query(`UPDATE sms_pack SET name = $2, credits = $3, price = $4, is_active = $5, sort_order = $6 WHERE id = $1 RETURNING id`,
+        [id, name, credits, price, input.is_active !== false, Math.trunc(Number(input.sort_order ?? 0))]));
+      if (!r.length) throw new NotFoundException('SMS pack not found.');
+    } else {
+      await this.dataSource.query(`INSERT INTO sms_pack (name, credits, price, is_active, sort_order) VALUES ($1, $2, $3, $4, $5)`,
+        [name, credits, price, input.is_active !== false, Math.trunc(Number(input.sort_order ?? 0))]);
+    }
+    return this.adminPacks();
+  }
+
+  /** Businesses with credits, sender names waiting for approval first. */
+  async adminWallets() {
+    const rows: Row[] = await this.dataSource.query(`
+      SELECT w.*, co.company_name, co.plan,
+             (SELECT COALESCE(SUM(m.credits), 0) FROM sms_message m WHERE m.company_id = w.company_id AND m.via = 'platform' AND m.created_at > NOW() - INTERVAL '30 days')::int AS used_30d
+        FROM sms_wallet w JOIN companies co ON co.id = w.company_id
+       WHERE w.balance > 0 OR w.free_used > 0 OR w.sender_status <> 'none'
+          OR EXISTS (SELECT 1 FROM sms_wallet_tx t WHERE t.company_id = w.company_id)
+          OR EXISTS (SELECT 1 FROM sms_message m WHERE m.company_id = w.company_id AND m.via = 'platform')
+       ORDER BY (w.sender_status = 'requested') DESC, w.updated_at DESC LIMIT 300`);
+    return rows.map((w) => ({
+      company_id: Number(w.company_id), company_name: w.company_name, plan: w.plan, balance: Number(w.balance), used_30d: Number(w.used_30d),
+      sender_id: w.sender_id ?? null, sender_requested: w.sender_requested ?? null, sender_status: w.sender_status, sender_note: w.sender_note ?? null,
+      sender_requested_at: w.sender_requested_at ?? null,
+    }));
+  }
+
+  async decideSender(companyId: number, input: { approve?: boolean; sender_id?: string; note?: string }) {
+    const [w] = await this.dataSource.query(`SELECT * FROM sms_wallet WHERE company_id = $1`, [companyId]);
+    if (!w) throw new NotFoundException('This business has no SMS yet.');
+    if (input.approve) {
+      const sender = String(input.sender_id ?? w.sender_requested ?? '').trim();
+      if (!SENDER.test(sender)) throw new BadRequestException('Sender name: 3–11 letters or numbers.');
+      await this.dataSource.query(`UPDATE sms_wallet SET sender_id = $2, sender_status = 'approved', sender_note = $3, updated_at = NOW() WHERE company_id = $1`,
+        [companyId, sender, String(input.note ?? '').trim().slice(0, 300) || null]);
+    } else {
+      await this.dataSource.query(`UPDATE sms_wallet SET sender_status = $2, sender_note = $3, sender_requested = NULL, updated_at = NOW() WHERE company_id = $1`,
+        [companyId, w.sender_id ? 'approved' : 'rejected', String(input.note ?? '').trim().slice(0, 300) || 'Not approved']);
+    }
+    return this.adminWallets();
+  }
+
+  async adjust(admin: AuthenticatedUser, companyId: number, input: { credits?: number; note?: string }) {
+    const credits = Math.trunc(Number(input.credits));
+    if (!credits) throw new BadRequestException('Enter the credits to add (or a minus number to take away).');
+    const [co] = await this.dataSource.query(`SELECT id FROM companies WHERE id = $1`, [companyId]);
+    if (!co) throw new NotFoundException('Company not found.');
+    await addSmsCredits(this.dataSource, companyId, credits, 'adjust', String(input.note ?? '').trim() || (credits > 0 ? 'Given by Agent Metra' : 'Taken back by Agent Metra'), null, Number(admin.id));
+    return this.adminWallets();
   }
 
   async tags(companyId: number) {

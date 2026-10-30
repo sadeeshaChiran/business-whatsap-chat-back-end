@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthService } from '../auth.service';
-import { ROLES_KEY } from '../decorators/roles.decorator';
+import { OWNER_ONLY_KEY, ROLES_KEY } from '../decorators/roles.decorator';
 import { AuthenticatedRequest } from '../interfaces/auth-request.interface';
 import type { UserRole } from '../interfaces/authenticated-user.interface';
 
@@ -35,7 +35,10 @@ export class JwtAuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (roles?.length && !roles.includes(request.user.role)) {
+    // a supervisor works like the admin, except on owner-only routes (billing, agents' passwords)
+    const ownerOnly = this.reflector.getAllAndOverride<boolean | undefined>(OWNER_ONLY_KEY, [context.getHandler(), context.getClass()]);
+    const supervisorAsAdmin = request.user.role === 'supervisor' && Boolean(roles?.includes('admin')) && !ownerOnly;
+    if (roles?.length && !roles.includes(request.user.role) && !supervisorAsAdmin) {
       throw new ForbiddenException(
         roles.includes('admin') ? 'Only the company admin can do this.' : 'You do not have access to this.',
       );

@@ -3,12 +3,11 @@ import {
   CreateDateColumn,
   Entity,
   PrimaryGeneratedColumn,
-  Unique,
   UpdateDateColumn,
 } from 'typeorm';
 
 @Entity('app_user')
-@Unique('UQ_users_email', ['email'])
+// email: unique only once confirmed (partial index uq_app_user_verified_email) and within a company
 export class User {
   @PrimaryGeneratedColumn()
   id: number;

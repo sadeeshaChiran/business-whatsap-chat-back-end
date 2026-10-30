@@ -16,6 +16,7 @@ import { TokenPack } from '../entities/token-pack.entity';
 import { PlanService } from '../plan.service';
 import { TokenQuotaService, addMonths } from '../token-quota.service';
 import type { BankDetailsDto, CheckoutDto, TokenPackDto } from './billing.dto';
+import { addSmsCredits } from '../../sms/sms-wallet';
 import { buildInvoicePdf } from './invoice-pdf';
 import { cancelPayhereSubscription, checkoutHash, payhereAmount, payhereConfig, payhereEnabled, payhereStatus, verifyNotifySignature } from './payhere';
 
@@ -102,10 +103,19 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         max_products: pkg.max_products, max_services: pkg.max_services ?? null, limits: resolveLimits(pkg), ...offerFields(pkg, perReply, num(pkg.tokens_per_month)),
       })),
       token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
+      sms_packs: await this.smsPacks(),
       bank_details: bank,
       payhere_enabled: payhereEnabled(),
       payments: payments.map((payment) => this.paymentView(payment)),
     };
+  }
+
+  /** Agent Metra SMS packs – only while Agent Metra SMS is switched on (Super admin → SMS). */
+  private async smsPacks(): Promise<Array<{ id: number; name: string; credits: number; price: number }>> {
+    const [setting] = await this.dataSource.query(`SELECT value FROM platform_setting WHERE key = 'sms'`).catch(() => []);
+    if (setting?.value?.enabled !== true) return [];
+    const rows: Array<Record<string, unknown>> = await this.dataSource.query(`SELECT id, name, credits, price FROM sms_pack WHERE is_active ORDER BY sort_order, id`).catch(() => []);
+    return rows.map((row) => ({ id: num(row.id), name: String(row.name), credits: num(row.credits), price: num(row.price) }));
   }
 
   async checkout(user: AuthenticatedUser, dto: CheckoutDto) {
@@ -115,6 +125,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     let description = '';
     let pkg: PlatformPackage | null = null;
     let pack: TokenPack | null = null;
+    let smsPackId: number | null = null;
+    let smsCredits: number | null = null;
     let offerUsed = false;
     const cycle = dto.billing_cycle ?? 'monthly';
     if (dto.kind === 'subscription') {
@@ -125,6 +137,13 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       amount = price.amount;
       offerUsed = price.offer !== null;
       description = `${pkg.name} package – ${cycle === 'yearly' ? '1 year' : '1 month'}${offerUsed ? ` (offer price, until ${price.offer!.until})` : ''}`;
+    } else if (dto.kind === 'sms_pack') {
+      const smsPack = (await this.smsPacks()).find((item) => item.id === Number(dto.sms_pack_id));
+      if (!smsPack || !(smsPack.price > 0)) throw new BadRequestException('Choose an SMS pack.');
+      smsPackId = smsPack.id;
+      smsCredits = smsPack.credits;
+      amount = smsPack.price;
+      description = `${smsPack.name} – ${smsPack.credits.toLocaleString('en-US')} SMS credits`;
     } else {
       pack = dto.token_pack_id ? await this.packRepository.findOne({ where: { id: dto.token_pack_id, is_active: true } }) : null;
       if (!pack) throw new BadRequestException('Choose a token pack.');
@@ -137,7 +156,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
 
     const payment = this.paymentRepository.create({
       company_id: companyId, kind: dto.kind, package_id: pkg?.id ?? null, billing_cycle: dto.kind === 'subscription' ? cycle : null,
-      token_pack_id: pack?.id ?? null, description, amount, currency: 'LKR', method: dto.method, status: 'pending', auto_renew: autoRenew,
+      token_pack_id: pack?.id ?? null, sms_pack_id: smsPackId, sms_credits: smsCredits, description, amount, currency: 'LKR', method: dto.method, status: 'pending', auto_renew: autoRenew,
       order_id: `AM${companyId}-${Date.now().toString(36).toUpperCase()}`, created_by_user_id: Number(user.id),
     });
 
@@ -318,6 +337,14 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           expires_at: new Date(Date.now() + pack.valid_days * 86_400_000), created_by_user_id: payment.created_by_user_id,
         }));
         await this.subscriptionRepository.update(companyId, { warned_100_at: null, warned_80_at: null });
+      }
+    }
+    if (payment.kind === 'sms_pack' && payment.sms_pack_id) {
+      const [smsPack] = await this.dataSource.query(`SELECT name, credits FROM sms_pack WHERE id = $1`, [payment.sms_pack_id]);
+      // the credits promised at checkout (the pack may have changed since)
+      const smsCredits = payment.sms_credits != null ? num(payment.sms_credits) : num(smsPack?.credits);
+      if (smsCredits > 0) {
+        await addSmsCredits(this.dataSource, companyId, smsCredits, 'buy', `Bought: ${smsPack?.name ?? 'SMS pack'} (payment #${payment.id})`, `payment-${payment.id}`, payment.created_by_user_id);
       }
     }
     this.quota.forget(companyId);

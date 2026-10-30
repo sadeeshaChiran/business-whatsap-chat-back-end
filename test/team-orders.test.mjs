@@ -37,17 +37,22 @@ test('setup: owner, an agent and a supervisor', async () => {
   assert.equal(team.data.find((m) => m.id === supervisor.id).team_role, 'supervisor');
 });
 
-test('supervisor: whole team work yes, settings / billing / channels no', async () => {
+test('supervisor: works like the admin (settings, team), but not billing / package / agents passwords', async () => {
   for (const path of ['/bot/orders', '/bot/dashboard', '/bot/team/performance', '/users/agents', '/crm/contacts', '/activity-log', '/bot/conversations']) {
     const r = await api('GET', path, { token: supervisor.token });
     assert.equal(r.status, 200, `${path}: ${r.status} ${r.text ?? JSON.stringify(r.json)}`);
   }
-  const settings = await api('PATCH', '/bot/sales-bot/settings', { token: supervisor.token, body: { tone: 'friendly' } });
-  assert.equal(settings.status, 403);
-  const company = await api('PATCH', `/company/${owner.companyId}`, { token: supervisor.token, body: { name: 'Hacked' } });
-  assert.equal(company.status, 403);
-  const addAgent = await api('POST', '/users/agents', { token: supervisor.token, body: { name: 'X', email: `x-${Date.now()}@t.lk`, password: 'Test1234pass' } });
-  assert.equal(addAgent.status, 403);
+  // Oct 31: a supervisor works like the admin – bot settings, business profile, adding agents
+  assert.equal((await api('GET', '/bot/sales-bot/settings', { token: supervisor.token })).status, 200);
+  const company = await api('PATCH', `/company/${owner.companyId}`, { token: supervisor.token, body: { name: 'Renamed by supervisor' } });
+  assert.equal(company.status, 200, company.text);
+  await sql(`UPDATE companies SET plan = 'business' WHERE id = $1`, [owner.companyId]); // room for one more agent
+  const addAgent = await api('POST', '/users/agents', { token: supervisor.token, body: { name: 'Xavier', email: `x-${Date.now()}@t.lk`, password: 'Test1234pass' } });
+  assert.equal(addAgent.status, 201, JSON.stringify(addAgent.json));
+  // the owner's only: billing / package, agents' passwords
+  assert.equal((await api('GET', '/billing/overview', { token: supervisor.token })).status, 403);
+  assert.equal((await api('PATCH', `/company/${owner.companyId}`, { token: supervisor.token, body: { plan: 'free' } })).status, 403);
+  assert.equal((await api('POST', `/users/agents/${addAgent.data.id}/reset-password`, { token: supervisor.token, body: { password: 'Another1234' } })).status, 403);
   // agents do not see the log
   assert.equal((await api('GET', '/activity-log', { token: agent.token })).status, 403);
 });

@@ -98,6 +98,8 @@ export async function createAgent(admin, label, { teamRole } = {}) {
     r = await api('POST', '/users/agents', { token: admin.token, body });
   }
   if (r.status !== 201) throw new Error(`create agent failed: ${r.status} ${JSON.stringify(r.json)}`);
+  // team members confirm their email at the first login – test agents count as confirmed
+  await sql('UPDATE app_user SET email_verified_at = NOW() WHERE id = $1', [r.data.id]);
   const session = await login(email);
   return { email, id: r.data.id, token: session.data.access_token, user: session.data.user };
 }

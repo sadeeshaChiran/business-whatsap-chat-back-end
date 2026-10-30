@@ -35,11 +35,11 @@ export class WhatsappConnectService {
     private readonly companyRepository: Repository<Company>,
   ) {}
 
-  async assertAdmin(user: Pick<AuthenticatedUser, 'id' | 'company_id'>) {
+  async assertAdmin(user: Pick<AuthenticatedUser, 'id' | 'company_id'> & { role?: AuthenticatedUser['role'] }) {
     const company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) {
       throw new ForbiddenException(
         'Only the company admin can manage channel connections.',
       );

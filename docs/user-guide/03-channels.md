@@ -176,13 +176,18 @@ In the Inbox, TikTok chats have the TikTok mark, and a **TikTok** filter button 
 
 ## SMS
 
-Send **SMS** with **your own Notify.lk account** – your sender name (for example *VORAKIDS*), your SMS credit. Good for offers, reminders and notices to customers who are not on WhatsApp or your app, and for one-off messages from a chat.
+Send **SMS** two ways:
 
-**Connect (2 minutes):** make an account at **app.notify.lk** and add credit. Ask Notify.lk for your **sender name** (until it is approved, *NotifyDEMO* only sends to your own test numbers). Copy the **User ID** and **API key** (Settings → API Keys), then **Channels → SMS** → paste them with your sender name → **Check and connect**. The page shows your **Notify.lk balance**, SMS sent in the last 30 days, and has a **test SMS** button. The API key is never shown again after saving.
+- **Agent Metra SMS credits (easiest)** – no SMS account needed. **1 credit = 1 SMS** (160 English or 70 Sinhala / Tamil letters). Your package gives **free SMS every month** (used first, not carried over); buy more in **Billing → SMS credits** (bought credits never expire). **Channels → SMS** shows the credits you can use, free left this month, bought, used, and the packs. SMS go from the shared sender name until **your own sender name** (for example *VORAKIDS*) is approved – ask for it on the same page (usually 1–3 working days; your BR may be needed). An SMS that can't be delivered gives its credit back.
+- **Your own Notify.lk account** – your sender name, your SMS credit. While it is connected, no Agent Metra credits are used.
+
+Good for offers, reminders and notices to customers who are not on WhatsApp or your app, and for one-off messages from a chat.
+
+**Own account – connect (2 minutes):** make an account at **app.notify.lk** and add credit. Ask Notify.lk for your **sender name** (until it is approved, *NotifyDEMO* only sends to your own test numbers). Copy the **User ID** and **API key** (Settings → API Keys), then **Channels → SMS** → paste them with your sender name → **Check and connect**. The page shows your **Notify.lk balance**, SMS sent in the last 30 days, and has a **test SMS** button. The API key is never shown again after saving.
 
 **Line added to every SMS** (optional): for example *Reply on WhatsApp 077 123 4567*. SMS from a sender name **can't be answered**, so tell customers where to reply.
 
-**SMS campaigns** (**Marketing → SMS campaigns**): write the message (`{name}` = the customer's first name), choose **contacts with tags**, **all contacts with a number**, or **type / paste numbers** (one per line, optionally `0771234567, Nimal`). The page counts the numbers and the SMS: **160 characters per SMS in English, 70 in Sinhala / Tamil / emoji** (longer messages are sent as 2, 3 … SMS). A phone preview shows exactly what arrives. While sending you see sent / failed / waiting, and you can **Stop**. If Notify.lk says there is no credit, the campaign stops by itself.
+**SMS campaigns** (**Marketing → SMS campaigns**): write the message (`{name}` = the customer's first name), choose **contacts with tags**, **all contacts with a number**, or **type / paste numbers** (one per line, optionally `0771234567, Nimal`). The page counts the numbers and the SMS: **160 characters per SMS in English, 70 in Sinhala / Tamil / emoji** (longer messages are sent as 2, 3 … SMS). A phone preview shows exactly what arrives. While sending you see sent / failed / waiting, and you can **Stop**. If Notify.lk says there is no credit, the campaign stops by itself. **With credits** the campaign page shows, while you write, **how many credits it uses** (exact for every person – names have different lengths), how many you have and how many are left after sending, and tips to save credits (cut a few letters to drop an SMS part, an emoji makes the whole SMS 70 letters). If you don't have enough credits it can't be sent – buy a pack or pick fewer people.
 
 **From a chat:** in the Inbox, open a chat → **⋯ → Send SMS** – it goes to the customer's mobile number (WhatsApp number, app number, or the number saved in the contact). Agents can do this for their own chats.
 

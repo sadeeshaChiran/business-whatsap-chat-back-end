@@ -81,6 +81,19 @@ export class CodeDto {
   @IsString() @Matches(/^\d{6}$/) code: string;
 }
 
+/** Team login: confirm the email (optionally fix it first). */
+export class ConfirmEmailSendDto {
+  @IsString() @Length(20, 400) verify_token: string;
+  @IsOptional() @IsEmail() @MaxLength(255) email?: string;
+}
+export class ConfirmEmailDto {
+  @IsString() @Length(20, 400) verify_token: string;
+  @IsString() @Matches(/^\d{6}$/) code: string;
+}
+
+/** A confirmed account (other than this one) already owns this email. */
+const VERIFIED_OWNER = `SELECT 1 FROM app_user WHERE LOWER(email) = $1 AND email_verified_at IS NOT NULL AND id <> $2`;
+
 /* ───────── Service ───────── */
 
 @Injectable()
@@ -171,7 +184,8 @@ export class VerificationService {
     const email = dto.email.trim().toLowerCase();
     const whatsapp = normalizeWhatsapp(dto.phone ?? dto.whatsapp ?? '');
     if (whatsapp.length < 10 || whatsapp.length > 15) throw new BadRequestException('Enter your mobile number, e.g. 077 123 4567.');
-    const [taken] = await this.dataSource.query(`SELECT 1 FROM app_user WHERE LOWER(email) = $1`, [email]);
+    // only a confirmed email belongs to someone (an agent's unconfirmed email does not block a sign-up)
+    const [taken] = await this.dataSource.query(VERIFIED_OWNER, [email, 0]);
     if (taken) throw new ConflictException('An account with this email already exists. Log in instead.');
     await this.dataSource.query(`DELETE FROM pending_registration WHERE expires_at < NOW() OR email = $1`, [email]);
     const id = randomBytes(16).toString('hex');
@@ -209,7 +223,8 @@ export class VerificationService {
     await this.check('register_whatsapp', pending.id, phoneCode);
     const { register, category } = JSON.parse(this.decrypt(pending.payload)) as { register: RegisterDto; category: string };
     await this.authService.register(register); // same account + company creation as before
-    const [user] = await this.dataSource.query(`SELECT id, company_id FROM app_user WHERE LOWER(email) = $1`, [pending.email]);
+    // the account just made (an older unconfirmed agent account may use the same email)
+    const [user] = await this.dataSource.query(`SELECT id, company_id FROM app_user WHERE LOWER(email) = $1 ORDER BY id DESC LIMIT 1`, [pending.email]);
     await this.dataSource.query(`UPDATE app_user SET email_verified_at = NOW(), whatsapp_number = $2, whatsapp_verified_at = NOW() WHERE id = $1`, [user.id, pending.whatsapp]);
     await this.dataSource.query(
       `UPDATE companies SET phone = COALESCE(NULLIF(phone, ''), $2), business_category = $3 WHERE id = $1`,
@@ -225,7 +240,7 @@ export class VerificationService {
     const [me] = await this.dataSource.query(`SELECT email FROM app_user WHERE id = $1`, [user.id]);
     if (!me) throw new UnauthorizedException();
     if (me.email.toLowerCase() === email) throw new BadRequestException('This is already your email.');
-    const [taken] = await this.dataSource.query(`SELECT 1 FROM app_user WHERE LOWER(email) = $1`, [email]);
+    const [taken] = await this.dataSource.query(`${VERIFIED_OWNER} OR (LOWER(email) = $1 AND company_id = $3 AND id <> $2)`, [email, user.id, user.company_id]);
     if (taken) throw new ConflictException('Another account already uses this email.');
     try {
       await this.authService.login({ email: me.email, password: dto.password });
@@ -237,9 +252,13 @@ export class VerificationService {
 
   async changeEmailVerify(user: AuthenticatedUser, dto: CodeDto) {
     const email = await this.check('change_email', `user-${user.id}`, dto.code);
-    const [taken] = await this.dataSource.query(`SELECT 1 FROM app_user WHERE LOWER(email) = $1 AND id <> $2`, [email, user.id]);
+    const [taken] = await this.dataSource.query(`${VERIFIED_OWNER} OR (LOWER(email) = $1 AND company_id = $3 AND id <> $2)`, [email, user.id, user.company_id]);
     if (taken) throw new ConflictException('Another account already uses this email.');
-    await this.dataSource.query(`UPDATE app_user SET email = $2, email_verified_at = NOW() WHERE id = $1`, [user.id, email]);
+    try {
+      await this.dataSource.query(`UPDATE app_user SET email = $2, email_verified_at = NOW() WHERE id = $1`, [user.id, email]);
+    } catch {
+      throw new ConflictException('Another account already uses this email.');
+    }
     // the business email follows the admin's login email
     await this.dataSource.query(`UPDATE companies SET email = '' WHERE admin_user_id = $1`, [user.id]);
     return this.authService.issueAuthResponse(Number(user.id));
@@ -264,7 +283,9 @@ export class VerificationService {
     const email = dto.email.trim().toLowerCase();
     const generic = { sent: true, message: 'If an account uses this email, a 6-digit code was sent to it.' };
     const [user] = await this.dataSource.query(
-      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1`, [email]);
+      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1
+          AND (email_verified_at IS NOT NULL OR NOT EXISTS (SELECT 1 FROM app_user o WHERE LOWER(o.email) = $1 AND o.id <> app_user.id))
+        ORDER BY (email_verified_at IS NULL), id LIMIT 1`, [email]);
     if (!user || user.access_disabled) return generic;
     try {
       const result = await this.issue('reset_password', `reset-${user.id}`, email, 'email',
@@ -276,13 +297,54 @@ export class VerificationService {
     }
   }
 
+  /* ───── Team login: an agent / supervisor confirms their email once ───── */
+
+  async confirmEmailSend(dto: ConfirmEmailSendDto) {
+    const userId = await this.authService.readEmailVerifyToken(dto.verify_token);
+    const [me] = await this.dataSource.query(`SELECT id, email, company_id, email_verified_at FROM app_user WHERE id = $1`, [userId]);
+    if (!me) throw new UnauthorizedException('Please log in again.');
+    let email = String(me.email).toLowerCase();
+    const wanted = dto.email?.trim().toLowerCase();
+    if (wanted && wanted !== email) {
+      // a wrong / made-up email: the person types their real one (it is checked by the code before it is theirs)
+      const [taken] = await this.dataSource.query(`${VERIFIED_OWNER} OR (LOWER(email) = $1 AND company_id = $3 AND id <> $2)`, [wanted, userId, me.company_id]);
+      if (taken) throw new ConflictException('This email already belongs to another account. Use your own email.');
+      await this.dataSource.query(`UPDATE app_user SET email = $2, email_verified_at = NULL WHERE id = $1`, [userId, wanted]);
+      email = wanted;
+    } else {
+      const [taken] = await this.dataSource.query(VERIFIED_OWNER, [email, userId]);
+      if (taken) throw new ConflictException('This email already belongs to another account. Enter your own email.');
+    }
+    const sent = await this.issue('confirm_email', `confirm-${userId}`, email, 'email', `Use this code to confirm your email address for ${BrandingService.current().name}.`);
+    return { email, ...sent };
+  }
+
+  async confirmEmail(dto: ConfirmEmailDto) {
+    const userId = await this.authService.readEmailVerifyToken(dto.verify_token);
+    const email = await this.check('confirm_email', `confirm-${userId}`, dto.code);
+    // the first person to confirm an email owns it
+    const [taken] = await this.dataSource.query(VERIFIED_OWNER, [email, userId]);
+    if (taken) throw new ConflictException('This email was just confirmed by another account. Enter your own email.');
+    try {
+      await this.dataSource.query(`UPDATE app_user SET email = $2, email_verified_at = NOW(), last_login_at = NOW(), is_active = TRUE WHERE id = $1`, [userId, email]);
+    } catch {
+      throw new ConflictException('This email already belongs to another account. Enter your own email.');
+    }
+    return this.authService.issueAuthResponse(userId);
+  }
+
   async forgotPasswordReset(dto: ResetPasswordDto) {
     const email = dto.email.trim().toLowerCase();
     const [user] = await this.dataSource.query(
-      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1`, [email]);
+      `SELECT id, access_disabled FROM app_user WHERE LOWER(email) = $1
+          AND (email_verified_at IS NOT NULL OR NOT EXISTS (SELECT 1 FROM app_user o WHERE LOWER(o.email) = $1 AND o.id <> app_user.id))
+        ORDER BY (email_verified_at IS NULL), id LIMIT 1`, [email]);
     if (!user || user.access_disabled) throw new BadRequestException('The code is not correct. Ask for a new code.');
     await this.check('reset_password', `reset-${user.id}`, dto.code);
     await this.authService.setPassword(Number(user.id), dto.new_password);
+    // the code proved the email is theirs (unless another account already confirmed it)
+    const [other] = await this.dataSource.query(VERIFIED_OWNER, [email, user.id]);
+    if (!other) await this.dataSource.query(`UPDATE app_user SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = $1`, [user.id]);
     return { reset: true, message: 'Your password was changed. Log in with the new password.' };
   }
 }
@@ -329,6 +391,17 @@ export class VerificationController {
   @Post('change-whatsapp/verify')
   @ApiBearerAuth() @UseGuards(JwtAuthGuard)
   changeWhatsappVerify(@CurrentUser() user: AuthenticatedUser, @Body() dto: CodeDto) { return this.service.changeWhatsappVerify(user, dto); }
+
+  /** Team login: 1) code to the email (or a corrected email)  2) code → confirmed and logged in */
+  @Post('login/confirm-email/send')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  confirmEmailSend(@Body() dto: ConfirmEmailSendDto) { return this.service.confirmEmailSend(dto); }
+
+  @Post('login/confirm-email')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  confirmEmail(@Body() dto: ConfirmEmailDto) { return this.service.confirmEmail(dto); }
 
   /** Forgot password: 1) email → code sent  2) email + code + new password */
   @Post('password/forgot')
