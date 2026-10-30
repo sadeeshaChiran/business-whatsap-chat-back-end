@@ -1,4 +1,4 @@
-import { Inject, Optional } from '@nestjs/common';
+import { ForbiddenException, Inject, Optional } from '@nestjs/common';
 import { ActivityLogService } from '../activity-log/activity-log';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -24,6 +24,8 @@ export type TeamMember = {
   is_agent_active: boolean;
   access_disabled: boolean;
   work_status: 'online' | 'offline' | 'no_need' | 'removed';
+  /** the person confirmed this email (agents do it with a code at their first login) */
+  email_confirmed: boolean;
   /** owner · supervisor (team lead) · agent */
   team_role: 'owner' | 'supervisor' | 'agent';
   last_login_at: Date | null;
@@ -65,6 +67,7 @@ export class UsersService {
       is_active: user.is_active,
       is_agent_active: Boolean(user.is_agent_active),
       access_disabled: Boolean(user.access_disabled),
+      email_confirmed: Boolean(user.email_verified_at),
       work_status: workStatus,
       team_role: adminUserId !== null && Number(user.id) === adminUserId ? 'owner' : user.team_role === 'supervisor' ? 'supervisor' : 'agent',
       last_login_at: user.last_login_at ?? null,
@@ -129,11 +132,13 @@ export class UsersService {
 
   async createAgent(companyId: number, dto: CreateAgentDto): Promise<TeamMember> {
     const normalizedEmail = dto.email.trim().toLowerCase();
+    // an email belongs to the account that confirmed it; an unconfirmed one does not block (the agent confirms it at login)
     const existing = await this.userRepository
       .createQueryBuilder('u')
       .where('LOWER(u.email) = :email', { email: normalizedEmail })
+      .andWhere('(u.email_verified_at IS NOT NULL OR u.company_id = :companyId)', { companyId })
       .getOne();
-    if (existing) throw new ConflictException('Another account already uses this email.');
+    if (existing) throw new ConflictException(Number(existing.company_id) === Number(companyId) ? 'Someone in your team already uses this email.' : 'Another account already uses this email.');
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     if (!company || !String(company.plan ?? '').trim()) {
@@ -175,6 +180,9 @@ export class UsersService {
     }
     const user = await this.userRepository.findOne({ where: { id: agentId, company_id: admin.company_id } });
     if (!user) throw new NotFoundException('Agent not found.');
+    // a supervisor manages the team, never the owner's account
+    const company = await this.companyRepository.findOne({ where: { id: admin.company_id } });
+    if (company && Number(company.admin_user_id) === Number(user.id)) throw new ForbiddenException('Only the owner can change the owner account.');
     return user;
   }
 

@@ -9,7 +9,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
 import { SuperAdminGuard } from '../super-admin.guard';
-import { AdminOnly } from '../../auth/decorators/roles.decorator';
+import { AdminOnly, OwnerOnly } from '../../auth/decorators/roles.decorator';
 import { AutoRenewDto, BankDetailsDto, CheckoutDto, PaymentsQueryDto, RejectPaymentDto, TokenPackDto } from './billing.dto';
 import { BillingService } from './billing.service';
 
@@ -21,6 +21,7 @@ type Upload = { buffer: Buffer; mimetype: string; originalname: string; size: nu
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @AdminOnly()
+@OwnerOnly()
 export class CompanyBillingController {
   constructor(private readonly billing: BillingService) {}
 

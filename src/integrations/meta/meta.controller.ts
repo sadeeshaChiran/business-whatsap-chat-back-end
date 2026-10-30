@@ -103,7 +103,7 @@ export class MetaController {
     const company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) {
       throw new ForbiddenException('Only the company admin can manage Facebook Page connections.');
     }
     return company;

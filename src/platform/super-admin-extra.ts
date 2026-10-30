@@ -190,8 +190,9 @@ export class SuperAdminExtraService {
   }
 
   async addSuperAdmin(email: string) {
-    const [user] = await this.dataSource.query(`SELECT id FROM app_user WHERE LOWER(email) = LOWER($1)`, [email.trim()]);
-    if (!user) throw new NotFoundException('No account with this email – the person must register first.');
+    // only the account that confirmed this email (another company may have typed the same email for an agent)
+    const [user] = await this.dataSource.query(`SELECT id FROM app_user WHERE LOWER(email) = LOWER($1) AND email_verified_at IS NOT NULL`, [email.trim()]);
+    if (!user) throw new NotFoundException('No confirmed account with this email – the person must register (or confirm their email) first.');
     await this.dataSource.query(`UPDATE app_user SET is_super_admin = TRUE WHERE id = $1`, [user.id]);
     this.auth.invalidateAccount(Number(user.id));
     return this.superAdmins();

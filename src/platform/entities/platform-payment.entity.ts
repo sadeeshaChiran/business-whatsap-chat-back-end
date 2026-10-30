@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
-export type PaymentKind = 'subscription' | 'token_pack';
+export type PaymentKind = 'subscription' | 'token_pack' | 'sms_pack';
 export type PaymentMethod = 'payhere' | 'bank_transfer' | 'manual';
 /**
  * pending            – created, waiting for PayHere or for the bank slip
@@ -28,6 +28,14 @@ export class PlatformPayment {
 
   @Column({ type: 'int', nullable: true })
   token_pack_id: number | null;
+
+  /** Agent Metra SMS credits */
+  @Column({ type: 'int', nullable: true })
+  sms_pack_id: number | null;
+
+  /** SMS credits promised at checkout */
+  @Column({ type: 'int', nullable: true })
+  sms_credits: number | null;
 
   @Column({ type: 'varchar', length: 255, default: '' })
   description: string;

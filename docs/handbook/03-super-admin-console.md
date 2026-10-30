@@ -62,6 +62,17 @@ Tokens and AI cost per company over N days: replies, tokens, cost, cost per repl
 - Bank details and the note shown to customers paying by transfer.
 - **Credit packs (top-ups)**: name, credits (tokens), price, valid days, active.
 
+## SMS (Agent Metra SMS credits)
+
+Businesses without their own Notify.lk account send SMS through **our Notify.lk account** and pay with **SMS credits** (1 credit = 1 SMS part: 160 GSM / 70 Unicode letters; long SMS 153 / 67 per part).
+- **Account:** User ID, API key, default sender name (e.g. *AgentMetra*) and the **on** switch. Empty fields fall back to the login-code account in `.env` (`NOTIFYLK_USER_ID`, `NOTIFYLK_API_KEY`, `NOTIFYLK_SENDER_ID`). **Check balance** asks Notify.lk; keep at least *Bought credits not used yet* in the Notify.lk balance.
+- **Free SMS per month:** per package, Packages → limit **Free SMS credits per month** (`sms_free_per_month`, empty = none). Free credits are used first and start again on the 1st (Sri Lanka time).
+- **SMS packs:** sold in Billing (bank slip / PayHere like token packs; payment kind `sms_pack`). Approving the payment adds the credits once.
+- **Sender names:** businesses ask for their own name on Channels → SMS. Register it with Notify.lk first, then **Approve** here (or **Reject** with a reason they see). Until then their SMS go from the default name.
+- **Credits ±:** give or take credits (shown in the business's history).
+- Credits are taken when each SMS is sent; an SMS Notify.lk refuses gives its credits back. A campaign that runs out of credits stops with *Out of SMS credits*. If **our** Notify.lk account fails (no balance / wrong key) the business sees "we are fixing it" and the API logs `Agent Metra SMS account: …`.
+- Tables: `sms_wallet`, `sms_wallet_tx`, `sms_pack`; `sms_message.credits / credits_free / via`; setting `platform_setting.sms`. Migration `supabase_sms_2.sql` (runs on start).
+
 ## Branding
 
 Platform name, tagline, logo, legal company name, support email / phone / WhatsApp, website, address and the brand colour. Used by the website, the user guide (`/docs`), sign-in, every company's app, emails and invoices.

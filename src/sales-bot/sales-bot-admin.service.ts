@@ -68,7 +68,7 @@ export class SalesBotAdminService {
     const companyId = Number(user.company_id);
     if (!Number.isFinite(companyId) || companyId <= 0) throw new ForbiddenException('Company not found.');
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) {
       throw new ForbiddenException('Only the company admin can manage the sales bot.');
     }
     return company;
