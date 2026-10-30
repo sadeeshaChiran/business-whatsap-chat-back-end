@@ -23,6 +23,7 @@ export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'social', label: 'Social – comments, posts & analytics', kind: 'feature', group: 'Marketing', description: 'Facebook / Instagram comment replies (AI), posting & scheduling, Page and Instagram analytics.' },
   { key: 'whatsapp_numbers', label: 'WhatsApp numbers', kind: 'number', group: 'Channels', description: 'How many WhatsApp numbers one company can connect (sales, support, wholesale …). Empty = unlimited.' },
   { key: 'credits_unlock', label: 'Bought credits open Messenger, Instagram & comments', kind: 'feature', group: 'Channels', description: 'When this package has Messenger / Instagram / Social switched off, buying credits switches them on while the credits are valid.' },
+  { key: 'sms_free_per_month', label: 'Free SMS credits per month', kind: 'number', group: 'Marketing', description: 'Agent Metra SMS: 1 credit = 1 SMS (160 English / 70 Sinhala characters). Empty or 0 = none – the business buys SMS packs.' },
   { key: 'mobile_app', label: 'Mobile app', kind: 'feature', group: 'Apps', description: 'Use the Agent Metra Android / iPhone app.' },
 ];
 

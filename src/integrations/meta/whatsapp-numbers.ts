@@ -54,7 +54,7 @@ export class WhatsappNumbersService {
 
   private async assertOwner(user: AuthenticatedUser) {
     const [company] = await this.dataSource.query(`SELECT id, admin_user_id FROM companies WHERE id = $1`, [user.company_id]);
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) throw new ForbiddenException('Only the company owner can manage WhatsApp numbers.');
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) throw new ForbiddenException('Only the company owner can manage WhatsApp numbers.');
   }
 
   /** How many numbers the package allows (null = no limit). */

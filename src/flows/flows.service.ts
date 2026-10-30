@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
+import * as XLSX from 'xlsx';
 import { DataSource } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { isChatMediaKey, publicChatMediaUrl, saveChatMedia } from '../bot-admin/chat-media.store';
@@ -72,7 +73,7 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
   private async adminCompany(user: AuthenticatedUser): Promise<number> {
     const [row] = await this.dataSource.query(`SELECT id, admin_user_id FROM companies WHERE id = $1`, [user.company_id]);
     if (!row) throw new ForbiddenException('No company.');
-    if (Number(row.admin_user_id) !== Number(user.id)) throw new ForbiddenException('Only the company admin can manage flows and forms.');
+    if (Number(row.admin_user_id) !== Number(user.id) && user.role !== 'supervisor') throw new ForbiddenException('Only the company admin can manage flows and forms.');
     return Number(row.id);
   }
 
@@ -163,7 +164,68 @@ export class FlowsService implements OnModuleInit, OnModuleDestroy {
       SELECT s.id, s.answers, s.source, s.channel, s.conversation_id, s.created_at, cu.display_name, cu.external_user_id, cu.platform
         FROM chat_form_submission s LEFT JOIN bot_channel_user cu ON cu.id = s.bot_channel_user_id
        WHERE s.form_id = $1 ORDER BY s.created_at DESC LIMIT 1000`, [id]);
-    return { form, submissions: rows.map((r: Record<string, unknown>) => ({ ...r, answers: this.displayAnswers(form.fields, r.answers as Record<string, unknown>) })) };
+    const photos = await this.chatPhotos(form.fields, rows);
+    return {
+      form,
+      submissions: rows.map((r: Record<string, unknown>) => ({
+        ...r, answers: this.displayAnswers(form.fields, r.answers as Record<string, unknown>), photos: photos.get(Number(r.id)) ?? {},
+      })),
+    };
+  }
+
+  /**
+   * Photos sent in a WhatsApp chat are stored as "meta-media:<id>": the dashboard shows them through the chat message
+   * that carried the photo (same as the Inbox). Gives { submission id → { field id → { conversation_id, message_id } } }.
+   */
+  private async chatPhotos(fields: FormField[], rows: Array<Record<string, unknown>>) {
+    const out = new Map<number, Record<string, { conversation_id: number; message_id: number }>>();
+    const wanted: Array<{ sid: number; field: string; conversation: number; media: string }> = [];
+    for (const r of rows) {
+      const answers = (r.answers ?? {}) as Record<string, unknown>;
+      for (const f of fields ?? []) {
+        const value = answers[f.id];
+        if (f.type === 'photo' && typeof value === 'string' && value.startsWith('meta-media:') && r.conversation_id) {
+          wanted.push({ sid: Number(r.id), field: f.id, conversation: Number(r.conversation_id), media: value });
+        }
+      }
+    }
+    if (!wanted.length) return out;
+    const found: Array<{ conversation_id: number; media_url: string; id: number }> = await this.dataSource.query(`
+      SELECT DISTINCT ON (conversation_id, media_url) conversation_id, media_url, id FROM bot_message
+       WHERE conversation_id = ANY($1::int[]) AND media_url = ANY($2::text[]) ORDER BY conversation_id, media_url, id DESC`,
+    [[...new Set(wanted.map((w) => w.conversation))], [...new Set(wanted.map((w) => w.media))]]);
+    const key = (c: number, m: string) => `${c}|${m}`;
+    const ids = new Map(found.map((f) => [key(Number(f.conversation_id), String(f.media_url)), Number(f.id)]));
+    for (const w of wanted) {
+      const messageId = ids.get(key(w.conversation, w.media));
+      if (!messageId) continue;
+      out.set(w.sid, { ...(out.get(w.sid) ?? {}), [w.field]: { conversation_id: w.conversation, message_id: messageId } });
+    }
+    return out;
+  }
+
+  /** All answers of a form as an Excel file (photos: a link that works for 7 days, or "photo in the chat"). */
+  async answersXlsx(user: AuthenticatedUser, id: number) {
+    const { form, submissions } = await this.submissions(user, id);
+    const fields = (form.fields ?? []) as FormField[];
+    const channel = (c: unknown) => (c === 'whatsapp' ? 'WhatsApp' : c === 'messenger' ? 'Messenger' : c === 'instagram' ? 'Instagram' : String(c ?? ''));
+    const head = ['Date', 'Customer', 'Number / ID', 'Channel', 'From', ...fields.map((f) => f.label)];
+    const lines = submissions.map((s: Record<string, any>) => [
+      new Date(s.created_at), s.display_name ?? '', s.platform === 'whatsapp' && s.external_user_id ? `+${s.external_user_id}` : s.external_user_id ?? '',
+      channel(s.channel), s.source === 'link' ? 'Form page' : 'Chat',
+      ...fields.map((f) => {
+        const v = s.answers?.[f.id];
+        if (f.type === 'photo' && typeof v === 'string' && v.startsWith('meta-media:')) return 'Photo in the chat';
+        const text = Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v);
+        return /^[=+\-@]/.test(text) ? `'${text}` : text; // never a spreadsheet formula from a customer
+      }),
+    ]);
+    const sheet = XLSX.utils.aoa_to_sheet([head, ...lines], { cellDates: true });
+    sheet['!cols'] = head.map((h, i) => ({ wch: i === 0 ? 18 : Math.min(40, Math.max(12, String(h).length + 2)) }));
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Answers');
+    const buffer: Buffer = XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+    return { buffer, fileName: `${String(form.name).replace(/[^\w-]+/g, '_') || 'form'}-answers.xlsx` };
   }
 
   /** photo answers are stored as media keys – give the dashboard a link */
