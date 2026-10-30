@@ -29,6 +29,7 @@ import { SocialModule } from './social/social.controller';
 import { TiktokModule } from './integrations/tiktok/tiktok.controller';
 import { TelegramModule } from './integrations/telegram/telegram.controller';
 import { CustomerAppModule } from './customer-app/customer-app.controller';
+import { SmsModule } from './sms/sms.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
 import { PublicHelpModule } from './public-help/public-help';
 import { PublicDemoModule } from './public-demo/public-demo';
@@ -73,6 +74,7 @@ if (!supabaseDatabaseUrl) {
     TiktokModule,
     TelegramModule,
     CustomerAppModule,
+    SmsModule,
     SalesBotModule,
     ActivityLogModule,
     RealtimeModule,

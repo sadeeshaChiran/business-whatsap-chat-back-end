@@ -78,6 +78,7 @@ const MIGRATION_FILES = [
   'supabase_customer_app_4.sql',
   'supabase_customer_app_5.sql',
   'supabase_customer_app_6.sql',
+  'supabase_sms_1.sql',
 ] as const;
 
 function migrationDir(): string | null {
