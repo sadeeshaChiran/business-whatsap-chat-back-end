@@ -45,7 +45,7 @@ export class PlatformModule implements OnModuleInit {
     if (!emails.length) return;
     try {
       const result = await this.dataSource.query(
-        `UPDATE app_user SET is_super_admin = TRUE WHERE LOWER(email) = ANY($1) AND is_super_admin = FALSE`, [emails]);
+        `UPDATE app_user SET is_super_admin = TRUE WHERE LOWER(email) = ANY($1) AND is_super_admin = FALSE AND email_verified_at IS NOT NULL`, [emails]);
       this.logger.log(`super admins from SUPER_ADMIN_EMAILS: ${emails.join(', ')} (${Array.isArray(result) ? result[1] ?? 0 : 0} updated)`);
     } catch (error) {
       this.logger.warn(`could not set super admins: ${error instanceof Error ? error.message : String(error)}`);

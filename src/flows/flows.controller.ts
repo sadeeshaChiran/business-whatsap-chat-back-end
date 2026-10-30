@@ -1,10 +1,10 @@
-import { Body, Controller, Delete, Get, Module, Param, ParseIntPipe, Patch, Post, Query, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Module, Param, ParseIntPipe, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsObject, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { memoryStorage } from 'multer';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -107,6 +107,13 @@ export class FlowsController {
   @Patch('forms/:id') updateForm(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: FormDto) { return this.flows.updateForm(user, id, dto); }
   @Delete('forms/:id') deleteForm(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.flows.deleteForm(user, id); }
   @Get('forms/:id/submissions') submissions(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.flows.submissions(user, id); }
+  @Get('forms/:id/answers.xlsx')
+  async answersXlsx(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+    const file = await this.flows.answersXlsx(user, id);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"`);
+    res.send(file.buffer);
+  }
 
   @Get(':id') get(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.flows.flow(user, id); }
   @Patch(':id') update(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: FlowDto) { return this.flows.updateFlow(user, id, dto); }

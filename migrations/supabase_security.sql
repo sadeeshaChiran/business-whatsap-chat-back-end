@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS user_notification_read (
 
 -- Speed: lookups used on every request / every inbox refresh
 CREATE INDEX IF NOT EXISTS idx_app_user_company ON app_user (company_id);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_app_user_email_lower ON app_user (LOWER(email));
+-- (Oct 2026) one account per email is now: one CONFIRMED account per email - see supabase_team_email.sql
 CREATE INDEX IF NOT EXISTS idx_bot_channel_user_company ON bot_channel_user (company_id);
 CREATE INDEX IF NOT EXISTS idx_bot_conversation_channel_user ON bot_conversation (bot_channel_user_id);
 CREATE INDEX IF NOT EXISTS idx_bot_conversation_agent_status ON bot_conversation (assigned_agent_id, status);

@@ -140,8 +140,9 @@ export class AgentRoutingService {
       .orderBy('u.id', 'ASC')
       .getMany();
 
+    // the owner and supervisors watch every chat – new chats are shared only between agents
     let filtered = agents.filter(
-      (agent) => adminUserId === null || Number(agent.id) !== adminUserId,
+      (agent) => (adminUserId === null || Number(agent.id) !== adminUserId) && agent.team_role !== 'supervisor',
     );
 
     if (excludeAgentId !== undefined) {

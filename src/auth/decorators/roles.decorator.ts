@@ -11,3 +11,10 @@ export const AdminOnly = () => Roles('admin');
 
 /** Company owner or supervisor (team lead). */
 export const ManagerOnly = () => Roles('admin', 'supervisor');
+
+export const OWNER_ONLY_KEY = 'agent_metra_owner_only';
+/**
+ * The company owner only – a supervisor (who otherwise works like the admin) can't: billing / package, agents' passwords.
+ * Use together with @AdminOnly().
+ */
+export const OwnerOnly = () => SetMetadata(OWNER_ONLY_KEY, true);

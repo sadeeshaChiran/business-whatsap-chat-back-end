@@ -2,8 +2,8 @@ import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CheckoutDto {
-  @IsIn(['subscription', 'token_pack'])
-  kind: 'subscription' | 'token_pack';
+  @IsIn(['subscription', 'token_pack', 'sms_pack'])
+  kind: 'subscription' | 'token_pack' | 'sms_pack';
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   package_id?: number;
@@ -13,6 +13,10 @@ export class CheckoutDto {
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   token_pack_id?: number;
+
+  /** Agent Metra SMS credits */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1)
+  sms_pack_id?: number;
 
   @IsIn(['payhere', 'bank_transfer'])
   method: 'payhere' | 'bank_transfer';

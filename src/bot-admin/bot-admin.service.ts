@@ -418,7 +418,8 @@ export class BotAdminService {
 
   private async assertAdminAccess(user: AuthenticatedUser) {
     if (user.role) {
-      if (user.role !== 'admin') throw new ForbiddenException('Only the company admin can do this.');
+      // a supervisor works like the admin
+      if (user.role !== 'admin' && user.role !== 'supervisor') throw new ForbiddenException('Only the company admin can do this.');
       return;
     }
     const company = await this.getCompanyForUser(user);
@@ -4786,24 +4787,33 @@ export class BotAdminService {
   }
 
   /** Who wrote each note (admin / agent / bot) and which agent the customer belongs to now. */
-  private async enrichNotes<T extends { bot_channel_user_id: number; created_by_user_id: number | null; created_by_name: string | null }>(
+  private async enrichNotes<T extends { id: number; bot_channel_user_id: number; created_by_user_id: number | null; created_by_name: string | null; created_at?: string | null }>(
     companyId: number, notes: T[],
-  ): Promise<Array<T & { author_role: 'admin' | 'agent' | 'bot'; assigned_agent: { id: number; name: string } | null }>> {
+  ): Promise<Array<T & { author_role: 'admin' | 'agent' | 'bot'; assigned_agent: { id: number; name: string } | null; conversation_id: number | null }>> {
     if (!notes.length) return [];
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     const adminId = Number(company?.admin_user_id ?? 0);
     const ids = [...new Set(notes.map((note) => Number(note.bot_channel_user_id)))];
-    const owners: Array<{ channel_user_id: number; agent_id: number | null; agent_name: string | null }> = await this.conversationRepository.query(
-      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS channel_user_id, c.assigned_agent_id AS agent_id, u.name AS agent_name
+    const owners: Array<{ channel_user_id: number; agent_id: number | null; agent_name: string | null; conversation_id: number }> = await this.conversationRepository.query(
+      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS channel_user_id, c.assigned_agent_id AS agent_id, u.name AS agent_name, c.id AS conversation_id
          FROM bot_conversation c LEFT JOIN app_user u ON u.id = c.assigned_agent_id
         WHERE c.bot_channel_user_id = ANY($1::int[]) ORDER BY c.bot_channel_user_id, c.id DESC`, [ids]);
     const ownerOf = new Map(owners.map((row) => [Number(row.channel_user_id), row]));
+    // the chat the note was written in: the customer's conversation that had started by the time of the note
+    const atNote: Array<{ note_id: number; conversation_id: number }> = await this.conversationRepository.query(
+      `SELECT n.note_id, (SELECT c.id FROM bot_conversation c WHERE c.bot_channel_user_id = n.cu AND c.created_at <= n.at + INTERVAL '1 minute'
+                            ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS conversation_id
+         FROM unnest($1::int[], $2::int[], $3::timestamptz[]) AS n(note_id, cu, at)`,
+      [notes.map((note) => Number(note.id)), notes.map((note) => Number(note.bot_channel_user_id)), notes.map((note) => note.created_at ?? new Date().toISOString())]).catch(() => []);
+    const chatOfNote = new Map(atNote.filter((row) => row.conversation_id).map((row) => [Number(row.note_id), Number(row.conversation_id)]));
     return notes.map((note) => {
       const owner = ownerOf.get(Number(note.bot_channel_user_id));
       const role = note.created_by_user_id == null ? 'bot' : Number(note.created_by_user_id) === adminId ? 'admin' : 'agent';
       return {
         ...note, author_role: role,
         assigned_agent: owner?.agent_id ? { id: Number(owner.agent_id), name: owner.agent_name || `Agent #${owner.agent_id}` } : null,
+        // "Open chat" goes to the chat the note was written in (else the customer's latest chat)
+        conversation_id: chatOfNote.get(Number(note.id)) ?? (owner?.conversation_id ? Number(owner.conversation_id) : null),
       };
     });
   }
@@ -4980,8 +4990,8 @@ export class BotAdminService {
       throw new NotFoundException('Note not found.');
     }
     const { isAdmin } = await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
-    if (!isAdmin && Number(note.created_by_user_id) !== Number(user.id)) {
-      throw new ForbiddenException('You can only delete your own notes.');
+    if (!isAdmin) {
+      throw new ForbiddenException('Only the admin or a supervisor can delete notes.');
     }
     await this.customerNoteRepository.remove(note);
     return { id: noteId, removed: true };
@@ -4993,7 +5003,7 @@ export class BotAdminService {
     noteId: number,
     checked: boolean,
   ) {
-    await this.assertManagerAccess(user);
+    // agents tick the notes of their own customers too (access is checked below)
     const companyId = this.requireUserCompanyId(user);
     const note = await this.customerNoteRepository
       .createQueryBuilder('note')
@@ -5005,6 +5015,7 @@ export class BotAdminService {
     if (!note) {
       throw new NotFoundException('Note not found.');
     }
+    await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
 
     note.checked_by_admin = checked;
     note.checked_at = checked ? new Date() : null;

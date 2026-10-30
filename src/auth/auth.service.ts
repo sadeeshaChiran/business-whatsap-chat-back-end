@@ -103,8 +103,9 @@ export class AuthService {
   /** Creates the company + its admin account. */
   async register(registerDto: RegisterDto) {
     const email = registerDto.email.trim().toLowerCase();
+    // only a confirmed email belongs to someone (an agent's unconfirmed email does not block it)
     const existingUser = await this.findByEmail(email);
-    if (existingUser) throw new ConflictException('An account with this email already exists. Log in instead.');
+    if (existingUser?.email_verified_at) throw new ConflictException('An account with this email already exists. Log in instead.');
 
     const industry = await this.getRegistrationIndustry();
     const savedCompany = await this.companyRepository.save(
@@ -150,11 +151,17 @@ export class AuthService {
 
   async login(loginDto: LoginDto) {
     const email = loginDto.email.trim().toLowerCase();
-    const user = await this.userRepository
+    // the same email can sit on more than one account until someone confirms it: the confirmed one first, then by password
+    const candidates = await this.userRepository
       .createQueryBuilder('u')
       .addSelect(['u.failed_login_count', 'u.locked_until'])
       .where('LOWER(u.email) = :email', { email })
-      .getOne();
+      .orderBy('u.email_verified_at IS NULL', 'ASC')
+      .addOrderBy('u.id', 'ASC')
+      .getMany();
+    const user = candidates.length > 1
+      ? candidates.find((row) => this.verifyPassword(loginDto.password, row.password_hash)) ?? candidates[0]
+      : candidates[0];
 
     if (!user) {
       // same work as a real check so response time does not reveal which emails exist
@@ -179,6 +186,12 @@ export class AuthService {
     const company = await this.resolveCompanyProfile(user);
     this.assertCanSignIn(user, company);
 
+    // agents / supervisors confirm their email with a code the first time (the admin may have typed a wrong one)
+    if (this.mustConfirmEmail(user, company)) {
+      await this.userRepository.update(user.id, { failed_login_count: 0, locked_until: null });
+      return { email_verification_required: true, verify_token: this.emailVerifyToken(Number(user.id), Number(user.token_version ?? 0)), email: user.email, name: user.name };
+    }
+
     // Logging in brings an agent back to "available" (work status), and clears failed attempts.
     await this.userRepository.update(user.id, {
       is_active: true,
@@ -193,7 +206,12 @@ export class AuthService {
   /** "Sign in with Google" for existing accounts. New workspaces must sign up with email + WhatsApp codes. */
   async googleAuth(googleAuthDto: GoogleAuthDto) {
     const googleUser = await this.verifyGoogleCredential(googleAuthDto.credential);
-    const user = await this.findByEmail(googleUser.email.trim().toLowerCase());
+    const user = await this.soleOrConfirmed(googleUser.email.trim().toLowerCase());
+    // Google confirmed the email: it is this person's now (when no other account confirmed it)
+    if (user && !user.email_verified_at) {
+      const [other] = await this.userRepository.query(`SELECT 1 FROM app_user WHERE LOWER(email) = $1 AND email_verified_at IS NOT NULL AND id <> $2`, [user.email.toLowerCase(), user.id]);
+      if (!other) { await this.userRepository.update(user.id, { email_verified_at: new Date() }); user.email_verified_at = new Date(); }
+    }
     if (!user) {
       throw new UnauthorizedException(`No ${BrandingService.current().name} account uses this Google email. Sign up first.`);
     }
@@ -286,11 +304,55 @@ export class AuthService {
     return this.buildAuthResponse(user, company);
   }
 
+  /** The account with this email: the confirmed one when there is one. */
   private async findByEmail(email: string) {
     return this.userRepository
       .createQueryBuilder('u')
       .where('LOWER(u.email) = :email', { email: email.toLowerCase() })
+      .orderBy('u.email_verified_at IS NULL', 'ASC')
+      .addOrderBy('u.id', 'ASC')
       .getOne();
+  }
+
+  /**
+   * For flows that prove the email (Google, reset code): the account that confirmed it, or – when nobody has – the only
+   * account with it. Several unconfirmed accounts share it → none (we can't know which business is theirs).
+   */
+  private async soleOrConfirmed(email: string) {
+    const rows = await this.userRepository.createQueryBuilder('u').where('LOWER(u.email) = :email', { email: email.toLowerCase() })
+      .orderBy('u.email_verified_at IS NULL', 'ASC').addOrderBy('u.id', 'ASC').getMany();
+    if (rows[0]?.email_verified_at) return rows[0];
+    return rows.length === 1 ? rows[0] : null;
+  }
+
+  /* ───── Team emails: an agent / supervisor confirms their email once, at login ───── */
+
+  /** Agents and supervisors whose email is not confirmed yet (owners confirm at sign-up; super admins are ours). */
+  mustConfirmEmail(user: User, company: Company | null) {
+    if (user.email_verified_at) return false;
+    if (!company || Number(company.admin_user_id) === Number(user.id)) return false;
+    return String(process.env.TEAM_EMAIL_VERIFICATION ?? 'true').trim().toLowerCase() !== 'false';
+  }
+
+  /** A short token (30 minutes) that only allows confirming the email of this account. */
+  emailVerifyToken(userId: number, tokenVersion = 0) {
+    // tv: a password change / sign-out-everywhere makes the token useless
+    const body = Buffer.from(JSON.stringify({ uid: userId, tv: tokenVersion, purpose: 'confirm_email', exp: Math.floor(Date.now() / 1000) + 30 * 60 })).toString('base64url');
+    return `${body}.${this.signContent(`confirm_email.${body}`)}`;
+  }
+
+  /** The account of a confirm-email token: still valid, same password / sessions, not confirmed yet, allowed to sign in. */
+  async readEmailVerifyToken(token: string): Promise<number> {
+    const [body, signature] = String(token ?? '').split('.');
+    if (!body || !signature || !this.isValidSignature(`confirm_email.${body}`, signature)) throw new UnauthorizedException('Please log in again.');
+    let payload: { uid?: number; tv?: number; purpose?: string; exp?: number };
+    try { payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); } catch { throw new UnauthorizedException('Please log in again.'); }
+    if (payload.purpose !== 'confirm_email' || !payload.uid || !payload.exp || payload.exp < Date.now() / 1000) throw new UnauthorizedException('This took too long. Please log in again.');
+    const user = await this.userRepository.findOne({ where: { id: Number(payload.uid) } });
+    if (!user || Number(user.token_version ?? 0) !== Number(payload.tv ?? 0)) throw new UnauthorizedException('Please log in again.');
+    if (user.email_verified_at) throw new UnauthorizedException('Your email is already confirmed. Log in again.');
+    this.assertCanSignIn(user, await this.resolveCompanyProfile(user));
+    return Number(user.id);
   }
 
   private async resolveCompanyProfile(user: User): Promise<Company | null> {
