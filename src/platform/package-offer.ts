@@ -59,7 +59,14 @@ export function priceFor(pkg: Parameters<typeof activeOffer>[0], cycle: Cycle, n
 export function offerFields(pkg: Parameters<typeof activeOffer>[0], tokensPerReply: number, tokensPerMonth: number) {
   return {
     offer: activeOffer(pkg),
-    /** rough number of AI replies the monthly tokens give (shown as "≈ 2,500 AI replies") */
-    approx_replies: tokensPerReply > 0 ? Math.round(Number(tokensPerMonth || 0) / tokensPerReply / 10) * 10 : null,
+    /** AI replies the monthly tokens give ("≈ 2,000 replies") – rounded DOWN to a safe round number, so a shop never gets fewer than shown */
+    approx_replies: tokensPerReply > 0 ? safeReplies(Number(tokensPerMonth || 0) / tokensPerReply) : null,
   };
+}
+
+/** Round a reply estimate down: under 1,000 to 50s, under 10,000 to 100s, above to 500s. */
+export function safeReplies(raw: number): number {
+  const n = Math.max(0, Math.floor(raw));
+  const step = n < 1000 ? 50 : n < 10000 ? 100 : 500;
+  return Math.floor(n / step) * step;
 }

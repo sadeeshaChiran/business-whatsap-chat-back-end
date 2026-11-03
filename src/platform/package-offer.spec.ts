@@ -1,4 +1,4 @@
-import { activeOffer, offerFields, priceFor, sriLankaToday } from './package-offer';
+import { activeOffer, offerFields, safeReplies, priceFor, sriLankaToday } from './package-offer';
 
 const pkg = (over: Record<string, unknown> = {}) => ({
   price_monthly: 10000, price_yearly: 100000, offer_price_monthly: 7490 as number | null, offer_price_yearly: null as number | null,
@@ -30,7 +30,11 @@ describe('package offers', () => {
     expect(activeOffer(pkg({ offer_until: new Date('2026-12-31T00:00:00Z') as unknown as string }), now)?.until).toBe('2026-12-31');
   });
 
-  it('shows a rounded reply count', () => {
+  it('shows a reply count rounded down to a safe number', () => {
     expect(offerFields(pkg({ offer_until: null }), 7500, 18_750_000)).toEqual({ offer: null, approx_replies: 2500 });
+    expect(offerFields(pkg({ offer_until: null }), 18000, 15_000_000).approx_replies).toBe(800);   // 833 -> 800
+    expect(offerFields(pkg({ offer_until: null }), 18000, 82_500_000).approx_replies).toBe(4500);  // 4583 -> 4500
+    expect(offerFields(pkg({ offer_until: null }), 18000, 262_500_000).approx_replies).toBe(14500); // 14583 -> 14500
+    expect(safeReplies(249.9)).toBe(200);
   });
 });
