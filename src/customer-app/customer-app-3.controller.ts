@@ -9,6 +9,7 @@ import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
 import { CustomerAppService } from './customer-app.service';
@@ -145,7 +146,8 @@ export class CustomerAppPart3Controller {
 @Controller('customer-app')
 @ApiTags('Customer app')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('customer_app') // hidden feature: switched on per company in Super admin
 export class CustomerAppPart3BusinessController {
   constructor(
     private readonly app: CustomerAppService,

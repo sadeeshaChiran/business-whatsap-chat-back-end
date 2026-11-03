@@ -44,6 +44,20 @@ export class CompanySubscription {
   @Column({ type: 'varchar', length: 60, nullable: true })
   payhere_subscription_id: string | null;
 
+  /** PayPal subscription that renews the package (auto-renew) */
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  paypal_subscription_id: string | null;
+
+  /** Payments.lk saved card that renews the package (auto-renew), and the tries of the current renewal */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  plk_card_id: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  plk_renew_attempts: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  plk_renew_last_at: Date | null;
+
   /** renewal reminders (bank transfer / no auto-renew) */
   @Column({ type: 'timestamptz', nullable: true })
   reminded_7_at: Date | null;
