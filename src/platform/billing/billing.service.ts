@@ -26,6 +26,8 @@ type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; si
 const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 const rs = (value: number) => `Rs ${num(value).toLocaleString('en-LK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 type Row = Record<string, any>;
+export const PAYMENT_METHODS = ['paymentslk', 'paypal', 'bank_transfer', 'payhere'] as const;
+export type PaymentMethodSwitch = (typeof PAYMENT_METHODS)[number];
 type PaypalSetting = { rate_mode: 'auto' | 'fixed'; fixed_rate: number | null; markup_percent: number; last_rate?: number | null; last_rate_at?: string | null; products?: Record<string, string>; plans?: Record<string, string> };
 
 /**
@@ -110,9 +112,10 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       token_packs: packs.map((pack) => ({ id: pack.id, name: pack.name, tokens: num(pack.tokens), credits: credits(num(pack.tokens)), price: num(pack.price), valid_days: pack.valid_days })),
       sms_packs: await this.smsPacks(companyId),
       bank_details: bank,
-      payhere_enabled: payhereEnabled(),
-      paypal: await this.paypalOffer(),
-      paymentslk_enabled: paymentsLkEnabled(),
+      payhere_enabled: (await this.methodOn('payhere')),
+      paypal: (await this.methodOn('paypal')) ? await this.paypalOffer() : { enabled: false, rate: null, markup_percent: 0 },
+      paymentslk_enabled: await this.methodOn('paymentslk'),
+      bank_transfer_enabled: await this.methodOn('bank_transfer'),
       payments: payments.map((payment) => this.paymentView(payment)),
     };
   }
@@ -158,6 +161,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       amount = num(pack.price);
       description = `${pack.name} – ${Math.round((num(pack.tokens) / (await this.planService.tokensPerCredit())) * 10) / 10} AI credits`;
     }
+    // a way of paying switched off in Super admin (or without its keys) cannot be used
+    if (!(await this.methodOn(dto.method))) throw new BadRequestException('This way of paying is not available. Please choose another one.');
     if (dto.method === 'payhere' && !payhereEnabled()) throw new BadRequestException('Card payments are not available yet. Please use bank transfer.');
     if (dto.method === 'paypal' && !paypalEnabled()) throw new BadRequestException('PayPal is not available yet. Please use bank transfer.');
     if (dto.method === 'paymentslk' && !paymentsLkEnabled()) throw new BadRequestException('Card payments are not available yet. Please use bank transfer.');
@@ -527,6 +532,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
       notify_url: config.apiBase ? `${config.apiBase}/public/payhere/notify` : '(set PUBLIC_API_BASE_URL)',
       app_public_url: config.appBase || '(set APP_PUBLIC_URL)',
       paypal: await this.paypalAdminView(),
+      payment_methods: await this.methodsView(),
       paymentslk: (() => {
         const c = paymentsLkConfig();
         return { enabled: paymentsLkEnabled(), mode: c.key ? (c.live ? 'live' : 'sandbox') : null, webhook_set: Boolean(c.webhookSecret),
@@ -1091,5 +1097,39 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     } else {
       await this.notify(companyId, 'HIGH', 'Card renewal did not go through', `Your saved card could not be charged (${reason}). We try again tomorrow – or renew in Billing now.`);
     }
+  }
+
+  /* ───────────────────────── Ways to pay (Super admin on / off) ───────────────────────── */
+
+  /** The super admin switches (all on by default – nothing changes until someone switches one off). */
+  private async methodSwitches(): Promise<Record<PaymentMethodSwitch, boolean>> {
+    const row = await this.settingRepository.findOne({ where: { key: 'payment_methods' } });
+    const v = (row?.value ?? {}) as Record<string, unknown>;
+    return Object.fromEntries(PAYMENT_METHODS.map((m) => [m, v[m] !== false])) as Record<PaymentMethodSwitch, boolean>;
+  }
+
+  /** Keys / settings in place for this way of paying (secrets stay in the server .env). */
+  private methodReady(method: PaymentMethodSwitch): boolean {
+    return method === 'paymentslk' ? paymentsLkEnabled() : method === 'paypal' ? paypalEnabled() : method === 'payhere' ? payhereEnabled() : true;
+  }
+
+  /** Shown to businesses = switched on AND ready. */
+  async methodOn(method: string): Promise<boolean> {
+    if (!(PAYMENT_METHODS as readonly string[]).includes(method)) return false;
+    return (await this.methodSwitches())[method as PaymentMethodSwitch] && this.methodReady(method as PaymentMethodSwitch);
+  }
+
+  private async methodsView() {
+    const switches = await this.methodSwitches();
+    const label: Record<PaymentMethodSwitch, string> = { paymentslk: 'Card (Payments.lk)', paypal: 'PayPal', bank_transfer: 'Bank transfer', payhere: 'Card (PayHere)' };
+    return PAYMENT_METHODS.map((m) => ({ key: m, label: label[m], on: switches[m], ready: this.methodReady(m), shown: switches[m] && this.methodReady(m) }));
+  }
+
+  async setPaymentMethods(input: Partial<Record<PaymentMethodSwitch, boolean>>) {
+    const next = { ...(await this.methodSwitches()) };
+    for (const m of PAYMENT_METHODS) if (typeof input[m] === 'boolean') next[m] = input[m] as boolean;
+    if (!PAYMENT_METHODS.some((m) => next[m] && this.methodReady(m))) throw new BadRequestException('Keep at least one way of paying on (and set up) – otherwise nobody can pay.');
+    await this.settingRepository.save({ key: 'payment_methods', value: next });
+    return this.billingSettings();
   }
 }

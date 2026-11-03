@@ -668,6 +668,48 @@ export class BotAdminService {
     }
     return { id: saved.id, lead_stage: saved.lead_stage, lead_stage_manual: true };
   }
+  /* ── System messages: OTP / verification codes and other service senders (admins only, never agents, no AI) ── */
+
+  async listSystemMessages(user: AuthenticatedUser) {
+    await this.assertManagerAccess(user);
+    const rows: Array<Record<string, any>> = await this.messageRepository.query(`
+      SELECT cu.id AS channel_user_id, cu.external_user_id AS phone, cu.display_name,
+             c.id AS conversation_id, last.content AS last_text, last.created_at AS last_at,
+             (SELECT COUNT(*)::int FROM bot_message m2 JOIN bot_conversation c2 ON c2.id = m2.conversation_id WHERE c2.bot_channel_user_id = cu.id) AS messages
+        FROM bot_channel_user cu
+        JOIN LATERAL (SELECT id FROM bot_conversation WHERE bot_channel_user_id = cu.id ORDER BY id DESC LIMIT 1) c ON TRUE
+        LEFT JOIN LATERAL (SELECT content, created_at FROM bot_message WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) last ON TRUE
+       WHERE cu.company_id = $1 AND cu.system_kind = 'system'
+       ORDER BY last.created_at DESC NULLS LAST LIMIT 200`, [Number(user.company_id)]);
+    return rows.map((r) => ({ ...r, channel_user_id: Number(r.channel_user_id), conversation_id: Number(r.conversation_id), messages: Number(r.messages) }));
+  }
+
+  async systemMessages(user: AuthenticatedUser, channelUserId: number) {
+    await this.assertManagerAccess(user);
+    const owner = await this.channelUserRepository.findOne({ where: { id: channelUserId, company_id: Number(user.company_id) } });
+    if (!owner || owner.system_kind !== 'system') throw new NotFoundException('Not found.');
+    const rows: Array<Record<string, any>> = await this.messageRepository.query(`
+      SELECT m.id, m.direction, m.content, m.message_type, m.media_url, m.created_at
+        FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id
+       WHERE c.bot_channel_user_id = $1 ORDER BY m.id DESC LIMIT 200`, [channelUserId]);
+    return { phone: owner.external_user_id, display_name: owner.display_name, messages: rows.reverse() };
+  }
+
+  /** Inbox ⋯ "Move to system messages" (true) / System messages "Not a system message" (false). */
+  async setConversationSystem(user: AuthenticatedUser, conversationId: number, system: boolean) {
+    await this.assertManagerAccess(user);
+    const conversation = await this.conversationRepository.findOne({ where: { id: conversationId }, relations: ['channelUser'] });
+    if (!conversation?.channelUser || Number(conversation.channelUser.company_id) !== Number(user.company_id)) throw new NotFoundException('Conversation not found.');
+    await this.channelUserRepository.update(conversation.channelUser.id, { system_kind: system ? 'system' : 'normal' });
+    if (system) {
+      // off every agent's list, and the AI stays quiet
+      await this.conversationRepository.query(
+        `UPDATE bot_conversation SET assigned_agent_id = NULL, status = CASE WHEN LOWER(status) = 'closed' THEN status ELSE 'open' END WHERE bot_channel_user_id = $1`,
+        [conversation.channelUser.id]);
+    }
+    return { conversation_id: conversationId, system };
+  }
+
   async getUnassignedConversations(user: AuthenticatedUser) {
     await this.assertManagerAccess(user);
     return this.agentRoutingService.getUnassignedConversations(user.company_id);
@@ -1810,6 +1852,7 @@ export class BotAdminService {
       .createQueryBuilder('conversation')
       .innerJoinAndSelect('conversation.channelUser', 'channelUser')
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
+      .andWhere("COALESCE(channelUser.system_kind, '') <> 'system'") // OTP / service senders: Inbox → System messages
       .andWhere(agentId ? 'CAST(conversation.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)' : '1=1', { agentId })
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('conversation.id', 'DESC')
@@ -2009,7 +2052,7 @@ export class BotAdminService {
       this.channelUserRepository.find({
         where: { company_id: companyId },
         relations: ['conversations'],
-      }),
+      }).then((list) => list.filter((cu) => cu.system_kind !== 'system')), // OTP / service senders are not contacts
     ]);
 
     const mapChannelUser = (channelUser: BotChannelUser): CompanyContactChannelUser => ({

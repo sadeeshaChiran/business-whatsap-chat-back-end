@@ -1,3 +1,4 @@
+import { looksLikeServiceMessage } from '../../agent-routing/system-message';
 import { MarketingHook } from '../../common/marketing-hook';
 import { isTestPhone, testSendResult } from '../../common/test-phone';
 import { FlowHook } from '../../common/flow-hook';
@@ -242,7 +243,13 @@ export class WhatsappService {
             provider_message_id: normalized.message_id?.trim() || undefined,
           }
         : undefined,
+      { serviceMessage: looksLikeServiceMessage(row?.content) },
     );
+
+    // OTP / service messages from other companies: kept for admins only – no flows, ads, AI or agent
+    if (routing.system) {
+      return { accepted: true, routed: true, system: true, company_id: Number(channel.company_id), provider: normalized.provider, normalized, agent_routing: routing };
+    }
 
     // several numbers per company: remember which one this customer wrote to (never blocks the message)
     if (routing.conversationId && !routing.duplicate) {

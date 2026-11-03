@@ -64,3 +64,11 @@ export class PaypalRateDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(1) fixed_rate?: number | null;
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0) markup_percent?: number;
 }
+
+/** Super admin: which ways of paying businesses see (each still needs its keys in .env). */
+export class PaymentMethodsDto {
+  @IsOptional() @IsBoolean() paymentslk?: boolean;
+  @IsOptional() @IsBoolean() paypal?: boolean;
+  @IsOptional() @IsBoolean() bank_transfer?: boolean;
+  @IsOptional() @IsBoolean() payhere?: boolean;
+}

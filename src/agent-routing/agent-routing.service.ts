@@ -753,6 +753,7 @@ export class AgentRoutingService {
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
         companyId: Number(companyId),
       })
+      .andWhere("COALESCE(channelUser.system_kind, '') <> 'system'")
       .andWhere('LOWER(c.status) <> :closed', { closed: 'closed' })
       .andWhere(`(LOWER(c.status) <> 'active' OR (
         c.assigned_agent_id IS NOT NULL
@@ -973,11 +974,14 @@ export class AgentRoutingService {
     phone: string,
     displayName?: string,
     inbound?: InboundWhatsAppMessage,
+    opts: { serviceMessage?: boolean } = {},
   ): Promise<{
     conversationId: number | null;
     assignedAgentId: number | null;
     status: string;
     duplicate?: boolean;
+    /** OTP / service sender: saved for admins only – no agent, no notification, no AI */
+    system?: boolean;
   }> {
     const normalizedPhone = this.normalizePhone(phone);
     if (!normalizedPhone) {
@@ -1029,6 +1033,8 @@ export class AgentRoutingService {
           bot_enabled: false,
           manual_mode: false,
           last_seen_at: new Date(),
+          // a first message that is an OTP / verification code = a service sender, not a customer
+          system_kind: opts.serviceMessage ? 'system' : null,
         }),
       );
     } else {
@@ -1064,6 +1070,11 @@ export class AgentRoutingService {
     }
 
     await this.persistInboundMessage(companyId, conversation.id, inbound);
+    if (channelUser.system_kind === 'system') {
+      // kept for admins (Inbox → System messages): never queued for, assigned to or shown to agents
+      if (conversation.assigned_agent_id) await this.conversationRepository.update(conversation.id, { assigned_agent_id: null, status: 'open' });
+      return { conversationId: conversation.id, assignedAgentId: null, status: 'open', system: true };
+    }
     const clientMessagePreview = inbound?.content?.trim() || 'New client message';
 
     if (!this.shouldRouteInboundConversation(conversation)) {
