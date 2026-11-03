@@ -7,15 +7,17 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
+import * as XLSX from 'xlsx';
 import { DataSource } from 'typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly } from '../auth/decorators/roles.decorator';
+import { ManagerOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
+import { CustomerInsightsController, CustomerInsightsService } from './insights';
 
 const LEAD_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'won', 'lost'] as const;
 const PRIORITIES = ['low', 'normal', 'high'] as const;
@@ -32,6 +34,20 @@ export function lkPhone(value: string): string {
 }
 
 /* ───────── DTOs ───────── */
+
+/** One contact from the import preview (columns already matched to these fields). */
+export class ImportRowDto {
+  @IsOptional() @IsString() @MaxLength(255) name?: string;
+  @IsString() @MaxLength(40) phone: string;
+  @IsOptional() @IsString() @MaxLength(255) email?: string;
+  @IsOptional() @IsString() @MaxLength(400) tags?: string;
+  @IsOptional() @IsString() @MaxLength(40) stage?: string;
+  @IsOptional() @IsString() @MaxLength(40) deal_value?: string;
+  @IsOptional() @IsString() @MaxLength(2000) note?: string;
+}
+export class ImportRowsDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(5000) @ValidateNested({ each: true }) @Type(() => ImportRowDto) rows: ImportRowDto[];
+}
 
 export class ContactsQueryDto {
   @IsOptional() @IsString() @MaxLength(100) search?: string;
@@ -137,6 +153,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
 
   /** null for the company admin; the agent's own id for an agent (agents only see their own customers) */
   private async agentOf(user: AuthenticatedUser): Promise<number | null> {
+    if (user.role === 'supervisor') return null; // team lead sees every customer
     const [company] = await this.dataSource.query(`SELECT admin_user_id FROM companies WHERE id = $1`, [Number(user.company_id)]);
     return company && Number(company.admin_user_id) === Number(user.id) ? null : Number(user.id);
   }
@@ -264,7 +281,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     if (dto.lead_stage !== undefined) {
       await this.dataSource.query(`UPDATE crm_contact SET stage = $2, updated_at = NOW() WHERE bot_channel_user_id = $1`, [id, dto.lead_stage]);
       await this.dataSource.query(`
-        UPDATE bot_conversation SET lead_stage = $2 WHERE id = (SELECT id FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1)`, [id, dto.lead_stage]);
+        UPDATE bot_conversation SET lead_stage = $2, lead_stage_manual = TRUE WHERE id = (SELECT id FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1)`, [id, dto.lead_stage]);
     }
     return this.contact(user, id);
   }
@@ -328,7 +345,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     if (dto.lead_stage) {
       await this.dataSource.query(`UPDATE crm_contact SET stage = $2, updated_at = NOW() WHERE bot_channel_user_id = ANY($1::int[])`, [ids, dto.lead_stage]);
       await this.dataSource.query(`
-        UPDATE bot_conversation c SET lead_stage = $2 FROM (
+        UPDATE bot_conversation c SET lead_stage = $2, lead_stage_manual = TRUE FROM (
           SELECT DISTINCT ON (bot_channel_user_id) id FROM bot_conversation WHERE bot_channel_user_id = ANY($1::int[]) ORDER BY bot_channel_user_id, id DESC
         ) last WHERE c.id = last.id`, [ids, dto.lead_stage]);
     }
@@ -507,7 +524,12 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateTask(user: AuthenticatedUser, id: number, dto: UpdateTaskDto) {
-    const { companyId, agentId } = await this.ownTask(user, id);
+    const { task, companyId, agentId } = await this.ownTask(user, id);
+    // only the person who made the task (and the admin / supervisors) change it; anyone else who sees it can only mark it done / open
+    if (agentId && Number(task.created_by_user_id) !== agentId) {
+      const other = Object.entries(dto).some(([key, value]) => key !== 'status' && value !== undefined);
+      if (other) throw new ForbiddenException('Only the person who added this task or the admin can change it. You can mark it done.');
+    }
     await this.assertUser(companyId, dto.assigned_user_id);
     if (dto.contact_id) await this.assertContact(companyId, dto.contact_id, agentId);
     if (dto.priority !== undefined || dto.kind !== undefined || dto.contact_id !== undefined) {
@@ -616,6 +638,97 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     return { created, updated, skipped_rows: skipped };
   }
 
+  /* ───── Import with a preview (like products): read the file → match columns → import the rows ───── */
+
+  /** CSV or Excel → header + rows (strings), for the preview. */
+  readImportFile(file?: { buffer: Buffer; originalname?: string }) {
+    if (!file?.buffer?.length) throw new BadRequestException('Choose a CSV or Excel file.');
+    let table: string[][];
+    try {
+      const book = XLSX.read(file.buffer, { type: 'buffer', raw: false, codepage: 65001 });
+      const sheet = book.Sheets[book.SheetNames[0]];
+      table = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '', blankrows: false })
+        .map((row) => row.map((cell) => String(cell ?? '').trim()));
+    } catch {
+      throw new BadRequestException('This file could not be read. Use a CSV or an Excel (.xlsx) file.');
+    }
+    table = table.filter((row) => row.some(Boolean));
+    if (table.length < 2) throw new BadRequestException('The file has no rows under the header.');
+    const headers = table[0].map((h, i) => h || `Column ${i + 1}`);
+    if (table.length - 1 > 5000) throw new BadRequestException('Up to 5,000 contacts per file. Split the file and import the parts.');
+    return { headers, rows: table.slice(1).map((row) => headers.map((_, i) => row[i] ?? '')) };
+  }
+
+  /** Sample file with the columns the import understands. */
+  importTemplate() {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ['name', 'phone', 'email', 'tags', 'stage', 'deal_value', 'note'],
+      ['Nimal Perera', '0771234567', 'nimal@example.com', 'vip; colombo', 'contacted', '15000', 'Asked about school shoes'],
+      ['Kamala Silva', '0712345678', '', 'wholesale', 'new', '', ''],
+    ]);
+    sheet['!cols'] = [18, 14, 24, 18, 12, 12, 30].map((wch) => ({ wch }));
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, 'Contacts');
+    return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  }
+
+  /** The rows from the preview. Existing numbers are updated (name, email; tags added; stage / deal value when given). */
+  async importRows(user: AuthenticatedUser, dto: ImportRowsDto) {
+    const companyId = this.companyId(user);
+    const agentId = await this.agentOf(user);
+    const [me] = await this.dataSource.query(`SELECT name FROM app_user WHERE id = $1`, [user.id]);
+    let created = 0;
+    let updated = 0;
+    const skipped: Array<{ row: number; reason: string }> = [];
+    const seen = new Set<string>();
+    for (const [index, raw] of dto.rows.entries()) {
+      const rowNo = index + 1;
+      const phone = lkPhone(raw.phone);
+      if (!phone) { skipped.push({ row: rowNo, reason: 'Not a phone number' }); continue; }
+      if (seen.has(phone)) { skipped.push({ row: rowNo, reason: 'Same number as an earlier row' }); continue; }
+      seen.add(phone);
+      const email = String(raw.email ?? '').trim().toLowerCase();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { skipped.push({ row: rowNo, reason: 'Email is not valid' }); continue; }
+      const stage = String(raw.stage ?? '').trim().toLowerCase();
+      if (stage && !(LEAD_STAGES as readonly string[]).includes(stage)) { skipped.push({ row: rowNo, reason: `Stage must be one of: ${LEAD_STAGES.join(', ')}` }); continue; }
+      const dealText = String(raw.deal_value ?? '').replace(/[^\d.]/g, '');
+      const deal = dealText ? Number(dealText) : null;
+      if (deal !== null && (!Number.isFinite(deal) || deal > 999_999_999_999)) { skipped.push({ row: rowNo, reason: 'Deal value is not a number' }); continue; }
+      const name = String(raw.name ?? '').trim().slice(0, 255);
+      const tags = [...new Set(String(raw.tags ?? '').split(/[;|,]/).map((t) => t.trim().toLowerCase().slice(0, 40)).filter(Boolean))].slice(0, 20);
+      let [row] = await this.dataSource.query(
+        `SELECT id FROM bot_channel_user WHERE company_id = $1 AND platform = 'whatsapp' AND regexp_replace(external_user_id, '\\D', '', 'g') IN ($2, $3) ORDER BY id LIMIT 1`,
+        [companyId, phone, `0${phone.slice(2)}`]);
+      if (row && agentId) {
+        // an agent updates only their own customers
+        const [mine] = await this.dataSource.query(`SELECT 1 FROM bot_channel_user cu WHERE cu.id = $1 AND ${CrmService.MINE.replace(/\$AGENT/g, '$2')}`, [row.id, agentId]);
+        if (!mine) { skipped.push({ row: rowNo, reason: 'This customer belongs to another agent' }); continue; }
+      }
+      if (!row) {
+        [row] = await this.dataSource.query(`
+          INSERT INTO bot_channel_user (company_id, platform, external_user_id, display_name, bot_enabled, manual_mode, created_at, updated_at)
+          VALUES ($1, 'whatsapp', $2, $3, FALSE, FALSE, NOW(), NOW()) RETURNING id`, [companyId, phone, name || phone]);
+        created += 1;
+      } else {
+        if (name) await this.dataSource.query(`UPDATE bot_channel_user SET display_name = $2 WHERE id = $1`, [row.id, name]);
+        updated += 1;
+      }
+      await this.dataSource.query(`
+        INSERT INTO crm_contact (bot_channel_user_id, company_id, email, phone, tags, source, stage, deal_value, owner_user_id) VALUES ($1, $2, $3, $4, $5, 'import', $6, $7, $8)
+        ON CONFLICT (bot_channel_user_id) DO UPDATE SET email = COALESCE(EXCLUDED.email, crm_contact.email),
+          tags = (SELECT ARRAY(SELECT DISTINCT UNNEST(crm_contact.tags || EXCLUDED.tags))),
+          stage = COALESCE($9::text, crm_contact.stage), deal_value = COALESCE($7, crm_contact.deal_value), updated_at = NOW()`,
+        [row.id, companyId, email || null, phone, tags, stage || 'new', deal, agentId, stage || null]);
+      const note = String(raw.note ?? '').trim();
+      if (note) {
+        await this.dataSource.query(
+          `INSERT INTO bot_customer_note (company_id, bot_channel_user_id, content, created_by_user_id, created_by_name) VALUES ($1, $2, $3, $4, $5)`,
+          [companyId, row.id, note.slice(0, 2000), user.id, me?.name ?? 'Team']);
+      }
+    }
+    return { created, updated, skipped };
+  }
+
   team(user: AuthenticatedUser) {
     return this.dataSource.query(`SELECT id, name FROM app_user WHERE company_id = $1 AND is_active = TRUE ORDER BY name`, [this.companyId(user)]);
   }
@@ -633,15 +746,33 @@ export class CrmController {
   contacts(@CurrentUser() user: AuthenticatedUser, @Query() query: ContactsQueryDto) { return this.crm.contacts(user, query); }
 
   @Get('contacts/export')
-  @AdminOnly()
+  @ManagerOnly()
   async export(@CurrentUser() user: AuthenticatedUser, @Res() res: Response) {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="contacts-${new Date().toISOString().slice(0, 10)}.csv"`);
     res.send(await this.crm.exportCsv(user));
   }
 
+  @Post('contacts/import/read')
+  @ManagerOnly()
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
+  readImport(@UploadedFile() file?: { buffer: Buffer; originalname?: string }) { return this.crm.readImportFile(file); }
+
+  @Post('contacts/import/rows')
+  @ManagerOnly()
+  importRows(@CurrentUser() user: AuthenticatedUser, @Body() dto: ImportRowsDto) { return this.crm.importRows(user, dto); }
+
+  @Get('contacts/import/template')
+  @ManagerOnly()
+  template(@Res() res: Response) {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="contacts-sample.xlsx"');
+    res.send(this.crm.importTemplate());
+  }
+
   @Post('contacts/import')
-  @AdminOnly()
+  @ManagerOnly()
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }))
   import(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { buffer: Buffer }) { return this.crm.importCsv(user, file); }
@@ -683,5 +814,5 @@ export class CrmController {
   team(@CurrentUser() user: AuthenticatedUser) { return this.crm.team(user); }
 }
 
-@Module({ imports: [AuthModule], controllers: [CrmController], providers: [CrmService] })
+@Module({ imports: [AuthModule], controllers: [CrmController, CustomerInsightsController], providers: [CrmService, CustomerInsightsService] })
 export class CrmModule {}

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
@@ -16,6 +16,7 @@ import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotContextService } from './sales-bot-context.service';
 import { SalesBotEngineService } from './sales-bot-engine.service';
+import { StockService } from '../reports/stock';
 
 export type ManualItem = { product_id: number; variant_id?: number | null; quantity: number };
 
@@ -26,6 +27,9 @@ export type ManualItem = { product_id: number; variant_id?: number | null; quant
  */
 @Injectable()
 export class ManualOrdersService {
+  /** Stock counting: the order takes stock out (optional – never stops an order). */
+  @Optional() @Inject(StockService) private readonly stock?: StockService;
+
   constructor(
     @InjectRepository(Company) private readonly companyRepository: Repository<Company>,
     @InjectRepository(BotConversation) private readonly conversationRepository: Repository<BotConversation>,
@@ -47,8 +51,8 @@ export class ManualOrdersService {
     const conversation = await this.conversationRepository.findOne({ where: { id: conversationId }, relations: ['channelUser'] });
     if (!conversation?.channelUser || Number(conversation.channelUser.company_id) !== companyId) throw new NotFoundException('Conversation not found.');
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
-    const isAdmin = Number(company?.admin_user_id) === Number(user.id);
-    if (!isAdmin && Number(conversation.assigned_agent_id) !== Number(user.id)) {
+    const isAdmin = Number(company?.admin_user_id) === Number(user.id) || user.role === 'supervisor';
+    if (!isAdmin && user.role !== 'supervisor' && Number(conversation.assigned_agent_id) !== Number(user.id)) {
       throw new ForbiddenException('You can only add orders for your own customers.');
     }
     return { companyId, conversation, channelUser: conversation.channelUser, isAdmin };
@@ -70,14 +74,14 @@ export class ManualOrdersService {
     const products = await this.productRepository.find({
       where: { company_id: companyId, is_deleted: false }, relations: ['category', 'variants'], order: { name: 'ASC' }, take: 3000,
     });
-    const matched = products.filter((product) => !term || `${product.name} ${product.category?.name ?? ''}`.toLowerCase().includes(term)).slice(0, 60);
+    const matched = products.filter((product) => !term || `${product.name} ${product.brand ?? ''} ${product.category?.name ?? ''}`.toLowerCase().includes(term)).slice(0, 60);
     const services = await this.serviceRepository.find({ where: { company_id: companyId, is_active: true }, order: { name: 'ASC' }, take: 500 });
     const zones = await this.zoneRepository.find({ where: { company_id: companyId }, order: { area: 'ASC' } });
     return {
       products: matched.map((product) => {
         const row = this.contextService.toContextProduct(product);
         return {
-          id: row.id, name: row.name, category: row.category, price: row.price, stock: row.stock, available: row.available !== false,
+          id: row.id, name: row.name, brand: row.brand || null, category: row.category, price: row.price, stock: row.stock, available: row.available !== false,
           weight_kg: row.weight_kg, image_url: row.image_urls[0] ?? null,
           variants: row.variants.map((variant) => ({
             variant_id: variant.variant_id, name: variant.name, price: variant.price, stock: variant.stock, available: variant.available !== false,
@@ -143,6 +147,7 @@ export class ManualOrdersService {
     await this.historyRepository.save(this.historyRepository.create({
       order_id: order.id, status: 'Pending', message: `Order added in the chat by ${author}.`,
     }));
+    await this.stock?.syncOrderSafe(order.id);
     const invoice = dto.send_invoice === false ? null
       : await this.botAdminService.sendInvoiceForCompany(companyId, order.id).catch((error: unknown) => ({ sent: false, message: error instanceof Error ? error.message : 'Invoice failed.' }));
     return { order_id: order.id, total: quote.total, delivery_fee: quote.delivery_fee, invoice_sent: Boolean(invoice?.sent), invoice_message: invoice?.message ?? null };

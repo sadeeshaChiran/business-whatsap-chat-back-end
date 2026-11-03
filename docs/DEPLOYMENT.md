@@ -34,6 +34,8 @@ Services: **API** (NestJS, port 3001), **web app** (static files from `frontend/
 | `SUPER_ADMIN_EMAILS` | Metrocoding staff emails |
 | `OTP_DEV_MODE` | `false` in production (only `true` on a test database) |
 | `SMTP_*`, `OTP_WHATSAPP_*` | so sign-up and forgot-password codes are delivered |
+| Telegram | nothing to set – each business connects its own bot token in Channels → Telegram. `PUBLIC_API_BASE_URL` must be **https** (Telegram only calls https webhooks) |
+| `TIKTOK_APP_ID` / `TIKTOK_APP_SECRET` | optional – TikTok channel. TikTok app (TikTok API for Business) with **Business Messaging** approved; redirect URL `{PUBLIC_API_BASE_URL}/integrations/tiktok/callback`. Webhook is set automatically on connect |
 
 Database changes are applied automatically when the API starts.
 
@@ -60,8 +62,14 @@ server {
   client_max_body_size 25m;
   location / { proxy_pass http://127.0.0.1:3001; proxy_set_header Host $host;
                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
+  # Social → Create post: videos for reels, stories and video posts (keep in step with SOCIAL_VIDEO_MAX_MB)
+  location /v1/api/social/media { client_max_body_size 210m; proxy_request_buffering off; proxy_read_timeout 300s;
+               proxy_pass http://127.0.0.1:3001; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }
 }
 ```
+
+Behind Cloudflare, uploads over 100 MB need a paid plan; on the free plan set `SOCIAL_VIDEO_MAX_MB=95`.
 
 ## 4. AI sales bot (`agent-metra-sales-bot`, FastAPI)
 

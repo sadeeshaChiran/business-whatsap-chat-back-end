@@ -1,3 +1,4 @@
+import { SuperAdminFeatureAccessController } from './feature-access';
 import { FeatureGuard } from './feature.guard';
 import { Global, Logger, Module, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource, TypeOrmModule } from '@nestjs/typeorm';
@@ -11,7 +12,7 @@ import { TokenAdjustment } from './entities/token-adjustment.entity';
 import { PlatformPayment } from './entities/platform-payment.entity';
 import { PlatformSetting } from './entities/platform-setting.entity';
 import { TokenPack } from './entities/token-pack.entity';
-import { CompanyBillingController, PayhereNotifyController, SuperAdminBillingController } from './billing/billing.controller';
+import { CompanyBillingController, PayhereNotifyController, PaypalWebhookController, PaymentsLkWebhookController, SuperAdminBillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
 import { SuperAdminExtraController, SuperAdminExtraService } from './super-admin-extra';
 import { PublicBrandingController, SuperAdminBrandingController } from './branding';
@@ -30,7 +31,7 @@ import { TokenQuotaService } from './token-quota.service';
 @Global()
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([PlatformPackage, CompanySubscription, TokenAdjustment, PlatformPayment, PlatformSetting, TokenPack, Company, User])],
-  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController, PublicBrandingController, SuperAdminBrandingController],
+  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, PaypalWebhookController, PaymentsLkWebhookController, SuperAdminBillingController, SuperAdminExtraController, PublicBrandingController, SuperAdminBrandingController, SuperAdminFeatureAccessController],
   providers: [FeatureGuard, PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor, BrandingService],
   exports: [PlanService, TokenQuotaService, FeatureGuard, BrandingService],
 })
@@ -45,7 +46,7 @@ export class PlatformModule implements OnModuleInit {
     if (!emails.length) return;
     try {
       const result = await this.dataSource.query(
-        `UPDATE app_user SET is_super_admin = TRUE WHERE LOWER(email) = ANY($1) AND is_super_admin = FALSE`, [emails]);
+        `UPDATE app_user SET is_super_admin = TRUE WHERE LOWER(email) = ANY($1) AND is_super_admin = FALSE AND email_verified_at IS NOT NULL`, [emails]);
       this.logger.log(`super admins from SUPER_ADMIN_EMAILS: ${emails.join(', ')} (${Array.isArray(result) ? result[1] ?? 0 : 0} updated)`);
     } catch (error) {
       this.logger.warn(`could not set super admins: ${error instanceof Error ? error.message : String(error)}`);

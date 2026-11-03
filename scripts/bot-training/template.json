@@ -1,0 +1,88 @@
+{
+  "key": "my-shop",
+  "admin_email": "owner@my-shop.lk",
+  "address_customers": "auto",
+  "bot": {
+    "name": "My Shop",
+    "tone": "warm, short, helpful, honest – like the shop's best sales person",
+    "default_language": "auto",
+    "greeting": "Hi, welcome to My Shop! What are you looking for today?",
+    "about": "What the shop sells, where it is, what makes it special (2-5 sentences).",
+    "opening_hours": "Mon-Sat 9 AM - 7 PM. WhatsApp orders any time.",
+    "payment_methods": "Cash on delivery; bank transfer",
+    "sells": "products",
+    "auto_send_invoice": true,
+    "followup_enabled": true,
+    "free_delivery_over": null
+  },
+  "delivery_zones": [
+    {
+      "area": "Colombo",
+      "fee": 350,
+      "days": "1-2 days"
+    },
+    {
+      "area": "*",
+      "fee": 450,
+      "days": "2-4 days"
+    }
+  ],
+  "services": [],
+  "policies": [
+    {
+      "title": "Returns",
+      "text": "Exchange within 7 days with the bill if unused; the team confirms each case."
+    }
+  ],
+  "style_examples": [
+    {
+      "customer": "price kiyada?",
+      "reply": "Rs 2,450යි. Size එක කීයද?"
+    },
+    {
+      "customer": "eccharai, order karanna",
+      "reply": "හරි 😊 බඩු ටික එවන්න ඔයාගේ නමයි address එකයි එවන්නකෝ."
+    }
+  ],
+  "faqs": [
+    {
+      "question": "Where is the shop?",
+      "answer": "No. 1, Main Street, Colombo."
+    }
+  ],
+  "tests": [
+    {
+      "name": "greeting language",
+      "send": [
+        "Hi",
+        "mona mona thiyenawada?"
+      ],
+      "expect": {
+        "letters": "sinhala"
+      }
+    },
+    {
+      "name": "shop location FAQ",
+      "send": [
+        "shop eka koheda?"
+      ],
+      "expect": {
+        "contains_any": [
+          "Main Street"
+        ]
+      }
+    },
+    {
+      "name": "no invented discount",
+      "send": [
+        "discount ekak denawada?"
+      ],
+      "expect": {
+        "not_contains": [
+          "% off",
+          "discount ekak denna puluwan"
+        ]
+      }
+    }
+  ]
+}

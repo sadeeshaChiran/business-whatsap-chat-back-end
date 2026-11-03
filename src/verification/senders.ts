@@ -32,61 +32,36 @@ export async function sendEmail(to: string, subject: string, text: string, html:
 }
 
 /**
- * WhatsApp code from Metrocoding's own WhatsApp Cloud API number, with an approved AUTHENTICATION template
- * (body {{1}} = code, "Copy code" button). OTP_WHATSAPP_PHONE_NUMBER_ID, OTP_WHATSAPP_TOKEN,
- * OTP_WHATSAPP_TEMPLATE (default "verification_code"), OTP_WHATSAPP_LANG (default "en_US").
+ * SMS code with Notify.lk (Sri Lanka): NOTIFYLK_USER_ID, NOTIFYLK_API_KEY, NOTIFYLK_SENDER_ID (your approved sender
+ * name; "NotifyDEMO" only works for numbers added to the Notify.lk test list).
  */
-export async function sendWhatsappCode(phone: string, code: string): Promise<boolean> {
-  const phoneNumberId = env('OTP_WHATSAPP_PHONE_NUMBER_ID');
-  const token = env('OTP_WHATSAPP_TOKEN');
-  if (!phoneNumberId || !token) return false;
-  console.log(`code ${code} to ${phone} via WhatsApp (phone number ID ${phoneNumberId})`);
-  try {
-    const version = env('META_GRAPH_API_VERSION') || 'v22.0';
-    const response = await fetch(`https://graph.facebook.com/${version}/${phoneNumberId}/messages`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp', to: phone, type: 'template',
-        template: {
-          name: env('OTP_WHATSAPP_TEMPLATE') || 'verification_code',
-          language: { code: env('OTP_WHATSAPP_LANG') || 'en_US' },
-          components: [
-            { type: 'body', parameters: [{ type: 'text', text: code }] },
-            { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: code }] },
-          ],
-        },
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) logger.warn(`WhatsApp code to ${phone} failed: ${(await response.text()).slice(0, 300)}`);
-    return response.ok;
-  } catch (error) {
-    logger.warn(`WhatsApp code to ${phone} failed: ${error instanceof Error ? error.message : String(error)}`);
+export async function sendSmsCode(phone: string, code: string): Promise<boolean> {
+  if (!env('NOTIFYLK_USER_ID') || !env('NOTIFYLK_API_KEY')) {
+    logger.error('NOTIFYLK_USER_ID / NOTIFYLK_API_KEY are not set – SMS codes cannot be sent.');
     return false;
   }
-}
-
-/** Optional SMS fallback (Notify.lk): NOTIFYLK_USER_ID, NOTIFYLK_API_KEY, NOTIFYLK_SENDER_ID */
-export async function sendSmsCode(phone: string, code: string): Promise<boolean> {
-  if (!env('NOTIFYLK_USER_ID') || !env('NOTIFYLK_API_KEY')) return false;
   try {
     const params = new URLSearchParams({
       user_id: env('NOTIFYLK_USER_ID'), api_key: env('NOTIFYLK_API_KEY'), sender_id: env('NOTIFYLK_SENDER_ID') || 'NotifyDEMO',
-      to: phone, message: `Your ${BrandingService.current().name} code is ${code}. It is valid for 10 minutes.`,
+      to: phone, message: `${code} is your ${BrandingService.current().name} code. It is valid for 10 minutes. Do not share it.`,
     });
-    const response = await fetch(`https://app.notify.lk/api/v1/send?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
-    return response.ok;
-  } catch {
+    const base = (env('NOTIFYLK_BASE_URL') || 'https://app.notify.lk/api/v1').replace(/\/+$/, '');
+    const response = await fetch(`${base}/send?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
+    const body = (await response.json().catch(() => ({}))) as { status?: string; data?: unknown; message?: string; errors?: unknown };
+    // Notify.lk answers {"status":"success","data":"Sent"} – anything else is a failure (wrong key, no credit, bad number …)
+    const ok = response.ok && String(body.status ?? '').toLowerCase() === 'success';
+    if (!ok) logger.warn(`SMS code to ${phone} failed: ${response.status} ${JSON.stringify(body).slice(0, 300)}`);
+    return ok;
+  } catch (error) {
+    logger.warn(`SMS code to ${phone} failed: ${error instanceof Error ? error.message : String(error)}`);
     return false;
   }
 }
 
-/** WhatsApp first, SMS if WhatsApp is not set up or fails. Dev mode logs the code. */
-export async function sendPhoneCode(phone: string, code: string): Promise<'whatsapp' | 'sms' | 'dev' | null> {
-  if (await sendWhatsappCode(phone, code)) return 'whatsapp';
+/** Mobile number codes go by SMS (no WhatsApp needed). Dev mode logs the code instead. */
+export async function sendPhoneCode(phone: string, code: string): Promise<'sms' | 'dev' | null> {
   if (await sendSmsCode(phone, code)) return 'sms';
-  if (otpDevMode()) { logger.warn(`[dev] WhatsApp code for ${phone}: ${code}`); return 'dev'; }
+  if (otpDevMode()) { logger.warn(`[dev] SMS code for ${phone}: ${code}`); return 'dev'; }
   return null;
 }
 

@@ -2,8 +2,8 @@ import { Type } from 'class-transformer';
 import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 
 export class CheckoutDto {
-  @IsIn(['subscription', 'token_pack'])
-  kind: 'subscription' | 'token_pack';
+  @IsIn(['subscription', 'token_pack', 'sms_pack'])
+  kind: 'subscription' | 'token_pack' | 'sms_pack';
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   package_id?: number;
@@ -14,10 +14,14 @@ export class CheckoutDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1)
   token_pack_id?: number;
 
-  @IsIn(['payhere', 'bank_transfer'])
-  method: 'payhere' | 'bank_transfer';
+  /** Agent Metra SMS credits */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1)
+  sms_pack_id?: number;
 
-  /** PayHere only: renew automatically every month / year */
+  @IsIn(['payhere', 'bank_transfer', 'paypal', 'paymentslk'])
+  method: 'payhere' | 'bank_transfer' | 'paypal' | 'paymentslk';
+
+  /** PayHere / PayPal: renew automatically every month / year */
   @IsOptional() @IsBoolean()
   auto_renew?: boolean;
 }
@@ -50,6 +54,13 @@ export class TokenPackDto {
 }
 
 export class PaymentsQueryDto {
-  @IsOptional() @IsIn(['pending', 'awaiting_approval', 'paid', 'rejected', 'failed', 'cancelled'])
+  @IsOptional() @IsIn(['pending', 'awaiting_approval', 'paid', 'rejected', 'failed', 'cancelled', 'refunded'])
   status?: string;
+}
+
+/** PayPal: rupees → US dollars. auto = the rate of the day, fixed = this rate; markup = percent added (PayPal fees). */
+export class PaypalRateDto {
+  @IsIn(['auto', 'fixed']) rate_mode: 'auto' | 'fixed';
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(1) fixed_rate?: number | null;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) markup_percent?: number;
 }

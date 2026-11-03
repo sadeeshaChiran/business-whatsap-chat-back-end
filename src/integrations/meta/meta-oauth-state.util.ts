@@ -4,7 +4,13 @@ export type MetaOAuthStatePayload = {
   c: number;
   u: number;
   t: number;
-  r?: '/channels/messenger' | '/channels/instagram';
+  r?: '/channels/messenger' | '/channels/instagram' | '/channels/whatsapp';
+  /** 1 = WhatsApp Embedded Signup (redirect flow) */
+  w?: 1;
+  /** 1 = add another WhatsApp number (keep the main number); l = label, p = purpose */
+  a?: 1;
+  l?: string;
+  p?: string;
 };
 
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -23,14 +29,25 @@ export function buildMetaOAuthState(
   companyId: number,
   userId: number,
   returnPath?: string,
+  whatsapp = false,
+  addNumber?: { label?: string; purpose?: string },
 ): string {
   const payload: MetaOAuthStatePayload = {
     c: companyId,
     u: userId,
     t: Date.now(),
   };
-  if (returnPath === '/channels/messenger' || returnPath === '/channels/instagram') {
+  if (returnPath === '/channels/messenger' || returnPath === '/channels/instagram' || returnPath === '/channels/whatsapp') {
     payload.r = returnPath;
+  }
+  if (whatsapp) {
+    payload.w = 1;
+    payload.r = '/channels/whatsapp';
+    if (addNumber) {
+      payload.a = 1;
+      if (addNumber.label?.trim()) payload.l = addNumber.label.trim().slice(0, 40);
+      if (addNumber.purpose?.trim()) payload.p = addNumber.purpose.trim().slice(0, 30);
+    }
   }
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = signPayload(encoded);

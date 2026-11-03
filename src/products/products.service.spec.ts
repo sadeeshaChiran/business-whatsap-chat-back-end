@@ -63,8 +63,8 @@ describe('ProductsService', () => {
   });
 
   describe('import row grouping', () => {
-    const normalizeImportRows = (rows: Record<string, unknown>[]) =>
-      (service as unknown as { normalizeImportRows: typeof rows extends never ? never : (rows: Record<string, unknown>[]) => unknown }).normalizeImportRows(rows);
+    const normalizeImportRows = (rows: Record<string, unknown>[], warnings: string[] = []) =>
+      (service as unknown as { normalizeImportRows: (rows: Record<string, unknown>[], warnings: string[]) => unknown }).normalizeImportRows(rows, warnings) as Array<Record<string, unknown>>;
 
     it('groups variant rows into one product', () => {
       const groups = normalizeImportRows([
@@ -140,46 +140,43 @@ describe('ProductsService', () => {
       ]);
     });
 
-    it('requires weight but allows missing price and images', () => {
-      expect(() =>
-        normalizeImportRows([
-          {
-            name: 'No Media Product',
-            category: 'Care',
-          },
-        ]),
-      ).toThrow(BadRequestException);
-
+    it('does not need weight, price or images', () => {
       const groups = normalizeImportRows([
         {
           name: 'No Media Product',
           category: 'Care',
-          weight: '0.1',
         },
-      ]);
+      ]) as Array<{ price: number; gallery: string[]; weight: number | null }>;
 
       expect(groups).toHaveLength(1);
       expect(groups[0].price).toBe(0);
       expect(groups[0].gallery).toEqual([]);
+      expect(Number.isFinite(groups[0].weight as number)).toBe(false); // saved as "no weight"
     });
 
-    it('rejects variant image outside gallery', () => {
-      expect(() =>
-        normalizeImportRows([
-          {
-            name: 'Bad Image Product',
-            category: 'Care',
-            weight: '0.1',
-            price: '100',
-            gallery_urls: 'https://example.com/a.jpg',
-            cover_image_url: 'https://example.com/a.jpg',
-            has_variants: 'yes',
-            variant_name: 'Color',
-            variant_value: 'Red',
-            variant_image_url: 'https://example.com/other.jpg',
-          },
-        ]),
-      ).toThrow(BadRequestException);
+    it('adds a variant photo that is not in the gallery to the gallery', () => {
+      const groups = normalizeImportRows([
+        {
+          name: 'Image Product',
+          category: 'Care',
+          price: '100',
+          gallery_urls: 'https://example.com/a.jpg',
+          cover_image_url: 'https://example.com/a.jpg',
+          has_variants: 'yes',
+          variant_name: 'Color',
+          variant_value: 'Red',
+          variant_image_url: 'https://example.com/other.jpg',
+        },
+      ]) as Array<{ gallery: string[] }>;
+      expect(groups[0].gallery).toEqual(expect.arrayContaining(['https://example.com/a.jpg', 'https://example.com/other.jpg']));
+    });
+
+    it('skips rows without a name (with a warning) instead of failing the whole file', () => {
+      const warnings: string[] = [];
+      const groups = normalizeImportRows([{ name: '', category: 'Care' }, { name: 'Soap', category: '' }], warnings);
+      expect(groups).toHaveLength(1);
+      expect((groups[0] as { category?: string }).category ?? 'General').toBe('General');
+      expect(warnings.length).toBeGreaterThan(0);
     });
   });
 

@@ -3,7 +3,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
-import { memoryStorage } from 'multer';
+import { mkdirSync } from 'fs';
+import { diskStorage } from 'multer';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { AuthModule } from '../auth/auth.module';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AdminOnly } from '../auth/decorators/roles.decorator';
@@ -40,6 +43,7 @@ class CaptionDto {
 }
 class CreatePostDto {
   @IsArray() @ArrayMaxSize(2) @IsIn(['facebook', 'instagram'], { each: true }) platforms: string[];
+  @IsOptional() @IsIn(['post', 'reel', 'story']) format?: string;
   @IsOptional() @IsString() @MaxLength(5000) message?: string;
   @IsOptional() @IsString() @MaxLength(1000) @Matches(/^https?:\/\//) link?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) media_urls?: string[];
@@ -48,6 +52,7 @@ class CreatePostDto {
 }
 class UpdatePostDto {
   @IsOptional() @IsArray() @ArrayMaxSize(2) @IsIn(['facebook', 'instagram'], { each: true }) platforms?: string[];
+  @IsOptional() @IsIn(['post', 'reel', 'story']) format?: string;
   @IsOptional() @IsString() @MaxLength(5000) message?: string;
   @IsOptional() @IsString() @MaxLength(1000) @Matches(/^(https?:\/\/.*)?$/) link?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(10) @IsString({ each: true }) media_urls?: string[];
@@ -64,7 +69,19 @@ class DaysDto {
 }
 class PostsQueryDto {
   @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
+  @IsOptional() @IsIn(['all', 'post', 'video', 'reel', 'story']) kind?: string;
 }
+class InsightsQueryDto {
+  @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
+  @IsOptional() @IsIn(['post', 'video', 'reel', 'story']) kind?: string;
+}
+
+/** Uploads go to a temp folder on disk (videos can be large), then into chat media storage. */
+const socialUploadDir = () => {
+  const dir = join(process.env.CHAT_MEDIA_DIR?.trim() || join(process.cwd(), 'storage', 'chat-media'), '.incoming');
+  try { mkdirSync(dir, { recursive: true }); return dir; } catch { return tmpdir(); }
+};
+const socialUploadMaxBytes = () => Math.max(10, Number(process.env.SOCIAL_VIDEO_MAX_MB ?? 200)) * 1024 * 1024;
 
 @Controller('social')
 @ApiTags('Social')
@@ -88,14 +105,17 @@ export class SocialController {
   @Post('comments/:id/suggest') suggest(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.social.suggest(user, id); }
   @Delete('comments/:id') remove(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.social.remove(user, id); }
 
-  @Get('posts') posts(@CurrentUser() user: AuthenticatedUser, @Query() query: PostsQueryDto) { return this.social.posts(user, query.platform ?? 'facebook'); }
+  @Get('posts') posts(@CurrentUser() user: AuthenticatedUser, @Query() query: PostsQueryDto) { return this.social.posts(user, query.platform ?? 'facebook', query.kind ?? 'all'); }
+  @Get('posts/:postId/insights') postInsights(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Query() query: InsightsQueryDto) {
+    return this.social.postInsights(user, postId, query.platform ?? 'facebook', query.kind);
+  }
   @Post('posts') create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePostDto) { return this.social.createPost(user, dto); }
   @Patch('posts/:postId') edit(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Body() dto: MessageDto) { return this.social.editPost(user, postId, dto.message); }
   @Delete('posts/:postId') deletePost(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string) { return this.social.deletePost(user, postId); }
   @Post('media')
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } }))
-  media(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { buffer: Buffer; mimetype: string; originalname: string }) { return this.social.uploadMedia(user, file); }
+  @UseInterceptors(FileInterceptor('file', { storage: diskStorage({ destination: (_req, _file, done) => done(null, socialUploadDir()) }), limits: { fileSize: socialUploadMaxBytes() } }))
+  media(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file?: { path?: string; size?: number; buffer?: Buffer; mimetype: string; originalname: string }) { return this.social.uploadMedia(user, file); }
   @Post('caption') caption(@CurrentUser() user: AuthenticatedUser, @Body() dto: CaptionDto) { return this.social.caption(user, dto); }
   @Get('schedules') schedules(@CurrentUser() user: AuthenticatedUser) { return this.social.schedules(user); }
   @Patch('schedules/:id') updateSchedule(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdatePostDto) { return this.social.updateSchedule(user, id, dto); }

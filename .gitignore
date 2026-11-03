@@ -21,3 +21,5 @@ logs/
 !.vscode/extensions.json
 test-results/
 scale-test-results.csv
+__pycache__/
+scripts/bot-training/clients/.credentials

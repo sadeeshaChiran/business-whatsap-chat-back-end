@@ -52,6 +52,10 @@ export class PackageDto {
   /** Last day of the offer (Sri Lanka date, YYYY-MM-DD) - null ends the offer */
   @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'offer_until must be a date like 2026-12-31' }) offer_until?: string | null;
   @IsOptional() @IsString() @MaxLength(80) offer_label?: string;
+  /** AI bot only for the first N days on this package (Free = 30); null = always */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(1) @Max(3650) bot_days?: number | null;
+  /** custom package for one company (hidden from all others); null = normal package */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(1) company_id?: number | null;
 }
 
 export class UpdatePackageDto {
@@ -76,6 +80,10 @@ export class UpdatePackageDto {
   /** Last day of the offer (Sri Lanka date, YYYY-MM-DD) - null ends the offer */
   @IsOptional() @ValidateIf((_o, v) => v !== null) @IsDateString({ strict: true }) @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'offer_until must be a date like 2026-12-31' }) offer_until?: string | null;
   @IsOptional() @IsString() @MaxLength(80) offer_label?: string;
+  /** AI bot only for the first N days on this package (Free = 30); null = always */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(1) @Max(3650) bot_days?: number | null;
+  /** custom package for one company (hidden from all others); null = normal package */
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(1) company_id?: number | null;
 }
 
 export class UpdateSubscriptionDto {
@@ -126,4 +134,38 @@ export class CreditSettingsDto {
   /** average tokens per bot reply - only used for the "≈ N AI replies" text on packages */
   @IsOptional() @Type(() => Number) @IsInt() @Min(500) @Max(200_000)
   tokens_per_reply?: number;
+}
+
+export class GrantTrialDto {
+  @Type(() => Number) @IsInt() @Min(1) package_id: number;
+  /** 1 month = 30 days */
+  @Type(() => Number) @IsInt() @Min(1) @Max(366) days: number;
+  @IsOptional() @IsString() @MaxLength(200) note?: string;
+}
+
+export class BulkTrialDto extends GrantTrialDto {
+  @IsArray() @ArrayMaxSize(500) @Type(() => Number) @IsInt({ each: true }) company_ids: number[];
+}
+
+export class SignupTrialDto {
+  @IsBoolean() enabled: boolean;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(1) package_id?: number | null;
+  @Type(() => Number) @IsInt() @Min(1) @Max(366) days: number;
+}
+
+/** A package made for one company: copied from a base package, then changed. */
+export class CustomPackageDto {
+  @IsString() @MinLength(1) @MaxLength(120) name: string;
+  @Type(() => Number) @IsNumber() @Min(0) price_monthly: number;
+  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) price_yearly?: number;
+  @Type(() => Number) @IsInt() @Min(0) tokens_per_month: number;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(0) max_agents?: number | null;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(0) max_products?: number | null;
+  @IsOptional() @ValidateIf((_o, v) => v !== null) @Type(() => Number) @IsInt() @Min(0) max_services?: number | null;
+  @IsOptional() @IsObject() limits?: Record<string, boolean | number | null>;
+  /** copy features / limits from this package */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) base_package_id?: number;
+  /** months it is valid now (0 = never ends, e.g. a free custom deal) */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(36) months?: number;
+  @IsOptional() @IsString() @MaxLength(2000) description?: string;
 }

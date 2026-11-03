@@ -54,18 +54,42 @@ export function quotedFromMessengerMessage(message: { reply_to?: { mid?: string 
   return id ? { providerId: id, text: null } : null;
 }
 
+type QuoteTarget = { id: number | string; content: string | null; message_type: string | null; media_note: string | null };
+
+/** The short text of a quoted message; a photo says what it is (the product the bot sent, or what the customer's photo matched). */
+function quoteText(target: QuoteTarget | undefined, fallback: string | null): string | null {
+  if (target?.message_type === 'image') {
+    const raw = clip(target.content);
+    const caption = raw && !/^\[[^\]]*\]$/.test(raw) ? raw : null;
+    if (!target.media_note) return caption ?? fallback ?? '[photo]';
+    return `[photo: ${target.media_note}]${caption ? ` ${caption}` : ''}`;
+  }
+  return clip(target?.content) ?? fallback;
+}
+
 /** Stores the quote on the saved message (found by its provider id in this chat). */
 export async function linkQuotedReply(db: DataSource | EntityManager, conversationId: number, providerMessageId: string, quoted: QuotedRef) {
   if (!quoted.providerId || !providerMessageId) return;
   const [target] = await db.query(
-    `SELECT id, content, message_type FROM bot_message
+    `SELECT id, content, message_type, media_note FROM bot_message
       WHERE conversation_id = $1 AND (provider_message_id = $2 OR provider_message_id LIKE $2 || ':%') ORDER BY id LIMIT 1`,
-    [conversationId, quoted.providerId]);
-  const text = clip(target?.content) ?? quoted.text ?? (target?.message_type === 'image' ? '[photo]' : null);
+    [conversationId, quoted.providerId]) as QuoteTarget[];
   await db.query(
     `UPDATE bot_message SET reply_to_message_id = $3, reply_to_provider_id = $4, reply_to_text = $5
       WHERE conversation_id = $1 AND provider_message_id = $2`,
-    [conversationId, providerMessageId, target ? Number(target.id) : null, quoted.providerId, text]);
+    [conversationId, providerMessageId, target ? Number(target.id) : null, quoted.providerId, quoteText(target, quoted.text)]);
+}
+
+/** Same, when we already know the quoted message (simulator, own tools). */
+export async function linkQuotedReplyById(db: DataSource | EntityManager, conversationId: number, providerMessageId: string, targetId: number) {
+  const [target] = await db.query(
+    `SELECT id, content, message_type, media_note, provider_message_id FROM bot_message WHERE conversation_id = $1 AND id = $2`,
+    [conversationId, targetId]) as Array<QuoteTarget & { provider_message_id: string | null }>;
+  if (!target) return;
+  await db.query(
+    `UPDATE bot_message SET reply_to_message_id = $3, reply_to_provider_id = $4, reply_to_text = $5
+      WHERE conversation_id = $1 AND provider_message_id = $2`,
+    [conversationId, providerMessageId, Number(target.id), target.provider_message_id, quoteText(target, null)]);
 }
 
 /** How a quoted message is shown to the AI: [replying to: "…"] text */

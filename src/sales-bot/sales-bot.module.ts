@@ -30,6 +30,7 @@ import { SalesBotClient } from './sales-bot.client';
 import { SalesBotContextService } from './sales-bot-context.service';
 import { SalesBotController } from './sales-bot.controller';
 import { SalesBotEngineService } from './sales-bot-engine.service';
+import { PhotoMatchService } from './photo-match';
 
 /**
  * Python sales bot integration: replaces the n8n AI workflow when SALES_BOT_URL is set.
@@ -48,7 +49,7 @@ import { SalesBotEngineService } from './sales-bot-engine.service';
     ]),
   ],
   controllers: [SalesBotController],
-  providers: [SalesBotClient, SalesBotContextService, SalesBotEngineService, SalesBotAdminService, ManualOrdersService, PusherService, MetaSocialSenderService],
+  providers: [SalesBotClient, SalesBotContextService, PhotoMatchService, SalesBotEngineService, SalesBotAdminService, ManualOrdersService, PusherService, MetaSocialSenderService],
   exports: [SalesBotContextService],
 })
 export class SalesBotModule {}

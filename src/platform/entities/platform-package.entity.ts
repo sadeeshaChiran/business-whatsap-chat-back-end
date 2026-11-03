@@ -70,6 +70,14 @@ export class PlatformPackage {
   @Column({ type: 'int', default: 0 })
   sort_order: number;
 
+  /** Custom package made for this one company (hidden from everybody else). null = normal package */
+  @Column({ type: 'bigint', nullable: true })
+  company_id: number | null;
+
+  /** The AI bot uses the package credits only for the first N days on this package (e.g. Free = 30); afterwards only bought credits. null = always */
+  @Column({ type: 'int', nullable: true })
+  bot_days: number | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 

@@ -12,7 +12,9 @@ import {
   UseGuards,
   UseInterceptors,
   ParseIntPipe,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
@@ -60,6 +62,21 @@ export class ProductsController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.productsService.import(file, user);
+  }
+
+  /** Brands already used in this shop (for the brand field suggestions and the filter). */
+  @Get('brands')
+  brands(@CurrentUser() user: AuthenticatedUser) {
+    return this.productsService.brands(Number(user.company_id));
+  }
+
+  @AdminOnly()
+  @Get('import/template')
+  @ApiOperation({ summary: 'Sample Excel file for the product import' })
+  template(@Res() res: Response) {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="products-sample.xlsx"');
+    res.send(this.productsService.importTemplate());
   }
 
   @Get()

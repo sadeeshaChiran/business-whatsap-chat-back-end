@@ -26,5 +26,9 @@ export type MetaPendingPage = {
   name: string;
   access_token: string;
   instagram_business_account_id?: string | null;
-  instagram_username?: string | null; 
+  instagram_username?: string | null;
+  picture_url?: string | null;
+  category?: string | null;
+  instagram_name?: string | null;
+  instagram_picture_url?: string | null;
 };

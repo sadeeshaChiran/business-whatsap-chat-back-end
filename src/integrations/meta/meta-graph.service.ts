@@ -24,6 +24,14 @@ type GraphErrorBody = {
   error?: { message?: string; type?: string; code?: number };
 };
 
+/** Page fields our app subscribes to: messages, our own echoes, buttons, ad clicks (messaging_referrals), delivery / read ticks, comments. */
+export const PAGE_FIELDS = ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_referrals', 'message_deliveries', 'message_reads', 'feed'];
+/** App-level webhook fields we need (Meta Developers → Webhooks). */
+export const APP_WEBHOOK_FIELDS: Record<'page' | 'instagram', string[]> = {
+  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed'],
+  instagram: ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments'],
+};
+
 @Injectable()
 export class MetaGraphService {
   async fetchMessagingProfile(senderId: string, pageAccessToken: string, platform: 'messenger' | 'instagram'): Promise<{ name?: string; username?: string }> {
@@ -74,12 +82,32 @@ export class MetaGraphService {
     return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
   }
 
+  /**
+   * WhatsApp Embedded Signup as a full-page redirect (same way as the Facebook Page login): no popup and no Meta
+   * browser SDK, so nothing can get stuck in the browser. Meta comes back to META_OAUTH_REDIRECT_URI with a code.
+   */
+  buildWhatsappAuthUrl(state: string): string {
+    const cfg = this.getConfig();
+    const configId = process.env.META_WHATSAPP_CONFIG_ID?.trim() ?? '';
+    if (!configId) throw new BadRequestException('One-click WhatsApp connection is not switched on for this platform yet (META_WHATSAPP_CONFIG_ID).');
+    const params = new URLSearchParams({
+      client_id: cfg.appId,
+      redirect_uri: cfg.redirectUri,
+      state,
+      response_type: 'code',
+      config_id: configId,
+      override_default_response_type: 'true',
+      extras: JSON.stringify({ setup: {}, featureType: '', sessionInfoVersion: '3' }),
+    });
+    return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
+  }
+
   frontendSuccessRedirect(query = '', returnPath?: string): string {
     const configured =
       process.env.META_OAUTH_SUCCESS_REDIRECT?.trim() ||
       'http://localhost:3000/channels/messenger';
     const base =
-      returnPath === '/channels/messenger' || returnPath === '/channels/instagram'
+      returnPath === '/channels/messenger' || returnPath === '/channels/instagram' || returnPath === '/channels/whatsapp'
         ? new URL(configured).origin + returnPath
         : configured;
     return query ? `${base}${base.includes('?') ? '&' : '?'}${query}` : base;
@@ -177,9 +205,10 @@ export class MetaGraphService {
    * was created, so we try, in order: no redirect_uri (documented for Embedded Signup), an empty redirect_uri, the
    * dashboard page the popup was opened from, and META_OAUTH_REDIRECT_URI. A rejected attempt does not use up the code.
    */
-  async exchangeEmbeddedSignupCode(code: string, pageUrl?: string): Promise<string> {
+  async exchangeEmbeddedSignupCode(code: string, pageUrl?: string, viaRedirect = false): Promise<string> {
     const cfg = this.getConfig();
-    const candidates: Array<string | null> = [null, ''];
+    // a code from the redirect flow is only accepted with the same redirect_uri – try that first
+    const candidates: Array<string | null> = viaRedirect && cfg.redirectUri?.trim() ? [cfg.redirectUri.trim(), null, ''] : [null, ''];
     for (const uri of [pageUrl?.trim(), pageUrl?.trim().replace(/\/+$/, '') + '/', cfg.redirectUri?.trim()]) {
       if (uri && uri !== '/' && !candidates.includes(uri)) candidates.push(uri);
     }
@@ -209,13 +238,68 @@ export class MetaGraphService {
    */
   async subscribePageMessaging(pageId: string, pageAccessToken: string): Promise<void> {
     const cfg = this.getConfig();
-    const params = new URLSearchParams({ subscribed_fields: 'messages,message_echoes,messaging_postbacks,message_deliveries,message_reads,feed' });
+    const params = new URLSearchParams({ subscribed_fields: PAGE_FIELDS.join(',') });
     const url = `${this.graphUrl(`/${encodeURIComponent(pageId)}/subscribed_apps`, cfg)}?${params.toString()}`;
     const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${pageAccessToken}` } });
     const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
     if (!response.ok || payload.success !== true) {
       throw new BadRequestException(payload.error?.message ?? 'Meta could not subscribe this Page to the messaging webhook.');
     }
+  }
+
+  /** The fields our app gets for this Page (null when Meta cannot be asked). */
+  async pageSubscribedFields(pageId: string, pageAccessToken: string): Promise<string[] | null> {
+    const appId = this.getConfig().appId;
+    const res = await this.healthGet<{ data?: Array<{ id?: string; subscribed_fields?: string[] }> }>(`/${pageId}/subscribed_apps`, pageAccessToken);
+    if (!res.ok) return null;
+    return (res.data?.data ?? []).find((row) => String(row.id ?? '') === String(appId))?.subscribed_fields ?? [];
+  }
+
+  /**
+   * App-level webhook fields (Meta Developers → Webhooks) for Pages and Instagram. Ad clicks only reach us when
+   * "messaging_referrals" (Page) and "messaging_referral" (Instagram) are on. Read with the app token.
+   */
+  async appWebhookFields(): Promise<{ ok: boolean; error?: string; objects: Record<string, { callback_url: string | null; fields: string[] }> }> {
+    const cfg = this.getConfig();
+    const secret = process.env.META_APP_SECRET?.trim();
+    if (!cfg.appId || !secret) return { ok: false, error: 'META_APP_ID / META_APP_SECRET are not set on the server.', objects: {} };
+    const res = await this.healthGet<{ data?: Array<{ object?: string; callback_url?: string; active?: boolean; fields?: Array<{ name?: string } | string> }> }>(`/${cfg.appId}/subscriptions`, `${cfg.appId}|${secret}`);
+    if (!res.ok) return { ok: false, error: res.error ?? undefined, objects: {} };
+    const objects: Record<string, { callback_url: string | null; fields: string[] }> = {};
+    for (const row of res.data?.data ?? []) {
+      if (!row.object) continue;
+      objects[row.object] = { callback_url: row.callback_url ?? null, fields: (row.fields ?? []).map((f) => (typeof f === 'string' ? f : String(f?.name ?? ''))).filter(Boolean) };
+    }
+    return { ok: true, objects };
+  }
+
+  /** Adds the missing Page / Instagram webhook fields to the app (keeps every field and the callback URL that are already there). */
+  async fixAppWebhookFields(): Promise<{ changed: string[] }> {
+    const cfg = this.getConfig();
+    const secret = process.env.META_APP_SECRET?.trim();
+    const verify = process.env.META_MESSAGING_VERIFY_TOKEN?.trim();
+    if (!cfg.appId || !secret) throw new BadRequestException('META_APP_ID / META_APP_SECRET are not set on the server.');
+    if (!verify) throw new BadRequestException('META_MESSAGING_VERIFY_TOKEN is not set on the server.');
+    const current = await this.appWebhookFields();
+    if (!current.ok) throw new BadRequestException(`Meta: ${current.error ?? 'could not read the app webhooks'}`);
+    const base = (process.env.PUBLIC_API_BASE_URL?.trim() || '').replace(/\/+$/, '');
+    const changed: string[] = [];
+    for (const [object, wanted] of Object.entries(APP_WEBHOOK_FIELDS)) {
+      const have = current.objects[object];
+      const missing = wanted.filter((f) => !(have?.fields ?? []).includes(f));
+      if (!missing.length) continue;
+      const callback = have?.callback_url || (base ? `${base}/integrations/meta/messages/webhook` : '');
+      if (!callback) throw new BadRequestException('PUBLIC_API_BASE_URL is not set, so the webhook address is unknown.');
+      const params = new URLSearchParams({
+        object, callback_url: callback, verify_token: verify, fields: [...new Set([...(have?.fields ?? []), ...wanted])].join(','),
+        access_token: `${cfg.appId}|${secret}`,
+      });
+      const response = await fetch(`${this.graphUrl(`/${cfg.appId}/subscriptions`, cfg)}?${params.toString()}`, { method: 'POST' });
+      const payload = (await response.json().catch(() => ({}))) as { success?: boolean } & GraphErrorBody;
+      if (!response.ok || payload.success !== true) throw new BadRequestException(`Meta (${object}): ${payload.error?.message ?? 'could not update the webhook fields'}`);
+      changed.push(`${object}: ${missing.join(', ')}`);
+    }
+    return { changed };
   }
 
   async subscribeWhatsappApp(wabaId: string, accessToken: string): Promise<void> {
@@ -261,7 +345,9 @@ export class MetaGraphService {
         id?: string;
         name?: string;
         access_token?: string;
-        instagram_business_account?: { id?: string; username?: string };
+        category?: string;
+        picture?: { data?: { url?: string } };
+        instagram_business_account?: { id?: string; username?: string; name?: string; profile_picture_url?: string };
       }>;
     };
 
@@ -270,7 +356,7 @@ export class MetaGraphService {
       userToken,
       {
         fields:
-          'id,name,access_token,instagram_business_account{id,username}',
+          'id,name,access_token,category,picture.type(square){url},instagram_business_account{id,username,name,profile_picture_url}',
         limit: '50',
       },
     );
@@ -284,6 +370,10 @@ export class MetaGraphService {
         instagram_business_account_id:
           row.instagram_business_account?.id ?? null,
         instagram_username: row.instagram_business_account?.username ?? null,
+        picture_url: row.picture?.data?.url ?? null,
+        category: row.category ?? null,
+        instagram_name: row.instagram_business_account?.name ?? null,
+        instagram_picture_url: row.instagram_business_account?.profile_picture_url ?? null,
       }));
 
     if (!pages.length) {
@@ -580,7 +670,7 @@ export class MetaGraphService {
    * Embedded Signup fallback: the business token's granular scopes list the shared WhatsApp Business Accounts;
    * returns the first phone number found (the one the customer just set up in most cases).
    */
-  async discoverSharedWhatsappNumber(accessToken: string): Promise<{ waba_id: string; phone_number_id: string } | null> {
+  async discoverSharedWhatsappNumber(accessToken: string, exclude: string[] = []): Promise<{ waba_id: string; phone_number_id: string } | null> {
     const cfg = this.getConfig();
     const appToken = `${cfg.appId}|${cfg.appSecret}`;
     const debug = await this.healthGet<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>(
@@ -588,11 +678,16 @@ export class MetaGraphService {
     const wabaIds = Array.from(new Set((debug.data?.data?.granular_scopes ?? [])
       .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
       .flatMap((s) => s.target_ids ?? [])));
+    const found: Array<{ waba_id: string; phone_number_id: string; fresh: boolean }> = [];
     for (const wabaId of wabaIds) {
-      const numbers = await this.healthGet<{ data?: Array<{ id: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name' });
-      const first = numbers.data?.data?.[0];
-      if (first?.id) return { waba_id: wabaId, phone_number_id: first.id };
+      const numbers = await this.healthGet<{ data?: Array<{ id: string; platform_type?: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
+      for (const number of numbers.data?.data ?? []) {
+        // a number just added in the signup is not on the Cloud API yet
+        // numbers the company already connected are skipped when adding another one
+        if (number.id && !exclude.includes(number.id)) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
+      }
     }
-    return null;
+    const pick = found.find((n) => n.fresh) ?? found[0];
+    return pick ? { waba_id: pick.waba_id, phone_number_id: pick.phone_number_id } : null;
   }
 }

@@ -1,12 +1,13 @@
 import { resolveLimits } from './package-limits';
 import { offerFields } from './package-offer';
+import { loadHandbook } from './handbook';
 import { SuperAdminAuditInterceptor } from './audit.interceptor';
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UseGuards, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
-import { CreditSettingsDto, ListQueryDto, PackageDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
+import { BulkTrialDto, CreditSettingsDto, CustomPackageDto, GrantTrialDto, ListQueryDto, PackageDto, SignupTrialDto, TokenAdjustmentDto, UpdatePackageDto, UpdateSubscriptionDto } from './dto/platform.dto';
 import { PlanService } from './plan.service';
 import { SuperAdminGuard } from './super-admin.guard';
 import { SuperAdminService } from './super-admin.service';
@@ -24,6 +25,10 @@ export class SuperAdminController {
   @Get('overview')
   overview() { return this.service.overview(); }
 
+  /** Team handbook (support playbook, operations, how every feature works) – super admins only. */
+  @Get('handbook')
+  handbook() { return { chapters: loadHandbook() }; }
+
   @Get('companies')
   companies(@Query() query: ListQueryDto) { return this.service.companies(query); }
 
@@ -39,6 +44,27 @@ export class SuperAdminController {
   addAdjustment(@Param('id', ParseIntPipe) id: number, @Body() dto: TokenAdjustmentDto, @CurrentUser() user: AuthenticatedUser) {
     return this.service.addAdjustment(id, dto, user);
   }
+
+  @Post('companies/:id/trial')
+  grantTrial(@Param('id', ParseIntPipe) id: number, @Body() dto: GrantTrialDto, @CurrentUser() user: AuthenticatedUser) { return this.service.grantTrial(id, dto, user); }
+
+  @Delete('companies/:id/trial')
+  endTrial(@Param('id', ParseIntPipe) id: number) { return this.service.endTrial(id); }
+
+  @Post('companies/:id/custom-package')
+  customPackage(@Param('id', ParseIntPipe) id: number, @Body() dto: CustomPackageDto) { return this.service.customPackage(id, dto); }
+
+  @Post('trials')
+  bulkTrial(@Body() dto: BulkTrialDto, @CurrentUser() user: AuthenticatedUser) { return this.service.bulkTrial(dto, user); }
+
+  @Get('trials')
+  trials() { return this.service.trialsReport(); }
+
+  @Get('signup-trial')
+  signupTrial() { return this.service.signupTrial(); }
+
+  @Put('signup-trial')
+  setSignupTrial(@Body() dto: SignupTrialDto) { return this.service.setSignupTrial(dto); }
 
   @Get('packages')
   packages() { return this.service.listPackages(); }
@@ -89,7 +115,7 @@ export class PublicPackagesController {
   async list() {
     const [tpc, perReply] = await Promise.all([this.planService.tokensPerCredit(), this.planService.tokensPerReply()]);
     return (await this.planService.packages())
-      .filter((pkg) => pkg.is_active && pkg.is_public)
+      .filter((pkg) => pkg.is_active && pkg.is_public && pkg.company_id == null)
       .map((pkg) => ({
         code: pkg.code, name: pkg.name, description: pkg.description, price_monthly: Number(pkg.price_monthly),
         price_yearly: Number(pkg.price_yearly), tokens_per_month: Number(pkg.tokens_per_month),

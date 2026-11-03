@@ -23,7 +23,7 @@ function build(platform: string, botResult: Record<string, unknown> = {}, packag
     { findOne: async () => ({ id: 7, plan: 'free', bot_enabled: true }) } as never,
     { findOne: async () => conversation, update: jest.fn() } as never,
     { findOne: async () => ({ ...channelUser, bot_enabled: true }), update: jest.fn() } as never,
-    { findOne: async () => null, createQueryBuilder: () => qb, create: (x: any) => x, save: async (x: any) => { saved.push(x); return x; } } as never,
+    { findOne: async () => null, query: async () => [], createQueryBuilder: () => qb, create: (x: any) => x, save: async (x: any) => { saved.push(x); return x; } } as never,
     {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
     { create: (x: any) => x, save: async (x: any) => x } as never,
     { create: (x: any) => x, save: async (x: any) => x } as never, // bot notifications
@@ -81,5 +81,61 @@ describe('SalesBotEngineService on Messenger / Instagram', () => {
     expect(t.adapter.sendText).toHaveBeenCalled();
     expect(t.social.sendText).not.toHaveBeenCalled();
     expect(t.reply.mock.calls[0][0].session.channel).toBe('whatsapp');
+  });
+
+  it('replies on TikTok through the TikTok channel; the bot itself treats it like Instagram', async () => {
+    const t = build('tiktok');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'tiktok', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('instagram');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'tiktok', provider_message_id: 'm.out.1', delivery_status: 'sent' }));
+  });
+
+  it('does not reply on TikTok when the package does not include TikTok (Instagram stays as it is)', async () => {
+    const t = build('tiktok', {}, { tiktok: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.reply).not.toHaveBeenCalled();
+    const ig = build('instagram', {}, { tiktok: false });
+    await (ig.engine as any).turn(7, 21);
+    expect(ig.social.sendText).toHaveBeenCalled();
+  });
+
+  it('a TikTok rule refusal (10 in a row / 48 hours) marks the reply failed, not lost', async () => {
+    const t = build('tiktok');
+    t.social.sendText.mockRejectedValue(new Error('TikTok allows 10 messages in a row.'));
+    await (t.engine as any).turn(7, 21);
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ provider_message_id: null, delivery_status: 'failed' }));
+  });
+
+  it('replies on Telegram through the Telegram channel; the bot itself treats it like Messenger', async () => {
+    const t = build('telegram');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'telegram', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('messenger');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'telegram', provider_message_id: 'm.out.1', delivery_status: 'sent' }));
+  });
+
+  it('does not reply on Telegram when the package does not include Telegram (Messenger stays as it is)', async () => {
+    const t = build('telegram', {}, { telegram: false });
+    await (t.engine as any).turn(7, 21);
+    expect(t.reply).not.toHaveBeenCalled();
+    const fb = build('messenger', {}, { telegram: false });
+    await (fb.engine as any).turn(7, 21);
+    expect(fb.social.sendText).toHaveBeenCalled();
+  });
+
+  it('replies in the customer app through the app (saved message), the bot treats it like Messenger', async () => {
+    const t = build('app');
+    await (t.engine as any).turn(7, 21);
+    expect(t.social.sendText).toHaveBeenCalledWith(7, 'app', 'ACC1', 'CUST1', 'Hello! How can I help?');
+    expect(t.adapter.sendText).not.toHaveBeenCalled();
+    expect(t.reply.mock.calls[0][0].session.channel).toBe('messenger');
+    const out = t.saved.find((row) => row.direction === 'outbound');
+    expect(out).toEqual(expect.objectContaining({ platform: 'app', delivery_status: 'sent' }));
   });
 });

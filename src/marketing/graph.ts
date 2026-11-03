@@ -37,7 +37,8 @@ export async function graphRequest<T>(method: 'GET' | 'POST' | 'DELETE', path: s
 
 /* ───── Login for ads (separate from the Page / WhatsApp login) ───── */
 
-export const ADS_SCOPES = 'ads_read,ads_management,business_management';
+/** ads_management (pause, budget, Custom Audiences) is not approved for the Meta app yet: read only. */
+export const ADS_SCOPES = 'ads_read,business_management';
 
 function sign(text: string) {
   const secret = env('META_OAUTH_STATE_SECRET') || env('JWT_SECRET');

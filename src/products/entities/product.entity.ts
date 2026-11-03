@@ -59,6 +59,18 @@ export class Product {
   @Column({ type: 'text', default: '' })
   selling_points: string;
 
+  /** Brand (optional), e.g. "Casio", "Nike" – shown with the product and used by the AI bot to find it */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  brand: string | null;
+
+  /** Short AI description of the photos (colour, pattern, style) – lets the bot match photos customers send */
+  @Column({ type: 'text', nullable: true })
+  image_notes: string | null;
+
+  /** Perceptual fingerprints of the photos: [{url, hashes: [{p, d, c}]}] – finds the product when a customer re-sends our photo */
+  @Column({ type: 'jsonb', nullable: true, select: false })
+  image_hashes: Array<{ url: string; hashes: Array<{ p: string; d: string; c: string }> }> | null;
+
   /** Add-on products the sales bot may suggest (ids of products in the same company) */
   @Column({ type: 'int', array: true, default: () => "'{}'" })
   related_product_ids: number[];
@@ -111,4 +123,20 @@ export class Product {
   /** Available / Unavailable (replaces stock counts – default available) */
   @Column({ type: 'boolean', default: true })
   is_available: boolean;
+
+  /** Optional stock counting: when true, `quantity` (or each variant option's quantity) is the stock and orders take it out */
+  @Column({ type: 'boolean', default: false })
+  track_stock: boolean;
+
+  /** Alert when the stock falls to this number or below (stock counting only) */
+  @Column({ type: 'int', default: 5 })
+  low_stock_level: number;
+
+  /** true = the product was switched to Unavailable automatically at 0 stock (switched back on when stock is added) */
+  @Column({ type: 'boolean', default: false })
+  stock_auto_off: boolean;
+
+  /** How many days one purchase usually lasts (e.g. a 30-pack of diapers ≈ 21) – used for the reorder-due list */
+  @Column({ type: 'int', nullable: true })
+  reorder_days: number | null;
 }
