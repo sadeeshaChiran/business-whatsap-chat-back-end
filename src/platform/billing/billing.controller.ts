@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
 import { SuperAdminGuard } from '../super-admin.guard';
 import { AdminOnly, OwnerOnly } from '../../auth/decorators/roles.decorator';
-import { AutoRenewDto, BankDetailsDto, CheckoutDto, PaymentsQueryDto, PaypalRateDto, RejectPaymentDto, TokenPackDto } from './billing.dto';
+import { AutoRenewDto, BankDetailsDto, CheckoutDto, PaymentMethodsDto, PaymentsQueryDto, PaypalRateDto, RejectPaymentDto, TokenPackDto } from './billing.dto';
 import { BillingService } from './billing.service';
 
 type Upload = { buffer: Buffer; mimetype: string; originalname: string; size: number };
@@ -157,6 +157,10 @@ export class SuperAdminBillingController {
 
   @Get('settings')
   settings() { return this.billing.billingSettings(); }
+
+  /** Which ways of paying businesses see: Card (Payments.lk), PayPal, Bank transfer, PayHere. */
+  @Put('settings/methods')
+  methods(@Body() dto: PaymentMethodsDto) { return this.billing.setPaymentMethods(dto); }
 
   /** Payments.lk auto-renew: charge the saved cards that are due now (it also runs every hour by itself). */
   @Post('renewals/run')

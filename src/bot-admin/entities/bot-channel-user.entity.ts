@@ -50,6 +50,10 @@ export class BotChannelUser {
   @Column({ type: 'boolean', default: false })
   manual_mode: boolean;
 
+  /** 'system' = OTP / service sender, kept apart for admins (no agent, no AI) · 'normal' = an admin said it is a customer */
+  @Column({ type: 'varchar', length: 10, nullable: true })
+  system_kind: string | null;
+
   @Column({ type: 'timestamp', nullable: true })
   last_seen_at: Date | null;
 

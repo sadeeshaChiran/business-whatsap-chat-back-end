@@ -7,6 +7,7 @@ import {
   Param,
   ParseIntPipe,
   Patch,
+  Put,
   Post,
   Query,
   UploadedFile,
@@ -111,6 +112,26 @@ export class BotAdminController {
   ) {
     return this.botAdminService.updateLeadStage(user, id, payload.lead_stage);
   }
+  /** Admin: OTP / verification codes and other service messages sent to the business number (agents never see them). */
+  @Get('system-messages')
+  @AdminOnly()
+  listSystemMessages(@CurrentUser() user: AuthenticatedUser) {
+    return this.botAdminService.listSystemMessages(user);
+  }
+
+  @Get('system-messages/:channelUserId')
+  @AdminOnly()
+  systemMessages(@CurrentUser() user: AuthenticatedUser, @Param('channelUserId', ParseIntPipe) channelUserId: number) {
+    return this.botAdminService.systemMessages(user, channelUserId);
+  }
+
+  /** Admin: move a chat to System messages (or back to a normal customer chat). */
+  @Put('conversations/:id/system')
+  @AdminOnly()
+  setConversationSystem(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: { system?: boolean }) {
+    return this.botAdminService.setConversationSystem(user, id, body?.system !== false);
+  }
+
   /** Admin: conversations waiting in the open/unassigned queue */
   @Get('conversations/unassigned')
   getUnassignedConversations(@CurrentUser() user: AuthenticatedUser) {
