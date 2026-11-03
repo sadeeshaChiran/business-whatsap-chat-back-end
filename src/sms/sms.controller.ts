@@ -6,20 +6,28 @@ import { AdminOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { SuperAdminAuditInterceptor } from '../platform/audit.interceptor';
+import { FeatureGuard, RequiresFeature } from '../platform/feature.guard';
+import { PlanService } from '../platform/plan.service';
 import { SuperAdminGuard } from '../platform/super-admin.guard';
 import { SmsService, type SmsAudience } from './sms.service';
 
 /** SMS: Agent Metra SMS credits or the business's own Notify.lk account; campaigns, one SMS from a chat, do-not-SMS list. */
+// Hidden feature: only businesses the Agent Metra team switched SMS on for (Super admin → Companies).
 @Controller('sms')
 @ApiTags('SMS')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, FeatureGuard)
+@RequiresFeature('sms')
 export class SmsController {
-  constructor(private readonly sms: SmsService) {}
+  constructor(private readonly sms: SmsService, private readonly plan: PlanService) {}
   private company(user: AuthenticatedUser) { return Number(user.company_id); }
 
-  @Get('ready')
-  ready(@CurrentUser() user: AuthenticatedUser) { return this.sms.ready(this.company(user)); }
+  /** Every Inbox asks this – SMS switched off = simply not ready (no error). */
+  @Get('ready') @RequiresFeature()
+  async ready(@CurrentUser() user: AuthenticatedUser) {
+    if (!(await this.plan.hasFeature(this.company(user), 'sms'))) return { connected: false, sender_id: null, via: null };
+    return this.sms.ready(this.company(user));
+  }
 
   @Get('settings') @AdminOnly()
   settings(@CurrentUser() user: AuthenticatedUser) { return this.sms.settings(this.company(user)); }

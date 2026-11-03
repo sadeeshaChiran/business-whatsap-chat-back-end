@@ -1,3 +1,4 @@
+import { SuperAdminFeatureAccessController } from './feature-access';
 import { FeatureGuard } from './feature.guard';
 import { Global, Logger, Module, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource, TypeOrmModule } from '@nestjs/typeorm';
@@ -11,7 +12,7 @@ import { TokenAdjustment } from './entities/token-adjustment.entity';
 import { PlatformPayment } from './entities/platform-payment.entity';
 import { PlatformSetting } from './entities/platform-setting.entity';
 import { TokenPack } from './entities/token-pack.entity';
-import { CompanyBillingController, PayhereNotifyController, SuperAdminBillingController } from './billing/billing.controller';
+import { CompanyBillingController, PayhereNotifyController, PaypalWebhookController, PaymentsLkWebhookController, SuperAdminBillingController } from './billing/billing.controller';
 import { BillingService } from './billing/billing.service';
 import { SuperAdminExtraController, SuperAdminExtraService } from './super-admin-extra';
 import { PublicBrandingController, SuperAdminBrandingController } from './branding';
@@ -30,7 +31,7 @@ import { TokenQuotaService } from './token-quota.service';
 @Global()
 @Module({
   imports: [AuthModule, TypeOrmModule.forFeature([PlatformPackage, CompanySubscription, TokenAdjustment, PlatformPayment, PlatformSetting, TokenPack, Company, User])],
-  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, SuperAdminBillingController, SuperAdminExtraController, PublicBrandingController, SuperAdminBrandingController],
+  controllers: [SuperAdminController, BillingController, PublicPackagesController, CompanyBillingController, PayhereNotifyController, PaypalWebhookController, PaymentsLkWebhookController, SuperAdminBillingController, SuperAdminExtraController, PublicBrandingController, SuperAdminBrandingController, SuperAdminFeatureAccessController],
   providers: [FeatureGuard, PlanService, TokenQuotaService, SuperAdminService, SuperAdminGuard, BillingService, SuperAdminExtraService, SuperAdminAuditInterceptor, BrandingService],
   exports: [PlanService, TokenQuotaService, FeatureGuard, BrandingService],
 })

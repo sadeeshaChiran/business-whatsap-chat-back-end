@@ -101,6 +101,21 @@ export class PlanService {
   forgetCompany(companyId: number) {
     this.companyPlans.delete(companyId);
     this.creditHolders.delete(companyId);
+    this.hiddenAccess.delete(companyId);
+  }
+
+  /** Hidden features: off for every business unless the Agent Metra team switched them on for it (not part of packages). */
+  static readonly HIDDEN_FEATURES: Record<string, string> = { sms: 'SMS', customer_app: 'Customer app' };
+  private hiddenAccess = new Map<number, { at: number; keys: string[] }>();
+
+  async hiddenFeaturesOn(companyId: number): Promise<string[]> {
+    const hit = this.hiddenAccess.get(companyId);
+    if (hit && Date.now() - hit.at < 30_000) return hit.keys;
+    const rows: Array<{ feature: string }> = await this.packageRepository.manager.query(
+      `SELECT feature FROM company_feature_access WHERE company_id = $1`, [companyId]).catch(() => []);
+    const keys = rows.map((r) => r.feature).filter((k) => k in PlanService.HIDDEN_FEATURES);
+    this.hiddenAccess.set(companyId, { at: Date.now(), keys });
+    return keys;
   }
 
   private creditHolders = new Map<number, { at: number; active: boolean }>();
@@ -127,6 +142,8 @@ export class PlanService {
     if (pkg && limits.features.credits_unlock && locked.length && (await this.hasActiveCredits(companyId))) {
       for (const key of locked) { limits.features[key] = true; if (key !== 'tiktok' || tiktokConfigured()) unlocked.push(key); } // TikTok listed only when set up
     }
+    const hiddenOn = await this.hiddenFeaturesOn(companyId);
+    for (const key of Object.keys(PlanService.HIDDEN_FEATURES)) limits.features[key] = hiddenOn.includes(key);
     return { ...limits, package: pkg, unlocked_by_credits: unlocked };
   }
 
@@ -150,6 +167,12 @@ export class PlanService {
     const ok = mode === 'any' ? list.some((k) => limits.features[k]) : list.every((k) => limits.features[k]);
     if (ok) return;
     const missing = list.find((k) => !limits.features[k]) ?? list[0];
+    if (missing in PlanService.HIDDEN_FEATURES) {
+      throw new ForbiddenException({
+        statusCode: 403, error: 'Forbidden', code: 'FEATURE_LOCKED', feature: missing, upgrade_to: null,
+        message: `${PlanService.HIDDEN_FEATURES[missing]} is not switched on for your business yet. Contact Agent Metra to use it.`,
+      });
+    }
     const upgrade = await this.upgradeFor(missing, Number(limits.package?.price_monthly ?? 0));
     const names = list.map(limitLabel).join(mode === 'any' ? ' or ' : ' and ');
     throw new ForbiddenException({
