@@ -406,7 +406,9 @@ export class SalesBotAdminService {
     this.tokenQuota.forget(Number(company.id));
     // companies see tokens, never the AI cost (super admin only)
     const tpc = await this.planService.tokensPerCredit();
-    return { ...result, usage: { ...result.usage, cost_usd: undefined, credits: Math.round(((result.usage.input_tokens + result.usage.output_tokens) / tpc) * 1000) / 1000 } };
+    const tokens = result.usage.input_tokens + result.usage.output_tokens;
+    const charged = (await this.planService.capPerReply()) ? Math.min(tokens, tpc) : tokens;
+    return { ...result, usage: { ...result.usage, cost_usd: undefined, credits: Math.round((charged / tpc) * 1000) / 1000 } };
   }
 
   /* ───────────────────────── Customer simulator ───────────────────────── */
@@ -535,6 +537,7 @@ export class SalesBotAdminService {
     const companyId = Number(company.id);
     const maxDays = (await this.planService.limitsForCompany(companyId)).numbers.reports_days;
     const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365, maxDays ?? 365);
+    const charged = await this.planService.chargedTokensSql('u');
     const [summary] = await this.dataSource.query(
       `WITH since AS (SELECT NOW() - make_interval(days => $2::int) AS t)
        SELECT
@@ -553,6 +556,7 @@ export class SalesBotAdminService {
            WHERE CAST(cu.company_id AS BIGINT) = $1 AND m.source = $3 AND m.intent LIKE '%handoff%' AND m.created_at > (SELECT t FROM since))::int AS handoffs,
          (SELECT COUNT(*) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since))::int AS ai_replies,
          (SELECT COALESCE(SUM(u.input_tokens + u.output_tokens), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND u.created_at > (SELECT t FROM since)) AS ai_tokens,
+         (SELECT COALESCE(SUM(${charged}), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND u.created_at > (SELECT t FROM since)) AS ai_charged,
          (SELECT COALESCE(AVG(u.latency_ms), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_latency_ms,
          (SELECT COALESCE(AVG(u.calls), 0) FROM bot_ai_usage u WHERE u.company_id = $1 AND NOT u.is_test AND u.created_at > (SELECT t FROM since)) AS avg_calls`,
       [companyId, days, BOT_SOURCE],
@@ -573,7 +577,7 @@ export class SalesBotAdminService {
     return {
       days, max_days: maxDays, conversations, orders, revenue: num(summary?.revenue), bookings, leads: num(summary?.leads),
       handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
-      ai_credits: Math.round((num(summary?.ai_tokens) / (await this.planService.tokensPerCredit())) * 10) / 10,
+      ai_credits: Math.round((num(summary?.ai_charged) / (await this.planService.tokensPerCredit())) * 10) / 10,
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
       // returning customers order in older chats too: never show more than 100 %
       conversion: conversations ? Math.min(1, (orders + bookings) / conversations) : 0,

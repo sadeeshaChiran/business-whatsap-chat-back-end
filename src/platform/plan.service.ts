@@ -34,16 +34,18 @@ export class PlanService {
     this.creditHolders.clear();
   }
 
-  private creditCache: { at: number; value: number; perReply: number } | null = null;
+  private creditCache: { at: number; value: number; perReply: number; cap: boolean } | null = null;
 
-  private async creditSetting(): Promise<{ value: number; perReply: number }> {
+  private async creditSetting(): Promise<{ value: number; perReply: number; cap: boolean }> {
     if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache;
-    const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number } }> = await this.packageRepository.manager
+    const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number; cap_per_reply?: boolean } }> = await this.packageRepository.manager
       .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
     const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
     // default: 1 credit = 1 average customer chat (easy to explain to shops)
     const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || DEFAULT_TOKENS_PER_CREDIT);
-    this.creditCache = { at: Date.now(), value, perReply };
+    // default ON: one AI reply never uses more than 1 credit (a short one uses less)
+    const cap = rows[0]?.value?.cap_per_reply !== false;
+    this.creditCache = { at: Date.now(), value, perReply, cap };
     return this.creditCache;
   }
 
@@ -54,7 +56,27 @@ export class PlanService {
 
   /** Average AI tokens one bot reply uses (super admin setting) - only for the "≈ N AI replies" text. */
   async tokensPerReply(): Promise<number> {
+    const setting = await this.creditSetting();
+    // with the 1-credit cap every reply uses at most 1 credit, so N credits = at least N replies
+    return setting.cap ? setting.value : setting.perReply;
+  }
+
+  /** The saved "1 AI reply ≈ tokens" value (super admin form), whatever the cap. */
+  async savedTokensPerReply(): Promise<number> {
     return (await this.creditSetting()).perReply;
+  }
+
+  /** true = one AI reply (one bot_ai_usage row) counts at most 1 credit. */
+  async capPerReply(): Promise<boolean> {
+    return (await this.creditSetting()).cap;
+  }
+
+  /** SQL for the tokens a company is charged for one usage row (capped at 1 credit when the cap is on). */
+  async chargedTokensSql(alias = ''): Promise<string> {
+    const setting = await this.creditSetting();
+    const a = alias ? `${alias}.` : '';
+    const raw = `(${a}input_tokens + ${a}output_tokens)`;
+    return setting.cap ? `LEAST(${raw}, ${Math.floor(setting.value)})` : raw;
   }
 
   /** tokens → credits, 1 decimal */
