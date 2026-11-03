@@ -1,13 +1,13 @@
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 export type PaymentKind = 'subscription' | 'token_pack' | 'sms_pack';
-export type PaymentMethod = 'payhere' | 'bank_transfer' | 'manual';
+export type PaymentMethod = 'payhere' | 'bank_transfer' | 'manual' | 'paypal' | 'paymentslk';
 /**
  * pending            – created, waiting for PayHere or for the bank slip
  * awaiting_approval  – bank slip uploaded, super admin must check it
  * paid / rejected / failed / cancelled
  */
-export type PaymentStatus = 'pending' | 'awaiting_approval' | 'paid' | 'rejected' | 'failed' | 'cancelled';
+export type PaymentStatus = 'pending' | 'awaiting_approval' | 'paid' | 'rejected' | 'failed' | 'cancelled' | 'refunded';
 
 @Entity('platform_payment')
 export class PlatformPayment {
@@ -64,6 +64,33 @@ export class PlatformPayment {
 
   @Column({ type: 'varchar', length: 60, nullable: true })
   payhere_subscription_id: string | null;
+
+  /** PayPal: charged in US dollars at the rate of the day (amount stays in rupees) */
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true })
+  amount_usd: string | number | null;
+
+  @Column({ type: 'decimal', precision: 12, scale: 4, nullable: true })
+  usd_rate: string | number | null;
+
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  paypal_order_id: string | null;
+
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  paypal_subscription_id: string | null;
+
+  /** the PayPal capture / sale id of the money (one per payment) */
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  paypal_payment_id: string | null;
+
+  /** Payments.lk: hosted checkout, the payment (money) and the card saved for auto-renew */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  plk_checkout_id: string | null;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  plk_payment_id: string | null;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  plk_card_id: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   slip_media_key: string | null;

@@ -62,7 +62,7 @@ export async function sql(query, params = []) {
 export async function closeDb() { if (db) await db.end(); db = null; }
 
 /** Sign-up with email + SMS codes (dev mode), choose the Free package. */
-export async function createWorkspace(label, { plan = 'free', category = 'product' } = {}) {
+export async function createWorkspace(label, { plan = 'free', category = 'product', hidden = true } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
   const phone = `9477${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
   const start = await api('POST', '/auth/register/start', {
@@ -80,6 +80,8 @@ export async function createWorkspace(label, { plan = 'free', category = 'produc
     const r = await api('PATCH', `/company/${user.company_id}`, { token, body: { plan } });
     if (r.status !== 200) throw new Error(`choose plan failed: ${r.status} ${JSON.stringify(r.json)}`);
   }
+  // hidden features (SMS, Customer app) are switched on per company by the super admin – older tests use them
+  if (hidden) await sql(`INSERT INTO company_feature_access (company_id, feature, note) VALUES ($1, 'sms', 'test'), ($1, 'customer_app', 'test') ON CONFLICT DO NOTHING`, [user.company_id]);
   return { email, token, user, companyId: user.company_id };
 }
 

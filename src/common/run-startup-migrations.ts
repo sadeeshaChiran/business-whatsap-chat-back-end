@@ -81,6 +81,9 @@ const MIGRATION_FILES = [
   'supabase_sms_1.sql',
   'supabase_sms_2.sql',
   'supabase_team_email.sql',
+  'supabase_feature_access.sql',
+  'supabase_paypal.sql',
+  'supabase_paymentslk.sql',
 ] as const;
 
 function migrationDir(): string | null {
