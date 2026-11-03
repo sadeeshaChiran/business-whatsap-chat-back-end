@@ -44,12 +44,46 @@ export class CompanySubscription {
   @Column({ type: 'varchar', length: 60, nullable: true })
   payhere_subscription_id: string | null;
 
+  /** PayPal subscription that renews the package (auto-renew) */
+  @Column({ type: 'varchar', length: 60, nullable: true })
+  paypal_subscription_id: string | null;
+
+  /** Payments.lk saved card that renews the package (auto-renew), and the tries of the current renewal */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  plk_card_id: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  plk_renew_attempts: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  plk_renew_last_at: Date | null;
+
   /** renewal reminders (bank transfer / no auto-renew) */
   @Column({ type: 'timestamptz', nullable: true })
   reminded_7_at: Date | null;
 
   @Column({ type: 'timestamptz', nullable: true })
   reminded_1_at: Date | null;
+
+  /** free trial of a package: when period_end passes the company moves to fallback_package_id (Free) */
+  @Column({ type: 'boolean', default: false })
+  is_trial: boolean;
+
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  trial_note: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  fallback_package_id: number | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  trial_reminded_at: Date | null;
+
+  /** end of the free AI-bot days of a package with bot_days (set once, the first time the company gets such a package) */
+  @Column({ type: 'timestamptz', nullable: true })
+  bot_free_until: Date | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  bot_free_reminded_at: Date | null;
 
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;

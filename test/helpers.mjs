@@ -61,17 +61,17 @@ export async function sql(query, params = []) {
 }
 export async function closeDb() { if (db) await db.end(); db = null; }
 
-/** Sign-up with email + WhatsApp codes (dev mode), choose the Free package. */
-export async function createWorkspace(label, { plan = 'free', category = 'product' } = {}) {
+/** Sign-up with email + SMS codes (dev mode), choose the Free package. */
+export async function createWorkspace(label, { plan = 'free', category = 'product', hidden = true } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
   const phone = `9477${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
   const start = await api('POST', '/auth/register/start', {
-    body: { name: `${label} Owner`, email, password: PASSWORD, whatsapp: phone, company: { name: `${label} Store ${RUN}`, category } },
+    body: { name: `${label} Owner`, email, password: PASSWORD, phone, company: { name: `${label} Store ${RUN}`, category } },
   });
   if (start.status !== 201) throw new Error(`register/start failed: ${start.status} ${JSON.stringify(start.json)}`);
   const codes = start.data.dev_codes;
   const verify = await api('POST', '/auth/register/verify', {
-    body: { registration_id: start.data.registration_id, email_code: codes.email, whatsapp_code: codes.whatsapp },
+    body: { registration_id: start.data.registration_id, email_code: codes.email, phone_code: codes.phone },
   });
   if (verify.status !== 201) throw new Error(`register/verify failed: ${verify.status} ${JSON.stringify(verify.json)}`);
   const token = verify.data.access_token;
@@ -80,6 +80,8 @@ export async function createWorkspace(label, { plan = 'free', category = 'produc
     const r = await api('PATCH', `/company/${user.company_id}`, { token, body: { plan } });
     if (r.status !== 200) throw new Error(`choose plan failed: ${r.status} ${JSON.stringify(r.json)}`);
   }
+  // hidden features (SMS, Customer app) are switched on per company by the super admin – older tests use them
+  if (hidden) await sql(`INSERT INTO company_feature_access (company_id, feature, note) VALUES ($1, 'sms', 'test'), ($1, 'customer_app', 'test') ON CONFLICT DO NOTHING`, [user.company_id]);
   return { email, token, user, companyId: user.company_id };
 }
 
@@ -88,10 +90,18 @@ export async function login(email, password = PASSWORD) {
   return r;
 }
 
-export async function createAgent(admin, label) {
+export async function createAgent(admin, label, { teamRole } = {}) {
   const email = `${label}-${RUN}@test.agentmetra.lk`.toLowerCase();
-  const r = await api('POST', '/users/agents', { token: admin.token, body: { name: `${label} Agent`, email, password: PASSWORD } });
+  const body = { name: `${label} Agent`, email, password: PASSWORD, ...(teamRole ? { team_role: teamRole } : {}) };
+  let r = await api('POST', '/users/agents', { token: admin.token, body });
+  // Free allows only 1 agent: tests that need a team move the shop to Starter (3 agents) and try again
+  if (r.status === 400 && /package allows \d+ agents/.test(String(r.json?.message)) && admin.user?.company_id) {
+    await sql(`UPDATE companies SET plan = 'starter' WHERE id = $1 AND plan = 'free'`, [admin.user.company_id]);
+    r = await api('POST', '/users/agents', { token: admin.token, body });
+  }
   if (r.status !== 201) throw new Error(`create agent failed: ${r.status} ${JSON.stringify(r.json)}`);
+  // team members confirm their email at the first login – test agents count as confirmed
+  await sql('UPDATE app_user SET email_verified_at = NOW() WHERE id = $1', [r.data.id]);
   const session = await login(email);
   return { email, id: r.data.id, token: session.data.access_token, user: session.data.user };
 }

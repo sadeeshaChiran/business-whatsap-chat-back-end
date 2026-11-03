@@ -59,5 +59,31 @@ export class WhatsappChannel {
 
   @Column({ type: 'boolean', nullable: true })
   evolution_read_messages: boolean | null;
+
+  /** Name the shop gives the number, e.g. "Wholesale" (several numbers per company) */
+  @Column({ type: 'text', nullable: true })
+  label: string | null;
+
+  /** What the number is for: sales / support / wholesale / ads / delivery / other */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  purpose: string | null;
+
+  /** Extra instructions for the AI bot when a customer writes to this number */
+  @Column({ type: 'text', nullable: true })
+  bot_note: string | null;
+
+  /** false = the AI bot does not answer on this number (the team answers) */
+  @Column({ type: 'boolean', default: true })
+  bot_enabled: boolean;
+
+  /** The company's main number: Settings, broadcasts and new chats started by the team use it */
+  @Column({ type: 'boolean', default: false })
+  is_primary: boolean;
+
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  display_phone: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  verified_name: string | null;
 }
 

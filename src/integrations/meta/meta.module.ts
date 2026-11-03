@@ -14,6 +14,9 @@ import { BotChannelUser } from '../../bot-admin/entities/bot-channel-user.entity
 import { BotConversation } from '../../bot-admin/entities/bot-conversation.entity';
 import { BotMessage } from '../../bot-admin/entities/bot-message.entity';
 import { WhatsappModule } from '../../whatsapp/whatsapp.module';
+import { PageSubscriptionsRefresh } from './page-subscriptions.refresh';
+import { WhatsappConnectService } from './whatsapp-connect.service';
+import { WhatsappNumbersController, WhatsappNumbersService } from './whatsapp-numbers';
 
 @Module({
   imports: [
@@ -29,8 +32,8 @@ import { WhatsappModule } from '../../whatsapp/whatsapp.module';
     CompanyModule,
     WhatsappModule,
   ],
-  controllers: [MetaController, MetaOAuthController, MetaMessagesController],
-  providers: [MetaGraphService, MetaPageConnectionService],
+  controllers: [MetaController, MetaOAuthController, MetaMessagesController, WhatsappNumbersController],
+  providers: [MetaGraphService, MetaPageConnectionService, PageSubscriptionsRefresh, WhatsappConnectService, WhatsappNumbersService],
   exports: [MetaPageConnectionService, MetaGraphService],
 })
 export class MetaModule {}

@@ -23,16 +23,17 @@ import { MetaPageConnectionService } from '../../meta/meta-page-connection.servi
 import { ConnectMetaPageDto } from './dto/connect-meta-page.dto';
 import { ConnectWhatsappEmbeddedDto } from './dto/connect-whatsapp-embedded.dto';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
-import { randomBytes } from 'crypto';
-import { MetaGraphService, type MetaSocialPost } from './meta-graph.service';
+import { WhatsappConnectService } from './whatsapp-connect.service';
+import { APP_WEBHOOK_FIELDS, MetaGraphService, type MetaSocialPost } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
+import { recentMetaEvents } from './webhook-events';
 import { webhookCheck } from './webhook-stats';
 import { tokenScopes } from '../../marketing/graph';
 
 type HealthCheck = { key: string; label: string; ok: boolean | null; detail: string; fix?: string; tech?: boolean; tech_detail?: string };
 
 /** Platform-side checks: shown under "Technical details", not in the shop owner's list. */
-const TECH_KEYS = new Set(['public_url', 'provider', 'token_app', 'delivery', 'app_webhook']);
+const TECH_KEYS = new Set(['public_url', 'provider', 'token_app', 'delivery', 'app_webhook', 'meta_events']);
 const QUALITY: Record<string, string> = {
   GREEN: 'Good',
   YELLOW: 'Medium – avoid sending too many marketing messages',
@@ -40,6 +41,20 @@ const QUALITY: Record<string, string> = {
 };
 
 /** Plain words for the shop owner; the original wording stays for the technical list. */
+/** What Meta actually sent lately (no message text) – shows whether ad clicks arrive at all. */
+function eventsCheck(companyId: number | null | undefined, platform: 'messenger' | 'instagram') {
+  const list = recentMetaEvents(Number(companyId ?? 0), platform);
+  const ads = list.filter((e) => e.details.some((d) => d.startsWith('referral')));
+  const replies = list.filter((e) => e.details.includes('reply to an earlier message'));
+  const lines = list.slice(0, 12).map((e) => `${e.at.slice(11, 19)} UTC · ${e.kind}${e.details.length ? ` – ${e.details.join('; ')}` : ''}`);
+  return {
+    key: 'meta_events', label: 'What Meta sent lately (since the server started)', ok: null,
+    detail: list.length
+      ? `${list.length} events, ${ads.length} with ad / link details, ${replies.length} replies to a Page message.\n${lines.join('\n')}`
+      : 'Nothing yet since the server started. Send a message to the Page (or click your ad), then press “Check again”.',
+  };
+}
+
 export function presentChecks(checks: HealthCheck[], channel: 'whatsapp' | 'messenger' | 'instagram'): HealthCheck[] {
   return checks.map((raw) => {
     if (TECH_KEYS.has(raw.key)) return { ...raw, tech: true };
@@ -77,6 +92,7 @@ export class MetaController {
     private readonly metaPageConnectionService: MetaPageConnectionService,
     private readonly companyService: CompanyService,
     private readonly whatsappChannelService: WhatsappChannelService,
+    private readonly whatsappConnectService: WhatsappConnectService,
     @InjectRepository(Company)
     private readonly companyRepository: Repository<Company>,
     @InjectRepository(MetaPageConnection)
@@ -87,7 +103,7 @@ export class MetaController {
     const company = await this.companyRepository.findOne({
       where: { id: user.company_id },
     });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) {
       throw new ForbiddenException('Only the company admin can manage Facebook Page connections.');
     }
     return company;
@@ -120,59 +136,66 @@ export class MetaController {
     return this.metaGraphService.getEmbeddedSignupConfig();
   }
 
+  /** Redirect flow for WhatsApp (like the Facebook Page login): the browser goes to Meta and comes back. */
+  @Get('whatsapp/auth-url')
+  async getWhatsappAuthUrl(@CurrentUser() user: AuthenticatedUser) {
+    await this.assertAdmin(user);
+    const state = buildMetaOAuthState(user.company_id, user.id, '/channels/whatsapp', true);
+    return { url: this.metaGraphService.buildWhatsappAuthUrl(state) };
+  }
+
   @Post('whatsapp/connect')
   async connectWhatsappEmbedded(
     @CurrentUser() user: AuthenticatedUser,
     @Body() body: ConnectWhatsappEmbeddedDto,
   ) {
-    const company = await this.assertAdmin(user);
-    const existing = await this.whatsappChannelService.getForCompany(user.company_id);
-    if (body.phone_number_id) await this.companyService.assertWhatsappNumberFree(Number(company.id), body.phone_number_id.trim());
-
-    const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(body.code, body.page_url);
-    // Meta's browser message can get lost (popup closed early, blockers): then find the shared account + number from the token
-    let wabaId = body.waba_id?.trim() ?? '';
-    let phoneNumberId = body.phone_number_id?.trim() ?? '';
-    if (!wabaId || !phoneNumberId) {
-      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken);
-      if (!found) throw new BadRequestException('Meta did not share a WhatsApp number. Run the setup again and choose (or add) a phone number.');
-      wabaId = found.waba_id;
-      phoneNumberId = found.phone_number_id;
-      await this.companyService.assertWhatsappNumberFree(Number(company.id), phoneNumberId);
-    }
-    const replaced = existing?.meta_phone_number_id && existing.meta_phone_number_id !== phoneNumberId ? existing.meta_phone_number_id : null;
-    const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
-    await this.metaGraphService.subscribeWhatsappApp(wabaId, accessToken);
-    // Cloud API numbers must be registered before they can send / receive (6-digit two-step PIN)
-    const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? '')) ? String(process.env.WHATSAPP_REGISTRATION_PIN) : String(Math.floor(100000 + Math.random() * 900000));
-    const registration = await this.metaGraphService.registerWhatsappNumber(phoneNumberId, accessToken, pin);
-
-    const verifyToken = existing?.meta_verify_token?.trim()
-      || process.env.META_WEBHOOK_VERIFY_TOKEN?.trim()
-      || randomBytes(24).toString('hex');
-    const webhookBase = existing?.meta_webhook_base_url?.trim()
-      || process.env.PUBLIC_API_BASE_URL?.trim()
-      || process.env.API_BASE_URL?.trim()
-      || '';
-    const savedCompany = await this.companyService.update(Number(company.id), {
-      phone: phone.display_phone_number.replace(/\D/g, ''),
-      whatsapp_provider_type: 'meta',
-      meta_phone_number_id: phoneNumberId,
-      meta_waba_id: wabaId,
-      meta_access_token: accessToken,
-      meta_verify_token: verifyToken,
-      meta_webhook_base_url: webhookBase,
-    }, user);
-    return {
-      company: savedCompany,
-      display_phone_number: phone.display_phone_number,
-      verified_name: phone.verified_name,
-      subscribed: true,
-      registered: registration.registered,
-      registration_message: registration.registered ? null : `The number could not be registered for the Cloud API: ${registration.message}`,
-      replaced_previous_number: Boolean(replaced),
-    };
+    return this.whatsappConnectService.connect(user, body);
   }
+  /** Who is connected, for the Channels screen card: Page / Instagram / WhatsApp name, picture, followers. Never changes anything. */
+  @Get('account-details')
+  async accountDetails(@CurrentUser() user: AuthenticatedUser) {
+    await this.assertAdmin(user);
+    const result: {
+      whatsapp: { number: string; name: string; quality: string | null } | null;
+      page: { id: string; name: string; picture_url: string | null; category: string | null; followers: number | null; link: string | null } | null;
+      instagram: { id: string; username: string | null; name: string | null; picture_url: string | null; followers: number | null } | null;
+    } = { whatsapp: null, page: null, instagram: null };
+
+    const channel = await this.whatsappChannelService.getForCompany(user.company_id);
+    const token = channel?.meta_access_token?.trim() || '';
+    if (channel?.meta_phone_number_id && token) {
+      const phone = await this.metaGraphService.healthGet<{ display_phone_number?: string; verified_name?: string; quality_rating?: string }>(
+        `/${channel.meta_phone_number_id}`, token, { fields: 'display_phone_number,verified_name,quality_rating' });
+      if (phone.ok) result.whatsapp = { number: phone.data?.display_phone_number ?? '', name: phone.data?.verified_name ?? '', quality: phone.data?.quality_rating ?? null };
+    }
+
+    const page = await this.metaPageConnectionRepository.findOne({ where: { company_id: user.company_id, status: 'CONNECTED' }, order: { id: 'DESC' } });
+    if (page?.page_access_token) {
+      const info = await this.metaGraphService.healthGet<{ name?: string; category?: string; followers_count?: number; fan_count?: number; link?: string; picture?: { data?: { url?: string } } }>(
+        `/${page.page_id}`, page.page_access_token, { fields: 'name,category,followers_count,fan_count,link,picture.type(square){url}' });
+      result.page = {
+        id: page.page_id,
+        name: info.data?.name ?? page.page_name,
+        picture_url: info.data?.picture?.data?.url ?? null,
+        category: info.data?.category ?? null,
+        followers: info.data?.followers_count ?? info.data?.fan_count ?? null,
+        link: info.data?.link ?? `https://facebook.com/${page.page_id}`,
+      };
+      if (page.instagram_business_account_id) {
+        const ig = await this.metaGraphService.healthGet<{ username?: string; name?: string; profile_picture_url?: string; followers_count?: number }>(
+          `/${page.instagram_business_account_id}`, page.page_access_token, { fields: 'username,name,profile_picture_url,followers_count' });
+        result.instagram = {
+          id: page.instagram_business_account_id,
+          username: ig.data?.username ?? null,
+          name: ig.data?.name ?? null,
+          picture_url: ig.data?.profile_picture_url ?? null,
+          followers: ig.data?.followers_count ?? null,
+        };
+      }
+    }
+    return result;
+  }
+
   /**
    * Connection health for the Channels screen: WhatsApp (token, number, webhook subscription, public URL),
    * Messenger (Page token, webhook subscription) and Instagram (linked account). Never changes anything.
@@ -243,13 +266,35 @@ export class MetaController {
         detail: !subs.ok ? subs.error ?? '' : subscribed ? `${fields.join(', ')}${otherText}` : `This platform's Meta app (${appId}) is not subscribed to the Page – press “Fix it”.${otherText}`,
         fix: subs.ok && !subscribed ? 'messenger_subscribe' : undefined,
       });
+      if (subscribed) {
+        const referrals = fields.includes('messaging_referrals');
+        messenger.push({
+          key: 'ad_clicks', label: 'Ad clicks are sent to Agent Metra (who came from which ad)', ok: referrals,
+          detail: referrals ? 'Click-to-Messenger ads and "Send message" buttons are linked to the chat.' : 'The Page is not sending ad clicks ("messaging_referrals"), so chats from ads look like normal chats – press “Fix it”.',
+          fix: referrals ? undefined : 'messenger_subscribe',
+        });
+      }
       messenger.push({ key: 'delivery', label: 'Meta is calling the webhook', ...webhookCheck('messenger') });
-      messenger.push({ key: 'app_webhook', label: 'Meta app: Messenger webhook verified, fields “messages”, “messaging_postbacks”, “feed” subscribed', ok: null, detail: 'Meta Developers → your app → Messenger → Settings → Webhooks. While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
+      const app = await this.metaGraphService.appWebhookFields();
+      const missing = (object: 'page' | 'instagram') => APP_WEBHOOK_FIELDS[object].filter((f) => !(app.objects[object]?.fields ?? []).includes(f));
+      const appCheck = (object: 'page' | 'instagram', label: string) => {
+        if (!app.ok) return { key: 'app_webhook', label, ok: null, detail: `Could not read the Meta app webhooks (${app.error ?? 'unknown'}). Check Meta Developers → your app → Webhooks.` };
+        const gone = missing(object);
+        return {
+          key: 'app_webhook', label, ok: gone.length === 0,
+          detail: gone.length ? `Missing: ${gone.join(', ')} – press “Fix it” (adds them to the platform's Meta app).` : `Fields: ${APP_WEBHOOK_FIELDS[object].join(', ')}.`,
+          fix: gone.length ? 'meta_app_webhooks' : undefined,
+        };
+      };
+      messenger.push(appCheck('page', 'Meta app: Messenger webhook fields (messages, buttons, ad clicks, comments)'));
+      messenger.push(eventsCheck(user.company_id, 'messenger'));
+      messenger.push({ key: 'dev_mode', label: 'Meta app is Live', ok: null, detail: 'While the app is in Development mode, only people with a role on the app (admin / developer / tester) reach the Page.' });
       instagram.push({ key: 'page', label: 'Facebook Page connected', ok: true, detail: page.page_name ?? page.page_id });
       instagram.push({ key: 'linked', label: 'Instagram professional account linked to the Page', ok: Boolean(page.instagram_business_account_id),
         detail: page.instagram_business_account_id ? `Instagram account ${page.instagram_business_account_id}` : 'Link the Instagram account to this Facebook Page (Instagram → Settings → Linked accounts / Meta Business Suite).' });
       instagram.push({ key: 'dm_access', label: 'Instagram → Settings → Messages → "Allow access to messages" is on', ok: null, detail: 'Check this in the Instagram app (it cannot be read by Agent Metra).' });
-      instagram.push({ key: 'app_webhook', label: 'Meta app: Instagram webhook "messages" is subscribed', ok: null, detail: 'Meta Developers → your app → Webhooks → Instagram → subscribe to "messages".' });
+      instagram.push(appCheck('instagram', 'Meta app: Instagram webhook fields (messages, buttons, ad clicks, comments)'));
+      instagram.push(eventsCheck(user.company_id, 'instagram'));
     }
     return { whatsapp: presentChecks(whatsapp, 'whatsapp'), messenger: presentChecks(messenger, 'messenger'), instagram: presentChecks(instagram, 'instagram') };
   }
@@ -292,11 +337,15 @@ export class MetaController {
       if (!result.registered) throw new BadRequestException(`Meta: ${result.message}`);
       return { ok: true, message: result.message };
     }
+    if (action === 'meta_app_webhooks') {
+      const result = await this.metaGraphService.fixAppWebhookFields();
+      return { ok: true, message: result.changed.length ? `Added to the Meta app: ${result.changed.join('; ')}.` : 'The Meta app already has every webhook field.' };
+    }
     if (action === 'messenger_subscribe') {
       const page = await this.metaPageConnectionRepository.findOne({ where: { company_id: user.company_id, status: 'CONNECTED' }, order: { id: 'DESC' } });
       if (!page?.page_access_token) throw new BadRequestException('Connect a Facebook Page first.');
       await this.metaGraphService.subscribePageMessaging(page.page_id, page.page_access_token);
-      return { ok: true, message: 'Page messages now go to Agent Metra.' };
+      return { ok: true, message: 'Page messages and ad clicks now go to Agent Metra.' };
     }
     throw new BadRequestException('Unknown fix.');
   }

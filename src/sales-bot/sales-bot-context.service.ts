@@ -1,3 +1,4 @@
+import { absoluteProductImage } from '../products/product-images';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
@@ -21,8 +22,12 @@ export type ContextProduct = {
   price: number;
   stock: number | null;
   available?: boolean;
+  /** brand, '' when none */
+  brand?: string;
   photo_count: number;
   image_urls: string[];
+  /** what the photos show (colour, pattern, style) – helps match photos customers send */
+  image_notes?: string;
   description: string;
   selling_points: string;
   /** kg, null = not set */
@@ -38,6 +43,8 @@ export type SalesBotContext = {
     free_delivery_over?: number | null;
   };
   products: ContextProduct[];
+  /** what the customer's photo(s) in this message matched in our catalog (see photo-match.ts) */
+  photo_matches?: import('./photo-match').PhotoMatch[];
   services: Array<{ service_id: number; name: string; description: string; price: number; price_note: string; duration_min: number | null; available: boolean }>;
   /** included_kg + per_extra_kg set = weight rule (fee = fee + extra kg × per_extra_kg) */
   /** weight_rounding: up (2.3 kg -> 3), nearest (2.3 -> 2, 2.5 -> 3), exact */
@@ -56,6 +63,8 @@ export type SalesBotContext = {
   campaign?: BotCampaign | null;
   /** Sri Lanka date and time now, e.g. "2026-10-09 Friday 14:20" (for "tomorrow", "next Monday") */
   today?: string;
+  /** the shop's WhatsApp number this customer wrote to, when the shop has several (sales, support, wholesale …) */
+  whatsapp_number?: { label: string | null; purpose: string | null; note: string | null } | null;
   /** booked times (next 90 days) - the bot's check_booking_time tool uses this */
   bookings?: { mode: 'requested' | 'confirmed'; capacity: number; open: string; close: string; busy: Array<{ id: number; date: string; start: string; end: string }> };
   /** this customer's bookings that are still open (requested / confirmed) - the bot changes or cancels these */
@@ -72,8 +81,10 @@ export function sriLankaNow(now = new Date()) {
 }
 
 /** Products sent to the bot. Up to 300 are listed in the prompt; bigger shops get a category index and the
- * bot finds products by meaning (vector search), so every product is visible. */
-const MAX_PRODUCTS = 2500;
+ * bot finds products by meaning (vector search), so every product is visible. This cap must stay above the
+ * biggest shop: with 2,500 a 3,636-product shop lost every product after "S…" (sorted by name) – the bot said
+ * "not available" for products the shop has. */
+const MAX_PRODUCTS = 20000;
 /** above this many products, descriptions are shortened (keeps the request small) */
 const LONG_TEXT_LIMIT = 400;
 
@@ -84,7 +95,7 @@ export function effectiveSellsOf(company: Pick<Company, 'business_category'> | n
   const category = String(company?.business_category ?? '').toLowerCase();
   return category === 'both' ? 'both' : category === 'service' ? 'services' : 'products';
 }
-const toNumber = (value: unknown, fallback = 0) => {
+export const toNumber = (value: unknown, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
@@ -115,10 +126,37 @@ export function productOptions(product: Product): ProductVariantOption[] {
   return product.has_variants && Array.isArray(row?.variants) ? row.variants : [];
 }
 
+/**
+ * Which option a product photo shows, e.g. "Colour: Blue" – from the option photos and the photo-per-option table.
+ * When several options share the photo ("Blue / S", "Blue / M") only the part they have in common is named ("Blue"),
+ * so a size is never guessed from a colour photo. price = their price when they all cost the same.
+ */
+export function photoOption(product: Product, url: string): { label: string; price: number | null } | null {
+  const target = absoluteProductImage(String(url ?? '').trim());
+  const options = productOptions(product).filter((option) => option.image_url && absoluteProductImage(String(option.image_url).trim()) === target);
+  if (options.length) {
+    const prices = [...new Set(options.map((option) => variantPrice(product, option)))];
+    const price = prices.length === 1 && Number.isFinite(prices[0]) ? prices[0] : null;
+    if (options.length === 1) return { label: variantLabel(options[0]), price };
+    const names = String(options[0].variant_name ?? '').split('/').map((part) => part.trim());
+    const values = options.map((option) => String(option.variant_value ?? '').split('/').map((part) => part.trim()));
+    const shared = values[0]
+      .map((value, i) => (values.every((v) => v[i] === value) ? (names[i] && names.length === values[0].length ? `${names[i]}: ${value}` : value) : null))
+      .filter((part): part is string => Boolean(part));
+    return shared.length ? { label: shared.join(' / '), price } : null;
+  }
+  for (const [key, image] of Object.entries(product.variant_image_match?.images ?? {})) {
+    if (image && absoluteProductImage(String(image).trim()) === target) return { label: key, price: null };
+  }
+  return null;
+}
+
+/** Every photo of a product as a full link: cover, gallery, then variant photos (our own stored photos made absolute). */
 export function productImages(product: Product): string[] {
-  const urls = [product.image_url ?? '', ...(Array.isArray(product.gallery) ? product.gallery : [])]
-    .map((url) => String(url ?? '').trim())
-    .filter((url) => /^https?:\/\//i.test(url));
+  const variantPhotos = productOptions(product).map((option) => option.image_url ?? '');
+  const urls = [product.image_url ?? '', ...(Array.isArray(product.gallery) ? product.gallery : []), ...variantPhotos]
+    .map((url) => absoluteProductImage(String(url ?? '').trim()))
+    .filter((url) => /^https?:\/\//i.test(url) || /\/public\/product-images\//.test(url));
   return [...new Set(urls)];
 }
 
@@ -258,11 +296,28 @@ export class SalesBotContextService {
       relations: ['category', 'variants'],
       order: { name: 'ASC' },
       take: MAX_PRODUCTS,
+    }).then((rows) => {
+      if (rows.length >= MAX_PRODUCTS) console.warn(`[sales bot] company ${companyId} has more than ${MAX_PRODUCTS} products – the bot does not see the rest`);
+      return rows;
     });
   }
 
+  /** The number the customer wrote to – only when the shop has more than one number or gave it a note. */
+  private async whatsappNumberFor(companyId: number, channelUserId: number) {
+    try {
+      const [row] = (await this.companyRepository.query(
+        `SELECT w.label, w.purpose, w.bot_note, (SELECT COUNT(*) FROM whatsapp_channels x WHERE x.company_id = $1)::int AS numbers
+           FROM bot_channel_user cu JOIN whatsapp_channels w ON w.id = cu.whatsapp_channel_id AND w.company_id = cu.company_id
+          WHERE cu.id = $2 AND cu.company_id = $1`, [companyId, channelUserId])) as Array<{ label: string | null; purpose: string | null; bot_note: string | null; numbers: number }>;
+      if (!row || (Number(row.numbers) < 2 && !row.bot_note?.trim())) return null;
+      return { label: row.label?.trim() || null, purpose: row.purpose || null, note: row.bot_note?.trim() || null };
+    } catch {
+      return null;
+    }
+  }
+
   async build(companyId: number, channelUserId: number | null, channel = 'whatsapp', chat: { conversationId?: number; message?: string } = {}): Promise<SalesBotContext> {
-    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign] = await Promise.all([
+    const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign, whatsappNumber] = await Promise.all([
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
       this.loadProducts(companyId),
@@ -283,6 +338,7 @@ export class SalesBotContextService {
             .getMany()
         : Promise.resolve([] as BotOrder[]),
       this.campaignFor(chat.conversationId, chat.message),
+      channel === 'whatsapp' && channelUserId ? this.whatsappNumberFor(companyId, channelUserId) : Promise.resolve(null),
     ]);
 
     const now = sriLankaNow();
@@ -368,6 +424,7 @@ export class SalesBotContextService {
       })),
       channel,
       campaign,
+      whatsapp_number: whatsappNumber,
       today: now.label,
       bookings: effectiveSellsOf(company, settings) === 'products' ? undefined : await this.upcomingBookings(companyId, settings, now.date),
       open_bookings: effectiveSellsOf(company, settings) === 'products' || !channelUserId ? undefined : await this.openBookings(companyId, channelUserId, now.date),
@@ -384,8 +441,10 @@ export class SalesBotContextService {
       price: toNumber(product.price),
       stock: productStock(product),
       available: product.is_available !== false,
+      brand: String(product.brand ?? '').trim(),
       photo_count: images.length,
       image_urls: images,
+      image_notes: String(product.image_notes ?? '').slice(0, 300),
       description: String(product.description ?? '').slice(0, 600),
       selling_points: String(product.selling_points ?? '').slice(0, 1000),
       weight_kg: productWeight(product),
@@ -395,7 +454,7 @@ export class SalesBotContextService {
         price: variantPrice(product, option),
         stock: product.is_available === false || option.available === false ? 0 : null,
         available: product.is_available !== false && option.available !== false,
-        image_url: option.image_url?.trim() || null,
+        image_url: option.image_url?.trim() ? absoluteProductImage(option.image_url.trim()) : null,
         weight_kg: optionWeight(option) ?? productWeight(product),
       })),
       // only add-ons the bot can actually sell

@@ -1,16 +1,16 @@
 import { SkipThrottle } from '@nestjs/throttler';
 import { SuperAdminAuditInterceptor } from '../audit.interceptor';
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, Put, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user.interface';
 import { SuperAdminGuard } from '../super-admin.guard';
-import { AdminOnly } from '../../auth/decorators/roles.decorator';
-import { AutoRenewDto, BankDetailsDto, CheckoutDto, PaymentsQueryDto, RejectPaymentDto, TokenPackDto } from './billing.dto';
+import { AdminOnly, OwnerOnly } from '../../auth/decorators/roles.decorator';
+import { AutoRenewDto, BankDetailsDto, CheckoutDto, PaymentsQueryDto, PaypalRateDto, RejectPaymentDto, TokenPackDto } from './billing.dto';
 import { BillingService } from './billing.service';
 
 type Upload = { buffer: Buffer; mimetype: string; originalname: string; size: number };
@@ -21,6 +21,7 @@ type Upload = { buffer: Buffer; mimetype: string; originalname: string; size: nu
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @AdminOnly()
+@OwnerOnly()
 export class CompanyBillingController {
   constructor(private readonly billing: BillingService) {}
 
@@ -36,6 +37,14 @@ export class CompanyBillingController {
   uploadSlip(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @UploadedFile() file?: Upload) {
     return this.billing.uploadSlip(user, id, file);
   }
+
+  /** Back from PayPal (return page): take the money / check the subscription, then switch it on. */
+  @Post('payments/:id/paypal')
+  confirmPaypal(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.billing.confirmPaypal(user, id); }
+
+  /** Back from the Payments.lk card page: the server confirms it with Payments.lk. */
+  @Post('payments/:id/paymentslk')
+  confirmPaymentsLk(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) { return this.billing.confirmPaymentsLk(user, id); }
 
   @Post('auto-renew')
   autoRenew(@CurrentUser() user: AuthenticatedUser, @Body() dto: AutoRenewDto) { return this.billing.setAutoRenew(user, dto.enabled); }
@@ -61,6 +70,37 @@ export class PayhereNotifyController {
   async notify(@Body() body: Record<string, string>, @Res() res: Response) {
     const result = await this.billing.payhereNotify(body ?? {});
     res.type('text/plain').send(result);
+  }
+}
+
+/** PayPal webhook (payments, every auto-renew charge, cancelled subscriptions). No login – PayPal confirms each call. */
+@Controller('public/paypal')
+@ApiTags('Public')
+export class PaypalWebhookController {
+  constructor(private readonly billing: BillingService) {}
+
+  @Post('webhook')
+  @SkipThrottle()
+  async webhook(@Req() req: Request & { rawBody?: Buffer }, @Res() res: Response) {
+    const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body ?? {});
+    const result = await this.billing.paypalWebhook(req.headers, raw);
+    res.status(result === 'ok' ? 200 : result === 'invalid' ? 400 : 500).json({ ok: result === 'ok' });
+  }
+}
+
+/** Payments.lk webhook (payments, saved cards, refunds). No login – the Payments-Signature header is checked. */
+@Controller('public/paymentslk')
+@ApiTags('Public')
+export class PaymentsLkWebhookController {
+  constructor(private readonly billing: BillingService) {}
+
+  @Post('webhook')
+  @SkipThrottle()
+  async webhook(@Req() req: Request & { rawBody?: Buffer }, @Res() res: Response) {
+    const raw = req.rawBody ? req.rawBody.toString('utf8') : '';
+    const sig = req.headers['payments-signature'];
+    const result = await this.billing.paymentsLkWebhook(raw, Array.isArray(sig) ? sig[0] : sig);
+    res.status(result === 'ok' ? 200 : result === 'invalid' ? 400 : 500).json({ ok: result === 'ok' });
   }
 }
 
@@ -117,4 +157,12 @@ export class SuperAdminBillingController {
 
   @Get('settings')
   settings() { return this.billing.billingSettings(); }
+
+  /** Payments.lk auto-renew: charge the saved cards that are due now (it also runs every hour by itself). */
+  @Post('renewals/run')
+  async runRenewals() { await this.billing.renewWithSavedCards(); return { ok: true }; }
+
+  /** PayPal: rupees → US dollars (rate of the day or a fixed rate) and the markup. */
+  @Put('settings/paypal')
+  paypalRate(@Body() dto: PaypalRateDto) { return this.billing.setPaypalRate(dto); }
 }

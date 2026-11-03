@@ -190,8 +190,9 @@ export class SuperAdminExtraService {
   }
 
   async addSuperAdmin(email: string) {
-    const [user] = await this.dataSource.query(`SELECT id FROM app_user WHERE LOWER(email) = LOWER($1)`, [email.trim()]);
-    if (!user) throw new NotFoundException('No account with this email – the person must register first.');
+    // only the account that confirmed this email (another company may have typed the same email for an agent)
+    const [user] = await this.dataSource.query(`SELECT id FROM app_user WHERE LOWER(email) = LOWER($1) AND email_verified_at IS NOT NULL`, [email.trim()]);
+    if (!user) throw new NotFoundException('No confirmed account with this email – the person must register (or confirm their email) first.');
     await this.dataSource.query(`UPDATE app_user SET is_super_admin = TRUE WHERE id = $1`, [user.id]);
     this.auth.invalidateAccount(Number(user.id));
     return this.superAdmins();
@@ -231,7 +232,7 @@ export class SuperAdminExtraService {
       last_24h: { replies: num(stats?.replies_24h), avg_latency_ms: num(stats?.avg_latency_ms), p95_latency_ms: num(stats?.p95_latency_ms), cache_ratio: num(stats?.cache_ratio), bot_errors: num(errors?.n) },
       config: {
         public_api_url: set('PUBLIC_API_BASE_URL'), app_public_url: set('APP_PUBLIC_URL'), payhere: set('PAYHERE_MERCHANT_ID') && set('PAYHERE_MERCHANT_SECRET'),
-        meta_app: set('META_APP_ID') && set('META_APP_SECRET'), email: set('SMTP_HOST'), whatsapp_otp: set('OTP_WHATSAPP_PHONE_NUMBER_ID') && set('OTP_WHATSAPP_TOKEN'),
+        meta_app: set('META_APP_ID') && set('META_APP_SECRET'), email: set('SMTP_HOST'), sms_otp: set('NOTIFYLK_USER_ID') && set('NOTIFYLK_API_KEY'),
         pusher: set('PUSHER_APP_ID'),
       },
     };

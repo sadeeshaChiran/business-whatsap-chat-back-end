@@ -76,8 +76,8 @@ describe('1. Authentication', () => {
 
   test('only the expected routes are public', () => {
     const allowed = [
-      /^\/v1\/api$/, /^\/v1\/api\/auth\/(login|google|register|register\/start|register\/resend|register\/verify|password\/forgot|password\/reset)$/,
-      /^\/v1\/api\/integrations\/meta\/callback$/, /^\/v1\/api\/integrations\/meta\/messages\/webhook$/,
+      /^\/v1\/api$/, /^\/v1\/api\/auth\/(login|google|register|register\/start|register\/resend|register\/verify|password\/forgot|password\/reset|login\/confirm-email|login\/confirm-email\/send)$/,
+      /^\/v1\/api\/integrations\/meta\/callback$/, /^\/v1\/api\/integrations\/meta\/messages\/webhook$/, /^\/v1\/api\/integrations\/tiktok\/(callback|webhook)$/, /^\/v1\/api\/integrations\/telegram\/webhook\/:id$/, /^\/v1\/api\/ca\//,
       /^\/v1\/api\/integrations\/whatsapp\/(n8n\/send|webhook|webhook\/evolution|webhook\/meta)$/, /^\/v1\/api\/public\//,
       // short links (/l/:slug – served outside the /v1/api prefix; the route lister adds the prefix)
       /^\/v1\/api\/l\/:slug$/,
@@ -185,7 +185,10 @@ describe('2. Company admin vs agent permissions', () => {
     ['GET', () => '/bot/train/history'],
     ['GET', () => '/bot/sales-bot/settings'],
     ['PATCH', () => '/bot/sales-bot/settings', {}],
-    ['GET', () => '/automation/flows'],
+    ['GET', () => '/flows'],
+    ['POST', () => '/flows', { name: 'x', trigger_type: 'first_message', steps: [{ type: 'text', text: 'hi' }] }],
+    ['GET', () => '/flows/forms'],
+    ['POST', () => '/flows/forms', { name: 'x', fields: [{ label: 'Name', type: 'text' }] }],
     ['GET', () => '/billing/overview'],
     ['GET', () => '/integrations/whatsapp/config'],
     ['GET', () => '/integrations/meta/health'],
@@ -254,16 +257,48 @@ describe('2. Company admin vs agent permissions', () => {
     assert.equal(r.status, 400);
   });
 
-  test('Free package agent limit (3) is enforced', async () => {
+  test('Free package agent limit (from the package settings) is enforced', async () => {
     const ws = await createWorkspace('sec-limit');
-    for (let i = 0; i < 3; i += 1) await createAgent(ws, `sec-limit-${i}`);
-    const fourth = await api('POST', '/users/agents', { token: ws.token, body: { name: 'Fourth', email: `fourth-${RUN}@x.lk`, password: PASSWORD } });
-    assert.equal(fourth.status, 400);
-    assert.match(fourth.json.message, /allows 3 agents/);
+    const [{ max_agents: max }] = await sql(`SELECT max_agents FROM platform_package WHERE code = 'free'`);
+    assert.ok(max != null && max >= 1, 'Free has an agent limit');
+    for (let i = 0; i < max; i += 1) {
+      const r = await api('POST', '/users/agents', { token: ws.token, body: { name: `Agent ${i}`, email: `sec-limit-${i}-${RUN}@x.lk`, password: PASSWORD } });
+      assert.equal(r.status, 201, JSON.stringify(r.json));
+    }
+    const extra = await api('POST', '/users/agents', { token: ws.token, body: { name: 'One too many', email: `extra-${RUN}@x.lk`, password: PASSWORD } });
+    assert.equal(extra.status, 400);
+    assert.match(extra.json.message, new RegExp(`allows ${max} agents`));
   });
 });
 
 describe('3. Tenant isolation (workspace B attacking workspace A)', () => {
+  test('cannot read, change or test workspace A flows and forms', async () => {
+    const form = await api('POST', '/flows/forms', { token: A.token, body: { name: 'Secret form', fields: [{ label: 'Name', type: 'text' }] } });
+    assert.equal(form.status, 201, JSON.stringify(form.json));
+    const flow = await api('POST', '/flows', { token: A.token, body: { name: 'A flow', trigger_type: 'first_message', steps: [{ type: 'form', form_id: form.data.id }] } });
+    assert.equal(flow.status, 201, JSON.stringify(flow.json));
+    for (const [method, path, body] of [
+      ['GET', `/flows/forms/${form.data.id}`], ['PATCH', `/flows/forms/${form.data.id}`, { name: 'x', fields: [{ label: 'x', type: 'text' }] }], ['DELETE', `/flows/forms/${form.data.id}`],
+      ['GET', `/flows/forms/${form.data.id}/submissions`], ['GET', `/flows/${flow.data.id}`], ['GET', `/flows/${flow.data.id}/runs`],
+      ['POST', `/flows/${flow.data.id}/status`, { status: 'paused' }], ['DELETE', `/flows/${flow.data.id}`],
+    ]) {
+      const r = await api(method, path, { token: B.token, body });
+      assert.equal(r.status, 404, `${method} ${path} → ${r.status}`);
+    }
+    // B cannot put A's form into its own flow
+    const steal = await api('POST', '/flows', { token: B.token, body: { name: 'x', trigger_type: 'first_message', steps: [{ type: 'form', form_id: form.data.id }] } });
+    assert.equal(steal.status, 400);
+    // B cannot send a test of its own flow into A's chat
+    const own = await api('POST', '/flows', { token: B.token, body: { name: 'B flow', trigger_type: 'first_message', steps: [{ type: 'text', text: 'hi' }] } });
+    const test = await api('POST', `/flows/${own.data.id}/test`, { token: B.token, body: { conversation_id: conversationA } });
+    assert.equal(test.status, 404, JSON.stringify(test.json));
+    // the public form page shows only what a visitor needs
+    const pub = await api('GET', `/public/forms/${form.data.slug}`);
+    assert.equal(pub.status, 200);
+    assert.deepEqual(Object.keys(pub.data).sort(), ['already_sent', 'company_name', 'fields', 'intro', 'prefill', 'thank_you', 'title'].filter((k) => k in pub.data).sort());
+    assert.ok(!('company_id' in pub.data) && !('id' in pub.data) && !('notify' in pub.data));
+    assert.equal((await api('GET', '/public/forms/nope-not-here')).status, 404);
+  });
   test('cannot read or change workspace A company', async () => {
     assert.equal((await api('GET', `/company/${A.companyId}`, { token: B.token })).status, 404);
     assert.equal((await api('PATCH', `/company/${A.companyId}`, { token: B.token, body: { name: 'pwned' } })).status, 404);

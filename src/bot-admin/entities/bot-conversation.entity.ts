@@ -33,6 +33,10 @@ export class BotConversation {
   @Column({ type: 'varchar', length: 30, default: 'new' })
   lead_stage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost';
 
+  /** A person picked the stage by hand – the bot never moves a hand-set Won / Lost */
+  @Column({ type: 'boolean', default: false })
+  lead_stage_manual: boolean;
+
   @Column({ type: 'bigint', nullable: true })
   assigned_agent_id: number | null;
 

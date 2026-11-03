@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly } from '../auth/decorators/roles.decorator';
+import { AdminOnly, ManagerOnly, OwnerOnly } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import { CreateAgentDto, ResetAgentPasswordDto, UpdateAgentDto } from './dto/agent.dto';
@@ -26,7 +26,7 @@ export class UsersController {
   }
 
   @Get('agents')
-  @AdminOnly()
+  @ManagerOnly()
   getAgents(@CurrentUser() user: AuthenticatedUser) {
     return this.usersService.getAgents(user.company_id);
   }
@@ -44,7 +44,7 @@ export class UsersController {
   }
 
   @Patch('agents/:id/work-status')
-  @AdminOnly()
+  @ManagerOnly()
   updateAgentWorkStatus(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseIntPipe) id: number,
@@ -64,6 +64,7 @@ export class UsersController {
   @Post('agents/:id/reset-password')
   @HttpCode(200)
   @AdminOnly()
+  @OwnerOnly()
   resetAgentPassword(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() body: ResetAgentPasswordDto) {
     return this.usersService.resetAgentPassword(user, id, body.password);
   }

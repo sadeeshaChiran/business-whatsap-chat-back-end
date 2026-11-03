@@ -7,6 +7,7 @@ import { Product } from './entities/product.entity';
 import { ProductCatergoryModule } from './product_catergory/product_catergory.module';
 import { ProductCatergory } from './product_catergory/entities/product_catergory.entity';
 import { ProductsController } from './products.controller';
+import { ProductImagesController } from './product-images';
 import { ProductsService } from './products.service';
 
 @Module({
@@ -15,7 +16,7 @@ import { ProductsService } from './products.service';
     AuthModule,
     ProductCatergoryModule,
   ],
-  controllers: [ProductsController],
+  controllers: [ProductImagesController, ProductsController],
   providers: [ProductsService],
 })
 export class ProductsModule {}

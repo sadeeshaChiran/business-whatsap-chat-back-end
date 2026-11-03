@@ -16,15 +16,23 @@ import { EvolutionModule } from './integrations/evolution/evolution.module';
 import { MetaModule } from './integrations/meta/meta.module';
 import { UsersModule } from './users/users.module';
 import { WhatsappIntegrationModule } from './integrations/whatsapp/whatsapp.module';
-import { AutomationModule } from './automation/automation.module';
 import { SalesBotModule } from './sales-bot/sales-bot.module';
+import { ActivityLogModule } from './activity-log/activity-log';
 import { PlatformModule } from './platform/platform.module';
 import { VerificationModule } from './verification/verification';
 import { CrmModule } from './crm/crm';
+import { ReportsModule } from './reports/reports.module';
 import { MobileModule } from './mobile/mobile';
 import { MarketingModule } from './marketing/marketing.controller';
+import { FlowsModule } from './flows/flows.controller';
 import { SocialModule } from './social/social.controller';
+import { TiktokModule } from './integrations/tiktok/tiktok.controller';
+import { TelegramModule } from './integrations/telegram/telegram.controller';
+import { CustomerAppModule } from './customer-app/customer-app.controller';
+import { SmsModule } from './sms/sms.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
+import { PublicHelpModule } from './public-help/public-help';
+import { PublicDemoModule } from './public-demo/public-demo';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -55,15 +63,23 @@ if (!supabaseDatabaseUrl) {
     MetaModule,
     WhatsappIntegrationModule,
     UsersModule,
-    AutomationModule,
     PlatformModule,
     VerificationModule,
     CrmModule,
+    ReportsModule,
     MobileModule,
     MarketingModule,
+    FlowsModule,
     SocialModule,
+    TiktokModule,
+    TelegramModule,
+    CustomerAppModule,
+    SmsModule,
     SalesBotModule,
+    ActivityLogModule,
     RealtimeModule,
+    PublicHelpModule,
+    PublicDemoModule,
   ],
   controllers: [AppController],
   providers: [

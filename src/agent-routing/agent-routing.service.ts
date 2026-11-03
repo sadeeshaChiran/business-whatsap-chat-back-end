@@ -140,8 +140,9 @@ export class AgentRoutingService {
       .orderBy('u.id', 'ASC')
       .getMany();
 
+    // the owner and supervisors watch every chat – new chats are shared only between agents
     let filtered = agents.filter(
-      (agent) => adminUserId === null || Number(agent.id) !== adminUserId,
+      (agent) => (adminUserId === null || Number(agent.id) !== adminUserId) && agent.team_role !== 'supervisor',
     );
 
     if (excludeAgentId !== undefined) {
@@ -342,20 +343,45 @@ export class AgentRoutingService {
       existing?.channelUser?.external_user_id ??
       (await this.resolvePhoneForConversation(conversationId));
 
+    // Settings → Chat routing → "Accept new chats automatically" (on by default): the chat goes straight to the agent
+    const autoAccept = await this.autoAcceptOn(companyId);
+    const now = new Date();
     await this.conversationRepository.update(conversationId, {
-      status: 'pending',
+      status: autoAccept ? 'active' : 'pending',
       assigned_agent_id: agentId,
-      assigned_at: new Date(),
-      timeout_at: await this.pendingTimeoutAt(companyId),
+      assigned_at: now,
+      timeout_at: autoAccept ? null : await this.pendingTimeoutAt(companyId),
       assignment_mode: assignmentMode,
+      ...(autoAccept ? { accepted_at: now } : {}),
     });
+
+    if (autoAccept) {
+      if (phone) await this.recordStickyAgent(companyId, phone, agentId).catch(() => undefined);
+      const channelUserId = existing?.channelUser?.id ?? existing?.bot_channel_user_id;
+      if (channelUserId) {
+        // orders / bookings the bot took shortly before count for this agent (same as a manual accept)
+        const from = new Date(Math.min(existing?.created_at ? new Date(existing.created_at).getTime() : Date.now(), Date.now() - 3 * 86_400_000));
+        await this.conversationRepository.query(
+          `UPDATE bot_order SET agent_id = $3 WHERE CAST(company_id AS BIGINT) = $1 AND bot_channel_user_id = $2 AND agent_id IS NULL AND created_at::timestamptz >= $4`,
+          [companyId, channelUserId, agentId, from]).catch(() => undefined);
+        await this.conversationRepository.query(
+          `UPDATE bot_booking SET agent_id = $3 WHERE company_id = $1 AND bot_channel_user_id = $2 AND agent_id IS NULL AND created_at >= $4`,
+          [companyId, channelUserId, agentId, from]).catch(() => undefined);
+      }
+    }
 
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
       conversation_id: conversationId,
-      status: 'pending',
+      status: autoAccept ? 'active' : 'pending',
       agent_id: agentId,
       assignment_mode: assignmentMode,
+      auto_accepted: autoAccept,
     });
+  }
+
+  private async autoAcceptOn(companyId: number): Promise<boolean> {
+    const company = await this.companyRepository.findOne({ where: { id: companyId } });
+    return company?.agent_auto_accept !== false;
   }
 
   async returnConversationToQueue(
@@ -714,7 +740,9 @@ export class AgentRoutingService {
   }
 
   /**
-   * Chats waiting for an online agent: not active/closed and not held by an online assignee.
+   * Chats waiting for an online agent: not closed and not held by an online assignee.
+   * An ACTIVE chat counts too when its agent went offline / away and the customer's message is the last one
+   * (nobody answered) – otherwise those customers would wait until someone moves each chat by hand.
    */
   private async findQueueConversationsForCompany(
     companyId: number,
@@ -725,9 +753,10 @@ export class AgentRoutingService {
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', {
         companyId: Number(companyId),
       })
-      .andWhere('LOWER(c.status) NOT IN (:...closedStatuses)', {
-        closedStatuses: ['active', 'closed'],
-      })
+      .andWhere('LOWER(c.status) <> :closed', { closed: 'closed' })
+      .andWhere(`(LOWER(c.status) <> 'active' OR (
+        c.assigned_agent_id IS NOT NULL
+        AND (SELECT m.direction::text FROM bot_message m WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) = 'inbound'))`)
       .andWhere(this.waitingForOnlineAgentSql(), {
         companyId: Number(companyId),
       })

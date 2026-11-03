@@ -5,7 +5,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { AdminOnly, Roles } from '../auth/decorators/roles.decorator';
+import { AdminOnly, ManagerOnly, Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.interface';
 import {
@@ -27,25 +27,25 @@ export class SalesBotController {
 
   /* Orders / bookings added by the team in a chat (admin, or the agent who holds the chat) */
   @Get('manual/catalog')
-  @Roles('admin', 'agent')
+  @Roles('admin', 'supervisor', 'agent')
   manualCatalog(@CurrentUser() user: AuthenticatedUser, @Query() query: CatalogQueryDto) {
     return this.manual.catalog(user, query.search ?? '');
   }
 
   @Post('manual/quote')
-  @Roles('admin', 'agent')
+  @Roles('admin', 'supervisor', 'agent')
   manualQuote(@CurrentUser() user: AuthenticatedUser, @Body() dto: ManualQuoteDto) {
     return this.manual.quote(user, dto.items, dto.delivery_area);
   }
 
   @Post('conversations/:id/manual-order')
-  @Roles('admin', 'agent')
+  @Roles('admin', 'supervisor', 'agent')
   manualOrder(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ManualOrderDto) {
     return this.manual.createOrder(user, id, dto);
   }
 
   @Post('conversations/:id/manual-booking')
-  @Roles('admin', 'agent')
+  @Roles('admin', 'supervisor', 'agent')
   manualBooking(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ManualBookingDto) {
     return this.manual.createBooking(user, id, dto);
   }
@@ -94,40 +94,46 @@ export class SalesBotController {
 
   /* Bookings */
   @Get('bookings')
+  @ManagerOnly()
   listBookings(@CurrentUser() user: AuthenticatedUser, @Query() query: BookingsQueryDto) {
     return this.service.listBookings(user, query);
   }
 
   @Patch('bookings/:id/status')
+  @ManagerOnly()
   updateBookingStatus(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingStatusDto) {
     return this.service.updateBookingStatus(user, id, dto);
   }
 
   /* Agent performance (company admin) */
   @Get('team/performance')
+  @ManagerOnly()
   teamPerformance(@CurrentUser() user: AuthenticatedUser, @Query('days') days?: string) {
     return this.service.teamPerformance(user, Number(days));
   }
 
   /* Home dashboard (company admin) */
   @Get('dashboard')
+  @ManagerOnly()
   dashboard(@CurrentUser() user: AuthenticatedUser, @Query('days') days?: string) {
     return this.service.dashboard(user, Number(days));
   }
 
   @Patch('bookings/:id/notes')
+  @ManagerOnly()
   updateBookingNotes(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateBookingNotesDto) {
     return this.service.updateBookingNotes(user, id, dto);
   }
 
   @Post('bookings/:id/invoice')
+  @ManagerOnly()
   sendBookingInvoice(@CurrentUser() user: AuthenticatedUser, @Param('id', ParseIntPipe) id: number) {
     return this.service.sendBookingInvoice(user, id);
   }
 
   /* What the business sells (products / services / both) – any signed-in user */
   @Get('sales-bot/sells')
-  @Roles('admin', 'agent')
+  @Roles('admin', 'supervisor', 'agent')
   sells(@CurrentUser() user: AuthenticatedUser) {
     return this.service.getSellsInfo(user);
   }
@@ -173,18 +179,21 @@ export class SalesBotController {
 
   /* Reply review + reports */
   @Get('sales-bot/replies')
+  @ManagerOnly()
   replies(@CurrentUser() user: AuthenticatedUser, @Query() query: RepliesQueryDto) {
     return this.service.replies(user, query);
   }
 
   /** Follow-ups: stats for the settings page */
   @Get('sales-bot/followups/stats')
+  @ManagerOnly()
   followUpStats(@CurrentUser() user: AuthenticatedUser) {
     return this.service.followUpStats(user);
   }
 
   /** Stop / resume follow-ups for one chat */
   @Post('sales-bot/followups/:conversationId')
+  @ManagerOnly()
   setFollowUp(
     @CurrentUser() user: AuthenticatedUser,
     @Param('conversationId', ParseIntPipe) conversationId: number,
@@ -194,6 +203,7 @@ export class SalesBotController {
   }
 
   @Get('sales-bot/reports')
+  @ManagerOnly()
   report(@CurrentUser() user: AuthenticatedUser, @Query() query: ReportQueryDto) {
     return this.service.report(user, query.days);
   }

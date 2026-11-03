@@ -1,8 +1,12 @@
+import { InvoiceDoc, renderInvoicePdf } from './invoice-pdf';
 import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
 import { isTestPhone, testSendResult } from '../common/test-phone';
 import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
 import { PlanService } from '../platform/plan.service';
 import { MetaSocialSenderService, socialPlatformOf } from '../integrations/meta/meta-social-sender.service';
+import { TiktokHook } from '../common/tiktok-hook';
+import { TelegramHook } from '../common/telegram-hook';
+import { AppChatHook } from '../common/app-chat-hook';
 import {
   BadRequestException,
   ForbiddenException,
@@ -61,6 +65,9 @@ import {
   saveChatMedia,
 } from './chat-media.store';
 import { readDocumentText, splitIntoPieces } from './document-knowledge';
+import { Inject, Optional } from '@nestjs/common';
+import { ActivityLogService } from '../activity-log/activity-log';
+import { StockService } from '../reports/stock';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -71,6 +78,8 @@ type CompanyContactChannelUser = {
   bot_enabled: boolean;
   manual_mode: boolean;
   last_seen_at: Date | string | null;
+  /** the company's WhatsApp number this customer writes to (several numbers) */
+  whatsapp_channel_id?: number | null;
 };
 
 type CompanyContactRow = {
@@ -96,10 +105,26 @@ type CompanyContactRow = {
   last_message_direction?: 'inbound' | 'outbound' | null;
   last_message_delivery_status?: 'sent' | 'delivered' | 'read' | 'failed' | null;
   labels?: Array<{ id: number; name: string; color_code: string }>;
+  /** where the chat came from: an ad / shared post, a short link or QR, a broadcast (null = the customer wrote by themselves) */
+  origin?: ChatOrigin | null;
 };
+export type ChatOrigin = { source: 'ad' | 'post' | 'link' | 'broadcast'; label: string; at: Date | string | null };
 
 /** Evolution chat list cache (per instance, 15 s) – shared by all requests of this process. */
 const evolutionChatsCache = new Map<string, { chats: Awaited<ReturnType<EvolutionService['findChats']>>; expiresAt: number }>();
+
+/** "Came from an ad / post / link / broadcast" for the chat list chip. */
+export function chatOrigin(row: { campaign_source?: string | null; ad_source_id?: string | null; ad_source_type?: string | null; ad_headline?: string | null;
+  ad_referred_at?: Date | string | null; campaign_at?: Date | string | null; link_name?: string | null; campaign_name?: string | null }): ChatOrigin | null {
+  if (row.ad_source_id) {
+    const post = row.ad_source_type === 'post';
+    const card = row.ad_source_type === 'card'; // replied to the ad / post card (Meta sent no ad id)
+    return { source: post ? 'post' : 'ad', label: String(row.ad_headline || row.campaign_name || (post ? 'Shared post' : card ? 'Your ad / post' : 'Facebook / Instagram ad')).slice(0, 80), at: row.ad_referred_at ?? null };
+  }
+  if (row.campaign_source === 'link') return { source: 'link', label: String(row.link_name || row.campaign_name || 'Short link / QR').slice(0, 80), at: row.campaign_at ?? null };
+  if (row.campaign_source === 'broadcast') return { source: 'broadcast', label: String(row.campaign_name || 'Broadcast reply').slice(0, 80), at: row.campaign_at ?? null };
+  return null;
+}
 
 /** Follow-up state of a chat (interested customer who went quiet) for the inbox. */
 export function followUpView(conversation: BotConversation) {
@@ -115,6 +140,11 @@ export function followUpView(conversation: BotConversation) {
 
 @Injectable()
 export class BotAdminService {
+
+  /** Who changed / deleted orders (owner + supervisors read it in Team → Activity log). */
+  @Optional() @Inject(ActivityLogService) private readonly activity?: ActivityLogService;
+  /** Stock counting: status changes (cancel / un-cancel) and deleted orders put stock back (optional). */
+  @Optional() @Inject(StockService) private readonly stock?: StockService;
 
   constructor(
     @InjectRepository(Company)
@@ -170,7 +200,11 @@ export class BotAdminService {
     return { base, secureKey, enabled: Boolean(base && secureKey) };
   }
 
-  private async resolveCompanyWhatsappChannel(companyId: number) {
+  /**
+   * The WhatsApp number to use. With a customer phone: the number that customer wrote to (several numbers per
+   * company); otherwise / as fallback the main number. One number per company works exactly as before.
+   */
+  private async resolveCompanyWhatsappChannel(companyId: number, customerPhone?: string | null) {
     const channels = await this.whatsappChannelRepository.find({
       where: { company_id: companyId },
       order: { id: 'DESC' },
@@ -178,6 +212,16 @@ export class BotAdminService {
     if (!channels.length) {
       return null;
     }
+    const digits = String(customerPhone ?? '').replace(/\D/g, '');
+    if (digits && channels.length > 1) {
+      const [row] = (await this.whatsappChannelRepository.query(
+        `SELECT whatsapp_channel_id AS id FROM bot_channel_user WHERE company_id = $1 AND platform = 'whatsapp' AND external_user_id = $2 LIMIT 1`,
+        [companyId, digits]).catch(() => [])) as Array<{ id: number | null }>;
+      const used = row?.id ? channels.find((channel) => Number(channel.id) === Number(row.id)) : undefined;
+      if (used) return used;
+    }
+    const primary = channels.length > 1 ? channels.find((channel) => channel.is_primary) : undefined;
+    if (primary) return primary;
     return (
       channels.find(
         (channel) =>
@@ -188,6 +232,14 @@ export class BotAdminService {
       channels.find((channel) => channel.evaluation_whatsapp_key?.trim()) ??
       channels[0]
     );
+  }
+
+  /** The number an inbound message arrived on (null for older messages / one-number companies). */
+  private async whatsappChannelOfMessage(companyId: number, messageId: number): Promise<WhatsappChannel | null> {
+    const [row] = (await this.whatsappChannelRepository.query(
+      `SELECT whatsapp_channel_id AS id FROM bot_message WHERE id = $1 AND whatsapp_channel_id IS NOT NULL`, [messageId]).catch(() => [])) as Array<{ id: number }>;
+    if (!row?.id) return null;
+    return this.whatsappChannelRepository.findOne({ where: { id: Number(row.id), company_id: companyId } });
   }
 
   private isMetaWhatsappChannel(channel: WhatsappChannel | null | undefined): boolean {
@@ -265,7 +317,7 @@ export class BotAdminService {
     options: WhatsappTextOptions = {},
   ): Promise<string | null> {
     if (isTestPhone(phone)) return testSendResult().messageId; // Customer simulator chat: never sent to WhatsApp
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
     await this.assertWhatsappSendReady(channel);
     try {
       const result = await this.whatsappService.sendText(companyId, phone, text, options);
@@ -286,7 +338,7 @@ export class BotAdminService {
       mediaType: 'image' | 'document' | 'audio' | 'video';
     },
   ): Promise<string | null> {
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
     await this.assertWhatsappSendReady(channel);
     try {
       const result = await this.whatsappService.sendMedia(companyId, phone, media);
@@ -316,7 +368,7 @@ export class BotAdminService {
   };
 
   async getStats(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const company_id = user.company_id;
 
     const [totalUsers, activeBots, totalConversations, totalOrders, pendingOrders] =
@@ -366,7 +418,8 @@ export class BotAdminService {
 
   private async assertAdminAccess(user: AuthenticatedUser) {
     if (user.role) {
-      if (user.role !== 'admin') throw new ForbiddenException('Only the company admin can do this.');
+      // a supervisor works like the admin
+      if (user.role !== 'admin' && user.role !== 'supervisor') throw new ForbiddenException('Only the company admin can do this.');
       return;
     }
     const company = await this.getCompanyForUser(user);
@@ -375,16 +428,42 @@ export class BotAdminService {
     }
   }
 
+  /** Owner or supervisor (team lead) – works with the whole team's chats, orders and customers. */
+  private managesAll(user: AuthenticatedUser, company: { admin_user_id?: number | string | null } | null) {
+    return user.role === 'supervisor' || user.role === 'admin' || (company != null && Number(company.admin_user_id) === Number(user.id));
+  }
+
+  private async assertManagerAccess(user: AuthenticatedUser) {
+    if (user.role === 'supervisor') return;
+    return this.assertAdminAccess(user);
+  }
+
+  /**
+   * The order, if this person may change it: the owner and supervisors every order of the company,
+   * agents only their own (taken by them, or of a customer they hold now).
+   */
+  private async findOrderForActor(user: AuthenticatedUser, orderId: number, relations: string[] = []) {
+    const companyId = this.requireUserCompanyId(user);
+    const order = await this.orderRepository.findOne({ where: { id: orderId, company_id: companyId }, relations });
+    if (!order) throw new NotFoundException('Order not found.');
+    const company = await this.getCompanyForUser(user);
+    if (this.managesAll(user, company)) return order;
+    const mine = Number((order as { agent_id?: number | null }).agent_id) === Number(user.id)
+      || (await this.agentClientIds(companyId, Number(user.id))).includes(Number(order.bot_channel_user_id));
+    if (!mine) throw new ForbiddenException('You can only change your own orders.');
+    return order;
+  }
+
   /** Admin OR agent assigned to a conversation in their company can access it */
   private async assertConversationAccess(
     user: AuthenticatedUser,
     conversationId: number,
   ) {
-    let isAdmin = user.role === 'admin';
+    let isAdmin = user.role === 'admin' || user.role === 'supervisor';
     if (!user.role) {
       const company = await this.getCompanyForUser(user);
       if (!company) throw new ForbiddenException('Company not found.');
-      isAdmin = Number(company.admin_user_id) === Number(user.id);
+      isAdmin = this.managesAll(user, company);
     }
     const conv = isAdmin
       ? await this.findConversationForCompany(conversationId, user.company_id)
@@ -572,15 +651,25 @@ export class BotAdminService {
     conversationId: number,
     leadStage: 'new' | 'contacted' | 'qualified' | 'proposal' | 'won' | 'lost',
   ) {
-    await this.assertAdminAccess(user);
+    // the owner, a supervisor, or the agent who has this customer
     const conversation = await this.findConversationForCompany(conversationId, user.company_id);
     if (!conversation) throw new NotFoundException('Conversation not found.');
+    const company = await this.getCompanyForUser(user);
+    if (!this.managesAll(user, company) && Number(conversation.assigned_agent_id) !== Number(user.id)) {
+      throw new ForbiddenException('Only the owner, a supervisor or the agent of this customer can change the stage.');
+    }
+    const before = conversation.lead_stage;
     conversation.lead_stage = leadStage;
+    conversation.lead_stage_manual = true;
     const saved = await this.conversationRepository.save(conversation);
-    return { id: saved.id, lead_stage: saved.lead_stage };
+    if (before !== saved.lead_stage) {
+      await this.activity?.log(user, { action: 'lead_stage', entity: 'conversation', entity_id: saved.id,
+        summary: `Pipeline stage ${before || 'new'} → ${saved.lead_stage}`, details: { from: before, to: saved.lead_stage } });
+    }
+    return { id: saved.id, lead_stage: saved.lead_stage, lead_stage_manual: true };
   }
   async getUnassignedConversations(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     return this.agentRoutingService.getUnassignedConversations(user.company_id);
   }
 
@@ -589,7 +678,7 @@ export class BotAdminService {
     conversationId: number,
     agentId: number,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     await this.agentRoutingService.manualAssignConversation(
       user.company_id,
       conversationId,
@@ -780,6 +869,8 @@ export class BotAdminService {
       delivery_status: message.delivery_status ?? null,
       reply_to_message_id: message.reply_to_message_id ?? null,
       reply_to_text: message.reply_to_text ?? null,
+      // photo: which product it is (customer photo → the match, bot photo → the product it shows)
+      media_note: message.media_note ?? null,
       feedback: message.feedback ?? null,
       // sales_bot / bot = an AI reply (the inbox shows "AI reply" and the 👍 / 👎 buttons)
       source: message.source ?? null,
@@ -1304,7 +1395,7 @@ export class BotAdminService {
   }
 
   async getUsers(user: AuthenticatedUser, query: BotUsersQueryDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const page = query.page ?? 1;
     const limit = query.limit ?? 50;
     const offset = (page - 1) * limit;
@@ -1329,7 +1420,7 @@ export class BotAdminService {
   }
 
   async createContact(user: AuthenticatedUser, payload: CreateContactDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const phone = this.normalizePhoneKey(payload.phone);
     const displayName = payload.display_name.trim();
     if (!phone || !displayName) throw new BadRequestException('Name and phone are required.');
@@ -1354,7 +1445,7 @@ export class BotAdminService {
     // the admin, or the agent whose customer this is (agents may fix their customer's name)
     const company = await this.getCompanyForUser(user);
     if (!company) throw new ForbiddenException('Company not found.');
-    if (Number(company.admin_user_id) !== Number(user.id) && !(await this.agentClientIds(Number(company.id), Number(user.id))).includes(Number(id))) {
+    if (!this.managesAll(user, company) && !(await this.agentClientIds(Number(company.id), Number(user.id))).includes(Number(id))) {
       throw new ForbiddenException('You can only edit your own customers.');
     }
     const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
@@ -1367,7 +1458,7 @@ export class BotAdminService {
   }
 
   async deleteContact(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const contact = await this.channelUserRepository.findOne({ where: { id, company_id: user.company_id } });
     if (!contact) throw new NotFoundException('Contact not found.');
     const hasConversation = await this.conversationRepository.exist({ where: { bot_channel_user_id: id } });
@@ -1472,7 +1563,7 @@ export class BotAdminService {
       throw new ForbiddenException('Company not found.');
     }
 
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
     let channelUser: BotChannelUser | null = null;
 
     if (id > 0) {
@@ -1552,7 +1643,7 @@ export class BotAdminService {
   }
 
   async getConversations(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     if (requestedPage != null || requestedLimit != null) {
       return this.buildCompanyConversationRows(user.company_id, requestedPage, requestedLimit);
     }
@@ -1701,7 +1792,7 @@ export class BotAdminService {
     const companyId = this.requireUserCompanyId(user);
     const company = await this.getCompanyForUser(user);
     if (!company || Number(company.id) !== companyId) throw new ForbiddenException('Company not found.');
-    if (Number(company.admin_user_id) === Number(user.id)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
+    if (this.managesAll(user, company)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
     return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, Number(user.id));
   }
 
@@ -1731,6 +1822,7 @@ export class BotAdminService {
     const previewByConversation = new Map<number, { content: string; direction: 'inbound' | 'outbound'; delivery_status: 'sent' | 'delivered' | 'read' | 'failed' | null }>();
     const unreadByConversation = new Map<number, number>();
     const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
+    const originByConversation = new Map<number, ChatOrigin | null>();
 
     if (conversationIds.length > 0) {
       // Only the newest message per conversation (was: every message of every conversation).
@@ -1786,6 +1878,14 @@ export class BotAdminService {
         unreadByConversation.set(Number(row.conversation_id), Number(row.unread) || 0);
       }
 
+      const originRows: Array<{ id: number; campaign_source: string | null; ad_source_id: string | null; ad_source_type: string | null; ad_headline: string | null;
+        ad_referred_at: Date | null; campaign_at: Date | null; link_name: string | null; campaign_name: string | null }> = await this.messageRepository.query(`
+        SELECT c.id, c.campaign_source, c.ad_source_id, c.ad_source_type, c.ad_headline, c.ad_referred_at, c.campaign_at,
+               (SELECT l.name FROM marketing_link l WHERE l.id = c.link_id) AS link_name,
+               (SELECT mc.name FROM marketing_campaign mc WHERE mc.id = c.campaign_id) AS campaign_name
+          FROM bot_conversation c WHERE c.id = ANY($1) AND (c.ad_source_id IS NOT NULL OR c.campaign_source IS NOT NULL)`, [conversationIds]).catch(() => []);
+      for (const row of originRows) originByConversation.set(Number(row.id), chatOrigin(row));
+
       // Tags on each chat – used by the tag filter and the chips in the chat list.
       const labelRows = await this.conversationLabelRepository
         .createQueryBuilder('cl')
@@ -1829,6 +1929,7 @@ export class BotAdminService {
           bot_enabled: channelUser.bot_enabled,
           manual_mode: channelUser.manual_mode,
           last_seen_at: channelUser.last_seen_at,
+          whatsapp_channel_id: channelUser.whatsapp_channel_id ?? null,
         },
         conversation: {
           id: conversation.id,
@@ -1846,8 +1947,57 @@ export class BotAdminService {
         last_message_delivery_status: preview?.delivery_status ?? null,
         unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
         labels: labelsByConversation.get(Number(conversation.id)) ?? [],
+        origin: originByConversation.get(Number(conversation.id)) ?? null,
       };
     });
+  }
+
+  /**
+   * Where this chat came from, for the banner in the open chat: the ad / shared post the customer clicked (text, picture, link,
+   * Meta ad + campaign name), every earlier ad click, or the short link / broadcast campaign.
+   */
+  async conversationOrigin(user: AuthenticatedUser, conversationId: number) {
+    await this.assertConversationAccess(user, conversationId);
+    const [row] = await this.messageRepository.query(`
+      SELECT c.id, c.campaign_source, c.campaign_at, c.ad_source_id, c.ad_source_type, c.ad_headline, c.ad_body, c.ad_source_url, c.ad_media_url, c.ad_media_type,
+             c.ad_platform, c.ad_referred_at, c.lead_stage,
+             (SELECT l.name FROM marketing_link l WHERE l.id = c.link_id) AS link_name,
+             mc.name AS campaign_name, mc.offer_text,
+             ac.ad_name, ac.campaign_name AS meta_campaign_name, ac.campaign_id AS meta_campaign_id
+        FROM bot_conversation c
+        LEFT JOIN marketing_campaign mc ON mc.id = c.campaign_id
+        LEFT JOIN marketing_ad_cache ac ON ac.ad_id = c.ad_source_id
+       WHERE c.id = $1`, [conversationId]);
+    if (!row) throw new NotFoundException('Conversation not found.');
+    // every ad click of this customer (all their chats), newest first – each one is shown on the message it came with
+    const clicks = await this.messageRepository.query(`
+      SELECT k.id, k.ad_id, k.source_type, k.headline, k.body, k.url, k.media_url, k.media_type, k.platform, k.clicked_at, k.conversation_id,
+             ac.ad_name, ac.campaign_name,
+             COALESCE(
+               (SELECT m.id FROM bot_message m WHERE m.conversation_id = k.conversation_id AND k.provider_message_id IS NOT NULL
+                  AND (m.provider_message_id = k.provider_message_id OR m.provider_message_id LIKE k.provider_message_id || ':%') ORDER BY m.id LIMIT 1),
+               (SELECT m.id FROM bot_message m WHERE m.conversation_id = k.conversation_id AND m.direction::text = 'inbound'
+                  AND m.created_at >= k.clicked_at - INTERVAL '2 minutes' ORDER BY m.created_at, m.id LIMIT 1)
+             ) AS message_id
+        FROM marketing_ad_click k LEFT JOIN marketing_ad_cache ac ON ac.ad_id = k.ad_id
+       WHERE k.bot_channel_user_id = (SELECT bot_channel_user_id FROM bot_conversation WHERE id = $1)
+          OR k.conversation_id = $1
+       ORDER BY k.clicked_at DESC LIMIT 50`, [conversationId]).catch(() => []);
+    const origin = chatOrigin(row);
+    // pictures we keep ourselves (Meta links expire) → a signed link the browser can open
+    const media = (value: string | null) => (value && isChatMediaKey(value) ? publicChatMediaUrl(value, 24 * 3600) : value) || null;
+    for (const click of clicks as Array<{ media_url: string | null }>) click.media_url = media(click.media_url);
+    return {
+      origin,
+      ad: row.ad_source_id ? {
+        id: row.ad_source_id, type: row.ad_source_type === 'post' ? 'post' : row.ad_source_type === 'card' ? 'card' : 'ad', headline: row.ad_headline || null, body: row.ad_body || null,
+        url: row.ad_source_url || null, media_url: media(row.ad_media_url), media_type: row.ad_media_type || null, platform: row.ad_platform || null,
+        clicked_at: row.ad_referred_at, ad_name: row.ad_name || null, meta_campaign_name: row.meta_campaign_name || null, meta_campaign_id: row.meta_campaign_id || null,
+      } : null,
+      campaign: row.campaign_name ? { name: row.campaign_name, offer: row.offer_text || null } : null,
+      link_name: row.link_name || null,
+      clicks,
+    };
   }
 
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
@@ -1871,6 +2021,7 @@ export class BotAdminService {
       bot_enabled: channelUser.bot_enabled,
       manual_mode: channelUser.manual_mode,
       last_seen_at: channelUser.last_seen_at,
+      whatsapp_channel_id: channelUser.whatsapp_channel_id ?? null,
     });
 
     const latestConversation = (channelUser: BotChannelUser | undefined) => {
@@ -2093,7 +2244,7 @@ export class BotAdminService {
       Number.isInteger(requestedLimit) && requestedLimit > 0
         ? Math.min(requestedLimit, 50)
         : 30;
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const jid = remoteJid.trim();
     if (!jid) {
       throw new BadRequestException('remoteJid is required.');
@@ -2153,7 +2304,7 @@ export class BotAdminService {
     remoteJid: string,
     text: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const trimmed = text.trim();
     const jid = remoteJid.trim();
     if (!trimmed) {
@@ -2273,7 +2424,7 @@ export class BotAdminService {
       throw new ForbiddenException('Company not found.');
     }
 
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const conversation = isAdmin
       ? await this.findConversationForCompany(id, user.company_id)
@@ -2289,7 +2440,7 @@ export class BotAdminService {
     }
 
     const phone = this.normalizePhoneKey(conversation.channelUser?.external_user_id ?? '');
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    const channel = await this.resolveCompanyWhatsappChannel(user.company_id, phone);
     const platform = String(conversation.channelUser?.platform ?? 'whatsapp').toLowerCase();
     const instance = this.resolveEvolutionInstanceName(channel);
     const apikey = (channel?.evaluation_whatsapp_key ?? this.getEvolutionConfig().secureKey)?.trim();
@@ -2389,6 +2540,7 @@ export class BotAdminService {
         'm.delivery_status',
         'm.reply_to_message_id',
         'm.reply_to_text',
+        'm.media_note',
         'm.feedback',
         'm.created_at',
       ])
@@ -2505,7 +2657,8 @@ export class BotAdminService {
     }
 
     // 3. WhatsApp Cloud API media id ("meta-media:<id>") – images, voice, video, documents
-    const channel = await this.resolveCompanyWhatsappChannel(user.company_id);
+    //    (read with the token of the number the message came in on – several numbers per company)
+    const channel = (await this.whatsappChannelOfMessage(user.company_id, messageId)) ?? (await this.resolveCompanyWhatsappChannel(user.company_id));
     const metaToken = channel?.meta_access_token?.trim() ?? '';
     const metaMediaId = this.extractMetaMediaId(message);
     if (metaMediaId && metaToken) {
@@ -2622,6 +2775,10 @@ export class BotAdminService {
   }
 
   private async sendSocialConversationText(companyId: number, platform: string, accountId: string | null, recipientId: string, text: string): Promise<string | null> {
+    if (platform === 'tiktok') return this.sendTiktok(() => TiktokHook.sendText({ companyId, businessId: accountId, conversationId: recipientId }, text));
+    if (platform === 'telegram') return this.sendTiktok(() => TelegramHook.sendText({ companyId, botId: accountId, chatId: recipientId }, text));
+    // customer app: the saved message is what the customer's app shows – nothing leaves the server
+    if (platform === 'app') return AppChatHook.send(companyId, recipientId);
     if (!accountId) throw new BadRequestException('This legacy conversation is not linked to a Meta account. Wait for a new incoming message before replying.');
     const connection = await this.metaPageConnectionRepository.findOne({
       where: platform === 'instagram'
@@ -2642,6 +2799,15 @@ export class BotAdminService {
     const result = await response.json() as { message_id?: string; error?: { message?: string } };
     if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected the message. Check messaging permissions and the reply window.');
     return result.message_id ?? null;
+  }
+
+  /** TikTok / Telegram replies (agents): the channel's own reason comes back as a clear message for the team. */
+  private async sendTiktok(send: () => Promise<string | null>): Promise<string | null> {
+    try {
+      return await send();
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : 'TikTok did not accept the message.');
+    }
   }
 
   private async getSocialReplyTarget(companyId: number, platform: string, accountId: string | null) {
@@ -2704,7 +2870,7 @@ export class BotAdminService {
   }
 
   async createMessageTemplate(user: AuthenticatedUser, payload: SaveMessageTemplateDto) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const name = payload.name.trim();
     if (!name || !payload.body.trim()) throw new BadRequestException('Template name and body are required.');
     const existing = await this.messageTemplateRepository.findOne({ where: { company_id: user.company_id, name } });
@@ -2719,7 +2885,7 @@ export class BotAdminService {
   }
 
   async deleteMessageTemplate(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const row = await this.messageTemplateRepository.findOne({ where: { id, company_id: user.company_id } });
     if (!row) throw new NotFoundException('Message template not found.');
     await this.messageTemplateRepository.remove(row);
@@ -2886,7 +3052,7 @@ export class BotAdminService {
     const company = await this.getCompanyForUser(user);
     // any company admin (not only the owner) may answer every chat; agents only their own
     const isAdmin =
-      (company != null && Number(company.admin_user_id) === Number(user.id)) || String(user.role ?? '').toLowerCase() === 'admin';
+      (company != null && this.managesAll(user, company)) || String(user.role ?? '').toLowerCase() === 'admin';
     if (
       !isAdmin &&
       Number(conversation.assigned_agent_id) !== Number(user.id)
@@ -2908,7 +3074,15 @@ export class BotAdminService {
 
     const socialPlatform = channelUser.platform?.toLowerCase();
     let providerMessageId: string | null = null;
-    if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
+    if (socialPlatform === 'tiktok') {
+      providerMessageId = await this.sendTiktok(() => TiktokHook.sendText(
+        { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id }, trimmed));
+    } else if (socialPlatform === 'app') {
+      providerMessageId = AppChatHook.send(user.company_id, channelUser.external_user_id);
+    } else if (socialPlatform === 'telegram') {
+      providerMessageId = await this.sendTiktok(() => TelegramHook.sendText(
+        { companyId: user.company_id, botId: channelUser.source_account_id, chatId: channelUser.external_user_id }, trimmed));
+    } else if (socialPlatform === 'messenger' || socialPlatform === 'facebook' || socialPlatform === 'instagram') {
       providerMessageId = await this.sendSocialConversationText(user.company_id, socialPlatform === 'facebook' ? 'messenger' : socialPlatform, channelUser.source_account_id, channelUser.external_user_id, trimmed);
     } else {
       const phone = this.normalizePhoneKey(channelUser.external_user_id);
@@ -3009,11 +3183,34 @@ export class BotAdminService {
     const trimmedCaption = caption?.trim() || '';
     const platform = this.normalizeChannelPlatform(channelUser.platform);
 
+    if (platform === 'tiktok') {
+      // TikTok: one JPG / PNG photo (max 3 MB) per message – checked before anything is stored
+      if (mediaType !== 'image' || !/^image\/(jpe?g|png)$/.test(mimetype)) throw new BadRequestException('TikTok can only receive JPG or PNG photos.');
+      if (uploaded.buffer.length > 3 * 1024 * 1024) throw new BadRequestException('TikTok photos must be smaller than 3 MB.');
+    }
+    if (platform === 'telegram') {
+      // Telegram: photos up to 10 MB, every other file up to 50 MB
+      const photo = mediaType === 'image' && /^image\/(jpe?g|png|webp)$/.test(mimetype);
+      if (uploaded.buffer.length > (photo ? 10 : 50) * 1024 * 1024) throw new BadRequestException(photo ? 'Telegram photos must be smaller than 10 MB.' : 'Telegram files must be smaller than 50 MB.');
+    }
+
     // Keep our own copy: the inbox can always show/download it, and Instagram needs a public URL.
     const storedKey = saveChatMedia(user.company_id, uploaded.buffer, mimetype, fileName);
 
     let providerMessageId: string | null = null;
-    if (platform === 'instagram') {
+    let tiktokCaptionId: string | null = null; // TikTok only: the caption is a message of its own
+    if (platform === 'tiktok') {
+      // the caption goes as its own message
+      const target = { companyId: user.company_id, businessId: channelUser.source_account_id, conversationId: channelUser.external_user_id };
+      providerMessageId = await this.sendTiktok(() => TiktokHook.sendImage(target, { buffer: uploaded.buffer, mimetype, fileName }));
+      if (trimmedCaption) tiktokCaptionId = await this.sendTiktok(() => TiktokHook.sendText(target, trimmedCaption));
+    } else if (platform === 'app') {
+      providerMessageId = AppChatHook.send(user.company_id, channelUser.external_user_id);
+    } else if (platform === 'telegram') {
+      providerMessageId = await this.sendTiktok(() => TelegramHook.sendFile(
+        { companyId: user.company_id, botId: channelUser.source_account_id, chatId: channelUser.external_user_id },
+        { buffer: uploaded.buffer, mimetype, fileName, caption: trimmedCaption }));
+    } else if (platform === 'instagram') {
       providerMessageId = await this.sendInstagramMedia(
         user.company_id, channelUser.source_account_id, channelUser.external_user_id, storedKey, mediaType, trimmedCaption,
       );
@@ -3051,11 +3248,18 @@ export class BotAdminService {
         platform: channelUser.platform || 'whatsapp',
         provider_message_id: providerMessageId,
         delivery_status: providerMessageId ? 'sent' : null,
-        content: mediaType === 'document' ? fileName : trimmedCaption || `[${mediaType}]`,
+        content: mediaType === 'document' ? fileName : (platform === 'tiktok' ? '' : trimmedCaption) || `[${mediaType}]`,
         media_url: storedKey,
         source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
       }),
     );
+    if (platform === 'tiktok' && trimmedCaption) {
+      await this.messageRepository.save(this.messageRepository.create({
+        conversation_id: conversationId, direction: 'outbound', message_type: 'text', platform: 'tiktok',
+        provider_message_id: tiktokCaptionId, delivery_status: tiktokCaptionId ? 'sent' : null, content: trimmedCaption,
+        source: isAdmin ? 'admin' : 'agent', sender_user_id: Number(user.id),
+      }));
+    }
 
     conversation.last_message_at = new Date();
     await this.conversationRepository.save(conversation);
@@ -3064,8 +3268,11 @@ export class BotAdminService {
 
   /* ════════════════ New helpers (add inside BotAdminService) ════════════════ */
 
-  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' {
+  private normalizeChannelPlatform(value: string | null | undefined): 'whatsapp' | 'messenger' | 'instagram' | 'tiktok' | 'telegram' | 'app' {
     const platform = String(value ?? '').toLowerCase();
+    if (platform === 'app') return 'app';
+    if (platform === 'tiktok') return 'tiktok';
+    if (platform === 'telegram') return 'telegram';
     if (platform.includes('instagram')) return 'instagram';
     if (platform.includes('messenger') || platform.includes('facebook')) return 'messenger';
     return 'whatsapp';
@@ -3079,7 +3286,7 @@ export class BotAdminService {
       throw new NotFoundException('Conversation not found.');
     }
     const company = await this.getCompanyForUser(user);
-    const isAdmin = company != null && Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = company != null && this.managesAll(user, company);
     if (!isAdmin && Number(conversation.assigned_agent_id) !== Number(user.id)) {
       throw new ForbiddenException('You do not have access to this conversation.');
     }
@@ -3147,7 +3354,7 @@ export class BotAdminService {
     const platform = this.normalizeChannelPlatform(channelUser.platform);
     try {
       if (platform === 'whatsapp') {
-        const channel = await this.resolveCompanyWhatsappChannel(companyId);
+        const channel = await this.resolveCompanyWhatsappChannel(companyId, channelUser.external_user_id);
         const token = channel?.meta_access_token?.trim();
         const phoneNumberId = channel?.meta_phone_number_id?.trim();
         if (!this.isMetaWhatsappChannel(channel) || !token || !phoneNumberId) return;
@@ -3167,6 +3374,7 @@ export class BotAdminService {
         });
         return;
       }
+      if (platform === 'tiktok' || platform === 'telegram' || platform === 'app') return; // no "seen" to send (the app shows read itself)
       // Messenger / Instagram: "seen"
       const target = await this.getSocialReplyTarget(companyId, platform, channelUser.source_account_id);
       const version = process.env.META_GRAPH_API_VERSION?.trim() || 'v19.0';
@@ -3271,7 +3479,7 @@ export class BotAdminService {
   ): Promise<{ ok: boolean; messageId: string | null }> {
     if (isTestPhone(phone)) return { ok: true, messageId: testSendResult().messageId }; // simulator chat
     try {
-      const channel = await this.resolveCompanyWhatsappChannel(companyId);
+      const channel = await this.resolveCompanyWhatsappChannel(companyId, phone);
       if (!channel) return { ok: false, messageId: null };
 
       if (this.isMetaWhatsappChannel(channel)) {
@@ -3458,7 +3666,7 @@ export class BotAdminService {
   }
 
   async getOrders(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     return this.orderRepository.find({
       where: { company_id: user.company_id },
       relations: ['channelUser', 'items', 'statusHistory'],
@@ -3508,7 +3716,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     // Verify channel user exists and belongs to this company
     const channelUser = await this.channelUserRepository
@@ -3610,17 +3818,13 @@ export class BotAdminService {
     id: number,
     payload: UpdateOrderStatusDto,
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id, company_id: user.company_id },
-      relations: ['channelUser', 'items'],
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
-
+    const order = await this.findOrderForActor(user, id, ['channelUser', 'items']);
+    const before = order.status;
     order.status = payload.status;
     const saved = await this.orderRepository.save(order);
+    if (before !== saved.status) await this.stock?.syncOrderSafe(saved.id);
+    await this.activity?.log(user, { action: 'order_status', entity: 'order', entity_id: saved.id,
+      summary: `Order #${saved.id}: status ${before} → ${saved.status}`, details: { from: before, to: saved.status } });
     const message = await this.renderOrderStatusMessage(user.company_id, saved);
     await this.orderStatusHistoryRepository.save(
       this.orderStatusHistoryRepository.create({
@@ -3634,7 +3838,7 @@ export class BotAdminService {
   }
 
   async getStatusTemplates(user: AuthenticatedUser) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const existing = await this.orderStatusTemplateRepository.find({
       where: { company_id: user.company_id },
       order: { status: 'ASC' },
@@ -3650,7 +3854,7 @@ export class BotAdminService {
     user: AuthenticatedUser,
     payload: UpdateStatusTemplateDto,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     let template = await this.orderStatusTemplateRepository.findOne({
       where: { company_id: user.company_id, status: payload.status },
     });
@@ -3688,7 +3892,7 @@ export class BotAdminService {
     }
     if (isTestPhone(cleanedPhone)) return true; // simulator chat: never sent to WhatsApp
 
-    const channel = await this.resolveCompanyWhatsappChannel(companyId);
+    const channel = await this.resolveCompanyWhatsappChannel(companyId, cleanedPhone);
     if (!channel) {
       return false;
     }
@@ -3784,7 +3988,7 @@ export class BotAdminService {
   }
 
   async sendOrderInvoice(user: AuthenticatedUser, id: number) {
-    await this.assertAdminAccess(user);
+    await this.findOrderForActor(user, id);
     return this.sendInvoiceForCompany(user.company_id, id);
   }
 
@@ -3804,7 +4008,7 @@ export class BotAdminService {
 
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
 
-    const invoice = this.writeInvoicePdf(order, company);
+    const invoice = await this.writeInvoicePdf(order, company);
     order.invoice_url = invoice.url;
     const saved = await this.orderRepository.save(order);
 
@@ -3855,7 +4059,8 @@ export class BotAdminService {
     }
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     const fileName = `booking-${booking.id}.pdf`;
-    const buffer = Buffer.from(this.buildSimplePdf(this.buildBookingInvoiceLines(booking, company, channelUser)));
+    const buffer = await renderInvoicePdf(this.bookingInvoiceDoc(booking, company, channelUser))
+      .catch(() => Buffer.from(this.buildSimplePdf(this.buildBookingInvoiceLines(booking, company, channelUser))));
     const key = saveChatMedia(companyId, buffer, 'application/pdf', fileName);
     const url = publicChatMediaUrl(key, 90 * 24 * 3600) ?? '';
     booking.invoice_url = url || null;
@@ -3902,6 +4107,7 @@ export class BotAdminService {
 
   /** Shows the invoice in the chat history of the customer's latest conversation. */
   private async logInvoiceMessage(channelUserId: number, platform: string | null | undefined, content: string) {
+    if (platform === 'app') return; // customer app: the PDF itself is already a message in the chat
     const conversation = await this.conversationRepository.findOne({
       where: { bot_channel_user_id: channelUserId },
       order: { id: 'DESC' },
@@ -3913,6 +4119,23 @@ export class BotAdminService {
     })).catch(() => undefined);
   }
 
+  /** Customer app: order messages / invoices are saved into the customer's app chat (that is the delivery). */
+  private async saveAppChatMessage(companyId: number, externalUserId: string, text: string, file: { buffer: Buffer; mimetype: string; fileName: string } | null): Promise<boolean> {
+    const channelUser = await this.channelUserRepository.findOne({ where: { company_id: companyId, platform: 'app', external_user_id: externalUserId } });
+    if (!channelUser) return false;
+    const conversation = await this.conversationRepository.findOne({ where: { bot_channel_user_id: channelUser.id }, order: { id: 'DESC' } });
+    if (!conversation) return false;
+    const mediaKey = file ? saveChatMedia(companyId, file.buffer, file.mimetype, file.fileName) : null;
+    await this.messageRepository.save(this.messageRepository.create({
+      conversation_id: conversation.id, direction: 'outbound', message_type: file && file.mimetype.startsWith('image/') ? 'image' : 'text', platform: 'app',
+      provider_message_id: AppChatHook.send(companyId, externalUserId), delivery_status: 'sent',
+      content: file ? [file.fileName, text].filter(Boolean).join('\n') : text, media_url: mediaKey, source: 'agent',
+    }));
+    conversation.last_message_at = new Date();
+    await this.conversationRepository.save(conversation);
+    return true;
+  }
+
   /** Sends a file (e.g. invoice PDF) on the customer's channel; falls back to the link as text. */
   private async sendCustomerFile(
     companyId: number,
@@ -3920,6 +4143,7 @@ export class BotAdminService {
     file: { buffer: Buffer; mimetype: string; fileName: string; url: string | null; caption: string },
   ): Promise<boolean> {
     if (!channelUser?.external_user_id) return false;
+    if (channelUser.platform === 'app') return this.saveAppChatMessage(companyId, channelUser.external_user_id, file.caption, { buffer: file.buffer, mimetype: file.mimetype, fileName: file.fileName });
     const social = socialPlatformOf(channelUser.platform);
     try {
       if (social) {
@@ -3944,6 +4168,7 @@ export class BotAdminService {
     channelUser: Pick<BotChannelUser, 'platform' | 'external_user_id' | 'source_account_id'> | null | undefined,
     message: string,
   ): Promise<boolean> {
+    if (channelUser?.platform === 'app') return this.saveAppChatMessage(companyId, channelUser.external_user_id, message, null);
     const social = socialPlatformOf(channelUser?.platform);
     if (social && channelUser) {
       try {
@@ -3961,9 +4186,10 @@ export class BotAdminService {
    * Builds the invoice PDF and stores it with the chat media (served by this API at
    * /public/chat-media/… with a signed link, valid 90 days – needs PUBLIC_API_BASE_URL).
    */
-  private writeInvoicePdf(order: BotOrder, company: Company | null): { url: string; buffer: Buffer; fileName: string } {
+  private async writeInvoicePdf(order: BotOrder, company: Company | null): Promise<{ url: string; buffer: Buffer; fileName: string }> {
     const fileName = `invoice-order-${order.id}.pdf`;
-    const buffer = Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company)));
+    const buffer = await renderInvoicePdf(this.orderInvoiceDoc(order, company))
+      .catch(() => Buffer.from(this.buildSimplePdf(this.buildInvoiceLines(order, company))));
     const key = saveChatMedia(Number(order.company_id), buffer, 'application/pdf', fileName);
     const publicUrl = publicChatMediaUrl(key, 90 * 24 * 3600);
     if (!publicUrl) console.warn('[invoice] PUBLIC_API_BASE_URL is not set – the invoice is sent as a file without a download link.');
@@ -3971,6 +4197,66 @@ export class BotAdminService {
   }
 
 
+
+  private shopLines(company: Company | null): string[] {
+    return [
+      company?.address?.trim(),
+      company?.phone?.trim() ? `Phone: ${company.phone.trim()}` : '',
+      company?.email?.trim() ? company.email.trim() : '',
+    ].filter((line): line is string => Boolean(line));
+  }
+
+  private shortDate(value: Date | string | undefined) {
+    const date = value ? new Date(value) : new Date();
+    return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Colombo' });
+  }
+
+  /** The order invoice as a clean A4 page (see invoice-pdf.ts). */
+  orderInvoiceDoc(order: BotOrder, company: Company | null): InvoiceDoc {
+    const items = order.items ?? [];
+    const subtotal = items.reduce((sum, item) => sum + Number(item.total_price || 0), 0);
+    const fee = order.delivery_fee == null ? null : Number(order.delivery_fee);
+    return {
+      title: 'INVOICE',
+      number: `#${order.id}`,
+      date: this.shortDate(order.created_at),
+      status: String(order.status || '').trim() || undefined,
+      shop: { name: company?.name?.trim() || 'Invoice', lines: this.shopLines(company) },
+      billTo: { label: 'Bill to', lines: [order.customer_name || '-', order.customer_phone || order.channelUser?.external_user_id || '', order.address || ''].filter(Boolean) },
+      side: { label: 'Payment & delivery', lines: [order.payment_method || 'Cash on delivery', order.delivery_area && order.delivery_area !== '*' ? `Delivery: ${order.delivery_area}` : ''].filter(Boolean) },
+      columns: ['ITEM', 'QTY', 'UNIT PRICE', 'AMOUNT'],
+      rows: items.map((item) => ({
+        name: item.product_name, detail: item.variant_text || undefined, qty: String(item.quantity),
+        unit: this.formatMoney(item.unit_price), amount: this.formatMoney(item.total_price),
+      })),
+      totals: [
+        { label: 'Subtotal', value: this.formatMoney(subtotal) },
+        ...(fee != null ? [{ label: 'Delivery', value: fee === 0 ? 'Free' : this.formatMoney(fee) }] : [{ label: 'Delivery', value: 'To be confirmed' }]),
+      ],
+      total: { label: 'Total', value: this.formatMoney(order.total_amount) },
+      footer: 'Thank you for your order!',
+    };
+  }
+
+  private bookingInvoiceDoc(booking: BotBooking, company: Company | null, channelUser: BotChannelUser | null): InvoiceDoc {
+    const status = { requested: 'Requested', confirmed: 'Confirmed', done: 'Done', cancelled: 'Cancelled' }[booking.status] ?? booking.status;
+    const price = booking.price != null ? this.formatMoney(booking.price) : 'To be confirmed';
+    return {
+      title: 'BOOKING',
+      number: `#${booking.id}`,
+      date: this.shortDate(new Date()),
+      status,
+      shop: { name: company?.name?.trim() || 'Booking', lines: this.shopLines(company) },
+      billTo: { label: 'Customer', lines: [booking.customer_name || channelUser?.display_name || '-', booking.customer_phone || ''].filter(Boolean) },
+      side: { label: 'Appointment', lines: [`${booking.date || '-'}  ·  ${booking.time || '-'}`, booking.duration_min ? `${booking.duration_min} minutes` : ''].filter(Boolean) },
+      columns: ['SERVICE', '', '', 'PRICE'],
+      rows: [{ name: booking.service_name, detail: `${booking.date || ''} ${booking.time || ''}`.trim() || undefined, qty: '', unit: '', amount: price }],
+      totals: [],
+      total: { label: 'Total', value: price },
+      note: booking.status === 'requested' ? 'The team will confirm the time with you.' : undefined,
+      footer: 'Thank you for your booking!',
+    };
+  }
 
   private buildInvoiceLines(order: BotOrder, company: Company | null) {
     const companyName = company?.name?.trim() || 'Invoice';
@@ -4095,15 +4381,10 @@ export class BotAdminService {
     orderId: number,
     adminNote: string,
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId);
     order.admin_note = adminNote.trim() || null;
     await this.orderRepository.save(order);
+    await this.activity?.log(user, { action: 'order_note', entity: 'order', entity_id: order.id, summary: `Order #${order.id}: note changed` });
     return { order };
   }
 
@@ -4118,14 +4399,8 @@ export class BotAdminService {
       admin_note?: string;
     },
   ) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-      relations: ['channelUser', 'items'],
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId, ['channelUser', 'items']);
+    const before = { customer_name: order.customer_name, customer_phone: order.customer_phone, address: order.address, status: order.status, admin_note: order.admin_note };
 
     if (payload.customer_name !== undefined) {
       order.customer_name = payload.customer_name.trim();
@@ -4144,20 +4419,31 @@ export class BotAdminService {
     }
 
     const saved = await this.orderRepository.save(order);
+    if (before.status !== saved.status) await this.stock?.syncOrderSafe(saved.id);
+    const changes = Object.fromEntries(Object.entries(before)
+      .filter(([key, value]) => (saved as unknown as Record<string, unknown>)[key] !== value)
+      .map(([key, value]) => [key, { from: value, to: (saved as unknown as Record<string, unknown>)[key] }]));
+    if (Object.keys(changes).length) {
+      await this.activity?.log(user, { action: 'order_edit', entity: 'order', entity_id: saved.id,
+        summary: `Order #${saved.id} edited: ${Object.keys(changes).join(', ').replace(/_/g, ' ')}`, details: changes });
+    }
     return { order: saved };
   }
 
   async deleteOrder(user: AuthenticatedUser, orderId: number) {
-    await this.assertAdminAccess(user);
-    const order = await this.orderRepository.findOne({
-      where: { id: orderId, company_id: user.company_id },
-    });
-    if (!order) {
-      throw new NotFoundException('Order not found.');
-    }
+    const order = await this.findOrderForActor(user, orderId, ['items']);
+    const snapshot = {
+      customer_name: order.customer_name, customer_phone: order.customer_phone, address: order.address, status: order.status,
+      total: order.total_amount ?? null,
+      items: (order.items ?? []).map((item) => ({ name: item.product_name, quantity: item.quantity, price: item.unit_price })),
+      created_at: order.created_at,
+    };
     await this.orderItemRepository.delete({ order_id: orderId });
     await this.orderStatusHistoryRepository.delete({ order_id: orderId });
     await this.orderRepository.remove(order);
+    await this.stock?.syncOrderSafe(orderId);
+    await this.activity?.log(user, { action: 'order_delete', entity: 'order', entity_id: orderId,
+      summary: `Order #${orderId} deleted (${snapshot.customer_name || 'customer'}${snapshot.total != null ? `, Rs ${snapshot.total}` : ''})`, details: snapshot });
     return { id: orderId, removed: true };
   }
 
@@ -4220,7 +4506,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const labels = await this.listCustomerLabels(user);
     const conversationsByLabel = new Map<number, Set<number>>(
@@ -4329,7 +4615,7 @@ export class BotAdminService {
     name: string,
     colorCode?: string,
   ) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const companyId = this.requireUserCompanyId(user);
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -4360,7 +4646,7 @@ export class BotAdminService {
   }
 
   async deleteCustomerLabel(user: AuthenticatedUser, labelId: number) {
-    await this.assertAdminAccess(user);
+    await this.assertManagerAccess(user);
     const companyId = this.requireUserCompanyId(user);
     const label = await this.customerLabelRepository
       .createQueryBuilder('label')
@@ -4501,24 +4787,33 @@ export class BotAdminService {
   }
 
   /** Who wrote each note (admin / agent / bot) and which agent the customer belongs to now. */
-  private async enrichNotes<T extends { bot_channel_user_id: number; created_by_user_id: number | null; created_by_name: string | null }>(
+  private async enrichNotes<T extends { id: number; bot_channel_user_id: number; created_by_user_id: number | null; created_by_name: string | null; created_at?: string | null }>(
     companyId: number, notes: T[],
-  ): Promise<Array<T & { author_role: 'admin' | 'agent' | 'bot'; assigned_agent: { id: number; name: string } | null }>> {
+  ): Promise<Array<T & { author_role: 'admin' | 'agent' | 'bot'; assigned_agent: { id: number; name: string } | null; conversation_id: number | null }>> {
     if (!notes.length) return [];
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
     const adminId = Number(company?.admin_user_id ?? 0);
     const ids = [...new Set(notes.map((note) => Number(note.bot_channel_user_id)))];
-    const owners: Array<{ channel_user_id: number; agent_id: number | null; agent_name: string | null }> = await this.conversationRepository.query(
-      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS channel_user_id, c.assigned_agent_id AS agent_id, u.name AS agent_name
+    const owners: Array<{ channel_user_id: number; agent_id: number | null; agent_name: string | null; conversation_id: number }> = await this.conversationRepository.query(
+      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS channel_user_id, c.assigned_agent_id AS agent_id, u.name AS agent_name, c.id AS conversation_id
          FROM bot_conversation c LEFT JOIN app_user u ON u.id = c.assigned_agent_id
         WHERE c.bot_channel_user_id = ANY($1::int[]) ORDER BY c.bot_channel_user_id, c.id DESC`, [ids]);
     const ownerOf = new Map(owners.map((row) => [Number(row.channel_user_id), row]));
+    // the chat the note was written in: the customer's conversation that had started by the time of the note
+    const atNote: Array<{ note_id: number; conversation_id: number }> = await this.conversationRepository.query(
+      `SELECT n.note_id, (SELECT c.id FROM bot_conversation c WHERE c.bot_channel_user_id = n.cu AND c.created_at <= n.at + INTERVAL '1 minute'
+                            ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS conversation_id
+         FROM unnest($1::int[], $2::int[], $3::timestamptz[]) AS n(note_id, cu, at)`,
+      [notes.map((note) => Number(note.id)), notes.map((note) => Number(note.bot_channel_user_id)), notes.map((note) => note.created_at ?? new Date().toISOString())]).catch(() => []);
+    const chatOfNote = new Map(atNote.filter((row) => row.conversation_id).map((row) => [Number(row.note_id), Number(row.conversation_id)]));
     return notes.map((note) => {
       const owner = ownerOf.get(Number(note.bot_channel_user_id));
       const role = note.created_by_user_id == null ? 'bot' : Number(note.created_by_user_id) === adminId ? 'admin' : 'agent';
       return {
         ...note, author_role: role,
         assigned_agent: owner?.agent_id ? { id: Number(owner.agent_id), name: owner.agent_name || `Agent #${owner.agent_id}` } : null,
+        // "Open chat" goes to the chat the note was written in (else the customer's latest chat)
+        conversation_id: chatOfNote.get(Number(note.id)) ?? (owner?.conversation_id ? Number(owner.conversation_id) : null),
       };
     });
   }
@@ -4562,7 +4857,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const channelUser = await this.channelUserRepository
       .createQueryBuilder('channelUser')
@@ -4613,7 +4908,7 @@ export class BotAdminService {
     if (!company || Number(company.id) !== companyId) {
       throw new ForbiddenException('Company not found.');
     }
-    const isAdmin = Number(company.admin_user_id) === Number(user.id);
+    const isAdmin = this.managesAll(user, company);
 
     const qb = this.customerNoteRepository
       .createQueryBuilder('note')
@@ -4695,8 +4990,8 @@ export class BotAdminService {
       throw new NotFoundException('Note not found.');
     }
     const { isAdmin } = await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
-    if (!isAdmin && Number(note.created_by_user_id) !== Number(user.id)) {
-      throw new ForbiddenException('You can only delete your own notes.');
+    if (!isAdmin) {
+      throw new ForbiddenException('Only the admin or a supervisor can delete notes.');
     }
     await this.customerNoteRepository.remove(note);
     return { id: noteId, removed: true };
@@ -4708,7 +5003,7 @@ export class BotAdminService {
     noteId: number,
     checked: boolean,
   ) {
-    await this.assertAdminAccess(user);
+    // agents tick the notes of their own customers too (access is checked below)
     const companyId = this.requireUserCompanyId(user);
     const note = await this.customerNoteRepository
       .createQueryBuilder('note')
@@ -4720,6 +5015,7 @@ export class BotAdminService {
     if (!note) {
       throw new NotFoundException('Note not found.');
     }
+    await this.assertChannelUserNoteAccess(user, Number(note.bot_channel_user_id));
 
     note.checked_by_admin = checked;
     note.checked_at = checked ? new Date() : null;
@@ -4746,10 +5042,9 @@ export class BotAdminService {
       user,
       Number(note.bot_channel_user_id),
     );
-
-    const phone = this.normalizePhoneKey(channelUser.external_user_id);
-    if (!phone) {
-      throw new BadRequestException('Invalid customer phone for this client.');
+    // an agent sends only their own notes (not the owner's or the bot's internal notes)
+    if (!isAdmin && Number(note.created_by_user_id ?? 0) !== Number(user.id)) {
+      throw new ForbiddenException('You can send only your own notes to the customer.');
     }
 
     const text = note.content.trim();
@@ -4757,7 +5052,19 @@ export class BotAdminService {
       throw new BadRequestException('Note content is empty.');
     }
 
-    await this.sendCompanyWhatsappText(companyId, phone, text);
+    if (socialPlatformOf(channelUser.platform)) {
+      // Messenger / Instagram customers get it on their own channel
+      const delivered = await this.sendCustomerMessage(companyId, channelUser, text);
+      if (!delivered) throw new BadRequestException(socialPlatformOf(channelUser.platform) === 'tiktok'
+        ? 'Could not send the note on TikTok (TikTok allows replies for 48 hours and 10 messages in a row). Reply from the chat instead.'
+        : 'Could not send the note on Messenger / Instagram. Reply from the chat instead.');
+    } else {
+      const phone = this.normalizePhoneKey(channelUser.external_user_id);
+      if (!phone) {
+        throw new BadRequestException('Invalid customer phone for this client.');
+      }
+      await this.sendCompanyWhatsappText(companyId, phone, text);
+    }
 
     note.sent_at = new Date();
     const saved = await this.customerNoteRepository.save(note);
@@ -4772,7 +5079,7 @@ export class BotAdminService {
       .orderBy('c.id', 'DESC')
       .getOne();
 
-    if (conversation) {
+    if (conversation && channelUser.platform !== 'app') { // customer app: the note is already a message in the chat
       await this.messageRepository.save(
         this.messageRepository.create({
           conversation_id: conversation.id,

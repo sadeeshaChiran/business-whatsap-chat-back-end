@@ -9,6 +9,9 @@ export type LimitDefinition = { key: string; label: string; kind: LimitKind; gro
 export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'messenger', label: 'Messenger', kind: 'feature', group: 'Channels', description: 'Connect a Facebook Page; the AI replies on Messenger.' },
   { key: 'instagram', label: 'Instagram', kind: 'feature', group: 'Channels', description: 'The AI replies to Instagram DMs.' },
+  { key: 'app', label: 'Customer app', kind: 'feature', group: 'Channels', description: 'A free chat app for customers (phone login); the AI replies there too.' },
+  { key: 'telegram', label: 'Telegram', kind: 'feature', group: 'Channels', description: 'Connect a Telegram bot: chats in the inbox, AI replies and free announcements to a Telegram channel and bot followers.' },
+  { key: 'tiktok', label: 'TikTok', kind: 'feature', group: 'Channels', description: 'Connect a TikTok Business account; the AI replies to TikTok direct messages.' },
   { key: 'lead_management', label: 'Lead Management', kind: 'feature', group: 'Sales', description: 'Lead pipeline board (new → won).' },
   { key: 'crm', label: 'CRM', kind: 'feature', group: 'Sales', description: 'Contacts, 360 view, tags, follow-up tasks, CSV import / export.' },
   { key: 'marketing_ads', label: 'Marketing – ad results', kind: 'feature', group: 'Marketing', description: 'Chats, orders and sales per Click-to-WhatsApp / Messenger / Instagram ad.' },
@@ -18,6 +21,9 @@ export const LIMIT_CATALOG: LimitDefinition[] = [
   { key: 'broadcasts_per_month', label: 'Broadcast messages per month', kind: 'number', group: 'Marketing', description: 'Empty = unlimited.' },
   { key: 'reports_days', label: 'Report history (days)', kind: 'number', group: 'Reports', description: 'How far back Bot reports go. Empty = unlimited.' },
   { key: 'social', label: 'Social – comments, posts & analytics', kind: 'feature', group: 'Marketing', description: 'Facebook / Instagram comment replies (AI), posting & scheduling, Page and Instagram analytics.' },
+  { key: 'whatsapp_numbers', label: 'WhatsApp numbers', kind: 'number', group: 'Channels', description: 'How many WhatsApp numbers one company can connect (sales, support, wholesale …). Empty = unlimited.' },
+  { key: 'credits_unlock', label: 'Bought credits open Messenger, Instagram & comments', kind: 'feature', group: 'Channels', description: 'When this package has Messenger / Instagram / Social switched off, buying credits switches them on while the credits are valid.' },
+  { key: 'sms_free_per_month', label: 'Free SMS credits per month', kind: 'number', group: 'Marketing', description: 'Agent Metra SMS: 1 credit = 1 SMS (160 English / 70 Sinhala characters). Empty or 0 = none – the business buys SMS packs.' },
   { key: 'mobile_app', label: 'Mobile app', kind: 'feature', group: 'Apps', description: 'Use the Agent Metra Android / iPhone app.' },
 ];
 

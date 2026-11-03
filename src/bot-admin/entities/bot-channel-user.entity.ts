@@ -53,6 +53,14 @@ export class BotChannelUser {
   @Column({ type: 'timestamp', nullable: true })
   last_seen_at: Date | null;
 
+  /** WhatsApp number (whatsapp_channels.id) the customer wrote to last – replies go from it */
+  @Column({ type: 'int', nullable: true })
+  whatsapp_channel_id: number | null;
+
+  /** WhatsApp number that brought the customer (first message) */
+  @Column({ type: 'int', nullable: true })
+  first_whatsapp_channel_id: number | null;
+
   @ManyToOne(() => User, { nullable: true, onDelete: 'RESTRICT', onUpdate: 'CASCADE' })
   @JoinColumn({ name: 'app_user_id' })
   appUser: User | null;

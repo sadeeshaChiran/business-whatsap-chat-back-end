@@ -82,11 +82,19 @@ export class CreateProductDto {
   @IsString({ each: true })
   gallery?: string[];
 
-  @ApiProperty({ example: 0.35, minimum: 0, description: 'Weight in kg' })
+  @ApiPropertyOptional({ example: 0.35, minimum: 0, description: 'Weight in kg – only needed when delivery is charged by weight' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
-  weight: number;
+  weight?: number | null;
+
+
+  @ApiPropertyOptional({ example: 'Casio', description: 'Brand (optional)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  brand?: string | null;
 
   @ApiPropertyOptional({ example: 'Soft sole, non-slip, loved by moms', description: 'Why customers love it (used by the sales bot)' })
   @IsOptional()

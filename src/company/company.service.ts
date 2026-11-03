@@ -2,6 +2,7 @@ import { PlanService } from '../platform/plan.service';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -104,7 +105,7 @@ export class CompanyService {
   /** Agents get the workspace without integration secrets (API keys, verify tokens). */
   private async toApiCompanyFor(user: AuthenticatedUser, company: Company, loginEmail?: string) {
     const view = await this.toApiCompany(company, loginEmail);
-    if (user.role === 'admin') return view;
+    if (user.role === 'admin' || user.role === 'supervisor') return view;
     return {
       ...view,
       whatsapp_evaluation_key: null,
@@ -176,6 +177,7 @@ export class CompanyService {
       agent_assignment_timeout_minutes:
         company.agent_assignment_timeout_minutes ?? 1440,
       agent_offline_shift_minutes: company.agent_offline_shift_minutes ?? 0,
+      agent_auto_accept: company.agent_auto_accept ?? true,
       created_at: company.created_at,
       updated_at: company.updated_at,
     };
@@ -250,6 +252,8 @@ export class CompanyService {
       company.name = updateCompanyDto.name.trim();
     }
     if (updateCompanyDto.plan !== undefined) {
+      // the package is the owner's (billing) – a supervisor can't change it
+      if (user.role === 'supervisor') throw new ForbiddenException('Only the company owner can change the package.');
       const nextPlan = updateCompanyDto.plan.trim().toLowerCase();
       // companies can pick Free themselves; paid packages are set after payment / by the super admin
       const current = String(company.plan ?? '').trim().toLowerCase();
@@ -303,6 +307,9 @@ export class CompanyService {
     }
     if (updateCompanyDto.agent_offline_shift_minutes !== undefined) {
       company.agent_offline_shift_minutes = updateCompanyDto.agent_offline_shift_minutes;
+    }
+    if (updateCompanyDto.agent_auto_accept !== undefined) {
+      company.agent_auto_accept = updateCompanyDto.agent_auto_accept;
     }
 
     if (!(await this.planService.planAllowsBot(company.plan))) {

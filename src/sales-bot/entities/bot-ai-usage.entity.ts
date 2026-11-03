@@ -30,6 +30,14 @@ export class BotAiUsage {
   @Column({ type: 'decimal', precision: 12, scale: 6, default: 0 })
   cost_usd: number;
 
+  /** thinking part of output_tokens (billed at the output price) */
+  @Column({ type: 'integer', default: 0 })
+  thinking_tokens: number;
+
+  /** lookups the AI made (a lookup = one more AI call), e.g. "get_product,delivery_fee" */
+  @Column({ type: 'varchar', length: 300, default: '' })
+  tools_used: string;
+
   @Column({ type: 'int', default: 0 })
   latency_ms: number;
 

@@ -20,11 +20,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Something went wrong on our side. Please try again in a moment.';
     let errors: string[] | undefined;
+    let fields: Record<string, string> | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const body = exception.getResponse();
       const raw = typeof body === 'string' ? body : (body as { message?: unknown }).message;
+      // per-field messages for forms: { message, errors: { fieldId: "text" } }
+      const fieldErrors = typeof body === 'object' ? (body as { errors?: unknown }).errors : undefined;
+      if (fieldErrors && typeof fieldErrors === 'object' && !Array.isArray(fieldErrors)) fields = fieldErrors as Record<string, string>;
       if (Array.isArray(raw)) {
         errors = raw.map((item) => humanize(String(item)));
         message = errors[0] ?? 'Please check the form and try again.';
@@ -59,7 +63,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       this.logger.warn(`${request.method} ${request.originalUrl ?? request.url} → ${status} ${message}`);
     }
 
-    response.status(status).json({ success: false, statusCode: status, message, ...(errors && errors.length > 1 ? { errors } : {}), data: null });
+    response.status(status).json({ success: false, statusCode: status, message, ...(errors && errors.length > 1 ? { errors } : {}), ...(fields ? { fields } : {}), data: null });
   }
 }
 

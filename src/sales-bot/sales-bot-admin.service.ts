@@ -1,3 +1,4 @@
+import { linkQuotedReplyById } from '../common/message-reply';
 import { followUpView } from '../bot-admin/bot-admin.service';
 import { isTestPhone, TEST_PHONE_PREFIX } from '../common/test-phone';
 import { planFollowUp } from './follow-up';
@@ -10,6 +11,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/authenticated-user.in
 import { saveChatMedia } from '../bot-admin/chat-media.store';
 import { BotChannelUser } from '../bot-admin/entities/bot-channel-user.entity';
 import { BotConversation } from '../bot-admin/entities/bot-conversation.entity';
+import { FlowHook } from '../common/flow-hook';
 import { SalesBotHook } from '../common/sales-bot-hook';
 import { Company } from '../company/entities/company.entity';
 import type {
@@ -66,9 +68,17 @@ export class SalesBotAdminService {
     const companyId = Number(user.company_id);
     if (!Number.isFinite(companyId) || companyId <= 0) throw new ForbiddenException('Company not found.');
     const company = await this.companyRepository.findOne({ where: { id: companyId } });
-    if (!company || Number(company.admin_user_id) !== Number(user.id)) {
+    if (!company || (Number(company.admin_user_id) !== Number(user.id) && user.role !== 'supervisor')) {
       throw new ForbiddenException('Only the company admin can manage the sales bot.');
     }
+    return company;
+  }
+
+  /** Owner or supervisor (team lead) – bookings, follow-ups and reports. */
+  private async managerCompany(user: AuthenticatedUser): Promise<Company> {
+    if (user.role !== 'supervisor') return this.adminCompany(user);
+    const company = await this.companyRepository.findOne({ where: { id: Number(user.company_id) } });
+    if (!company) throw new ForbiddenException('Company not found.');
     return company;
   }
 
@@ -206,7 +216,7 @@ export class SalesBotAdminService {
   }
 
   async updateBookingNotes(user: AuthenticatedUser, id: number, dto: UpdateBookingNotesDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     row.notes = dto.notes.trim();
@@ -214,14 +224,14 @@ export class SalesBotAdminService {
   }
 
   async sendBookingInvoice(user: AuthenticatedUser, id: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     return this.botAdminService.sendBookingInvoiceForCompany(Number(company.id), id);
   }
 
   async listBookings(user: AuthenticatedUser, query: BookingsQueryDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const rows = await this.bookingRepository.find({
       where: { company_id: Number(company.id), ...(query.status ? { status: query.status } : {}) },
       order: { created_at: 'DESC' },
@@ -231,7 +241,7 @@ export class SalesBotAdminService {
   }
 
   async updateBookingStatus(user: AuthenticatedUser, id: number, dto: UpdateBookingStatusDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const row = await this.bookingRepository.findOne({ where: { id, company_id: Number(company.id) } });
     if (!row) throw new NotFoundException('Booking not found.');
     const companyId = Number(company.id);
@@ -320,7 +330,7 @@ export class SalesBotAdminService {
 
   /** stop = no more follow-ups for this chat · resume = plan the next one again */
   async setFollowUp(user: AuthenticatedUser, conversationId: number, action: 'stop' | 'resume') {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const conversation = await this.companyConversation(Number(company.id), conversationId);
     if (action === 'stop') {
       await this.conversationRepository.update(conversation.id, { followup_status: 'off', followup_due_at: null });
@@ -351,7 +361,7 @@ export class SalesBotAdminService {
 
   /** Last 30 days: chats that got a follow-up, and how many of those customers ordered within 7 days after it. */
   async followUpStats(user: AuthenticatedUser) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const companyId = Number(company.id);
     const [row] = (await this.conversationRepository.query(
       `WITH fu AS (
@@ -424,11 +434,19 @@ export class SalesBotAdminService {
 
     const mediaUrl = file && kind ? saveChatMedia(Number(company.id), file.buffer, file.mimetype, file.originalname) : null;
     const content = text || (kind === 'image' ? '[image]' : kind === 'voice' ? '[voice note]' : '');
+    const providerMessageId = `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const routing = await this.agentRoutingService.handleWhatsAppInboundForRouting(Number(company.id), phone, dto.name?.trim() || undefined, {
       content, message_type: kind ?? 'text', media_url: mediaUrl, source: 'customer',
-      provider_message_id: `sim-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      provider_message_id: providerMessageId,
     });
-    if (routing.conversationId) {
+    if (routing.conversationId && dto.reply_to_message_id) {
+      await linkQuotedReplyById(this.conversationRepository.manager, routing.conversationId, providerMessageId, dto.reply_to_message_id);
+    }
+    // flows answer the simulator exactly like a real WhatsApp chat (so they can be tried before going live)
+    const flowHandled = routing.conversationId
+      ? await FlowHook.inbound({ companyId: Number(company.id), conversationId: routing.conversationId, platform: 'whatsapp', text: content, adId: dto.ad_id?.trim() || null })
+      : false;
+    if (routing.conversationId && !flowHandled) {
       await SalesBotHook.notify({ companyId: Number(company.id), conversationId: routing.conversationId, phone, provider: 'simulator' });
     }
     const botNote = routing.conversationId ? await this.simulatorBotNote(company, routing.conversationId).catch(() => null) : null;
@@ -470,7 +488,7 @@ export class SalesBotAdminService {
   /* ───────────────────────── Reply review ───────────────────────── */
 
   async replies(user: AuthenticatedUser, query: RepliesQueryDto) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const limit = Math.min(Math.max(Number(query.limit) || 60, 1), 200);
     const rows: Array<Record<string, unknown>> = await this.dataSource.query(
       `SELECT b.id, b.conversation_id, b.content AS bot_reply, b.created_at, b.intent,
@@ -513,7 +531,7 @@ export class SalesBotAdminService {
   /* ───────────────────────── Reports ───────────────────────── */
 
   async report(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     const companyId = Number(company.id);
     const maxDays = (await this.planService.limitsForCompany(companyId)).numbers.reports_days;
     const days = Math.min(Math.max(Number(daysRaw) || 30, 1), 365, maxDays ?? 365);
@@ -557,7 +575,8 @@ export class SalesBotAdminService {
       handoffs: num(summary?.handoffs), ai_replies: num(summary?.ai_replies), ai_tokens: num(summary?.ai_tokens),
       ai_credits: Math.round((num(summary?.ai_tokens) / (await this.planService.tokensPerCredit())) * 10) / 10,
       avg_latency_ms: Math.round(num(summary?.avg_latency_ms)), avg_calls: num(summary?.avg_calls),
-      conversion: conversations ? (orders + bookings) / conversations : 0,
+      // returning customers order in older chats too: never show more than 100 %
+      conversion: conversations ? Math.min(1, (orders + bookings) / conversations) : 0,
       daily: daily.map((row) => ({ day: row.day, conversations: num(row.conversations), orders: num(row.orders) })),
       details: await botReportDetails(this.dataSource, companyId, days),
     };
@@ -565,13 +584,13 @@ export class SalesBotAdminService {
 
   /** Agent performance (company admin): chats, speed, replies and the orders / bookings that count for each agent. */
   async teamPerformance(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     return teamReport(this.dataSource, Number(company.id), Number(daysRaw) || 30);
   }
 
   /** Home dashboard: engagement, replies, delivery, channels, orders, bookings, leads, what needs attention. */
   async dashboard(user: AuthenticatedUser, daysRaw?: number) {
-    const company = await this.adminCompany(user);
+    const company = await this.managerCompany(user);
     return dashboardReport(this.dataSource, Number(company.id), Number(daysRaw) || 7);
   }
 }

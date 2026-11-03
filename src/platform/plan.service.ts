@@ -3,9 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PlatformPackage } from './entities/platform-package.entity';
 import { LIMIT_CATALOG, limitLabel, resolveLimits, type ResolvedLimits } from './package-limits';
+import { tiktokConfigured } from '../integrations/tiktok/tiktok-api';
 
 /** Tokens per bot reply (shop data mostly cached + chat + answer). */
-export const DEFAULT_TOKENS_PER_REPLY = 9_000; // measured 8 Oct 2026 (scale test): 8,100–12,000 tokens per AI reply incl. the cached prompt
+export const DEFAULT_TOKENS_PER_REPLY = 12_500; // measured 24 Oct 2026 on 3,180 replies: ≈ 12,500 tokens per AI reply incl. the cached prompt
+/** 1 credit ≈ ONE average customer chat (≈ 8 bot replies). Super admin can change it (platform_setting "credits"). */
+export const DEFAULT_TOKENS_PER_CREDIT = 100_000;
 
 /**
  * Package rules in one place (replaces the old hard-coded "Free only / max 3 agents").
@@ -28,6 +31,7 @@ export class PlanService {
     this.cache = null;
     this.creditCache = null;
     this.companyPlans.clear();
+    this.creditHolders.clear();
   }
 
   private creditCache: { at: number; value: number; perReply: number } | null = null;
@@ -37,13 +41,13 @@ export class PlanService {
     const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number } }> = await this.packageRepository.manager
       .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
     const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
-    // default: 1 credit = 1 average AI reply (easy to explain to shops)
-    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || perReply);
+    // default: 1 credit = 1 average customer chat (easy to explain to shops)
+    const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || DEFAULT_TOKENS_PER_CREDIT);
     this.creditCache = { at: Date.now(), value, perReply };
     return this.creditCache;
   }
 
-  /** 1 credit = this many AI tokens (super admin setting, default = one average AI reply). Companies only see credits. */
+  /** 1 credit = this many AI tokens (super admin setting, default = one average customer chat). Companies only see credits. */
   async tokensPerCredit(): Promise<number> {
     return (await this.creditSetting()).value;
   }
@@ -96,16 +100,56 @@ export class PlanService {
   /** Called when a company's package changes (so the new limits apply at once). */
   forgetCompany(companyId: number) {
     this.companyPlans.delete(companyId);
+    this.creditHolders.delete(companyId);
+    this.hiddenAccess.delete(companyId);
   }
 
-  async limitsForCompany(companyId: number): Promise<ResolvedLimits & { package: PlatformPackage | null }> {
+  /** Hidden features: off for every business unless the Agent Metra team switched them on for it (not part of packages). */
+  static readonly HIDDEN_FEATURES: Record<string, string> = { sms: 'SMS', customer_app: 'Customer app' };
+  private hiddenAccess = new Map<number, { at: number; keys: string[] }>();
+
+  async hiddenFeaturesOn(companyId: number): Promise<string[]> {
+    const hit = this.hiddenAccess.get(companyId);
+    if (hit && Date.now() - hit.at < 30_000) return hit.keys;
+    const rows: Array<{ feature: string }> = await this.packageRepository.manager.query(
+      `SELECT feature FROM company_feature_access WHERE company_id = $1`, [companyId]).catch(() => []);
+    const keys = rows.map((r) => r.feature).filter((k) => k in PlanService.HIDDEN_FEATURES);
+    this.hiddenAccess.set(companyId, { at: Date.now(), keys });
+    return keys;
+  }
+
+  private creditHolders = new Map<number, { at: number; active: boolean }>();
+
+  /** The company has bought / been given credits that are still valid. */
+  async hasActiveCredits(companyId: number): Promise<boolean> {
+    const hit = this.creditHolders.get(companyId);
+    if (hit && Date.now() - hit.at < 30_000) return hit.active;
+    const rows: Array<{ active: boolean }> = await this.packageRepository.manager.query(
+      `SELECT EXISTS (SELECT 1 FROM token_adjustment WHERE company_id = $1 AND tokens > 0 AND expires_at > NOW()) AS active`, [companyId]).catch(() => []);
+    const active = Boolean(rows[0]?.active);
+    this.creditHolders.set(companyId, { at: Date.now(), active });
+    return active;
+  }
+
+  /** Features the company gets only because it has valid bought credits (Free + top-up). */
+  static readonly CREDIT_FEATURES = ['messenger', 'instagram', 'social', 'tiktok', 'telegram'];
+
+  async limitsForCompany(companyId: number): Promise<ResolvedLimits & { package: PlatformPackage | null; unlocked_by_credits: string[] }> {
     const pkg = await this.byCode(await this.companyPlan(companyId));
-    return { ...resolveLimits(pkg), package: pkg };
+    const limits = resolveLimits(pkg);
+    const unlocked: string[] = [];
+    const locked = PlanService.CREDIT_FEATURES.filter((key) => !limits.features[key]);
+    if (pkg && limits.features.credits_unlock && locked.length && (await this.hasActiveCredits(companyId))) {
+      for (const key of locked) { limits.features[key] = true; if (key !== 'tiktok' || tiktokConfigured()) unlocked.push(key); } // TikTok listed only when set up
+    }
+    const hiddenOn = await this.hiddenFeaturesOn(companyId);
+    for (const key of Object.keys(PlanService.HIDDEN_FEATURES)) limits.features[key] = hiddenOn.includes(key);
+    return { ...limits, package: pkg, unlocked_by_credits: unlocked };
   }
 
   /** Cheapest active public package that has this feature (for "available from the X package"). */
   async upgradeFor(key: string, currentPrice = 0): Promise<string | null> {
-    const packages = (await this.packages()).filter((p) => p.is_active && p.is_public && Number(p.price_monthly) >= currentPrice);
+    const packages = (await this.packages()).filter((p) => p.is_active && p.is_public && !p.company_id && Number(p.price_monthly) >= currentPrice);
     const found = packages
       .sort((a, b) => Number(a.price_monthly) - Number(b.price_monthly))
       .find((p) => resolveLimits(p).features[key]);
@@ -123,12 +167,19 @@ export class PlanService {
     const ok = mode === 'any' ? list.some((k) => limits.features[k]) : list.every((k) => limits.features[k]);
     if (ok) return;
     const missing = list.find((k) => !limits.features[k]) ?? list[0];
+    if (missing in PlanService.HIDDEN_FEATURES) {
+      throw new ForbiddenException({
+        statusCode: 403, error: 'Forbidden', code: 'FEATURE_LOCKED', feature: missing, upgrade_to: null,
+        message: `${PlanService.HIDDEN_FEATURES[missing]} is not switched on for your business yet. Contact Agent Metra to use it.`,
+      });
+    }
     const upgrade = await this.upgradeFor(missing, Number(limits.package?.price_monthly ?? 0));
     const names = list.map(limitLabel).join(mode === 'any' ? ' or ' : ' and ');
     throw new ForbiddenException({
       statusCode: 403, error: 'Forbidden', code: 'FEATURE_LOCKED', feature: missing, upgrade_to: upgrade,
       message: `${names} ${list.length > 1 ? 'are' : 'is'} not included in your ${limits.package?.name ?? 'current'} package.` +
-        (upgrade ? ` It is available from the ${upgrade} package – upgrade in Billing.` : ' Contact Agent Metra to upgrade.'),
+        (upgrade ? ` It is available from the ${upgrade} package – upgrade in Billing.` : ' Contact Agent Metra to upgrade.') +
+        (PlanService.CREDIT_FEATURES.includes(missing) && limits.features.credits_unlock ? ' Or buy AI credits in Billing – they switch it on.' : ''),
     });
   }
 
@@ -139,6 +190,6 @@ export class PlanService {
     for (const item of LIMIT_CATALOG) {
       if (item.kind === 'feature' && !limits.features[item.key]) upgrade_for[item.key] = await this.upgradeFor(item.key, Number(limits.package?.price_monthly ?? 0));
     }
-    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, max_services: limits.max_services, upgrade_for };
+    return { features: limits.features, numbers: limits.numbers, max_agents: limits.max_agents, max_products: limits.max_products, max_services: limits.max_services, upgrade_for, unlocked_by_credits: limits.unlocked_by_credits };
   }
 }
