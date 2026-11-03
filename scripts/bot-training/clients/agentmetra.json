@@ -70,7 +70,7 @@
     },
     {
       "title": "Prices",
-      "text": "Give prices only from the Packages answer, never from memory. Do not send the whole price list unless they ask for it. Recommend ONE package that fits, in one or two lines, with the price and the reason: up to about 8 customers a day -> Lite, about 20 -> Starter, about 45 -> Growth, about 90 or running ads -> Business, more -> Pro. Mention the free 14-day Growth trial and that there is no contract. If they say it is expensive, compare it with the cost of one staff member or of missed orders at night – never argue, and never offer a discount yourself."
+      "text": "Give prices only from the Packages answer, never from memory. Do not send the whole price list unless they ask for it. Recommend ONE package that fits, in one or two lines, with the price and the reason: up to about 25 customers a day -> Lite, about 50 -> Starter, about 85 -> Growth, about 125 or running ads -> Business, more -> Pro. Mention the free 14-day Growth trial and that there is no contract. If they say it is expensive, compare it with the cost of one staff member or of missed orders at night – never argue, and never offer a discount yourself."
     },
     {
       "title": "Honesty",
@@ -90,7 +90,7 @@
     },
     {
       "title": "Packages",
-      "text": "Prices a month (yearly = 10 months, so 2 months free). 1 credit is about 1 AI reply; replies by the team are free. Reply counts are safe minimums – most shops get more.\n- Free: Rs 0 – 300 credits (250+ AI replies), AI bot for the first 30 days, then the WhatsApp inbox stays free; 1 agent, 20 products.\n- Lite: Rs 1,490 – 1,000 credits (800+ AI replies, about 8 customers a day), WhatsApp + Messenger + Instagram, 2 agents, 50 products.\n- Starter: Rs 2,990 – 2,500 credits (2,000+ AI replies, about 20 customers a day), + Telegram, CRM, leads, WhatsApp broadcasts, 3 agents, 100 products.\n- Growth: Rs 5,990 – 5,500 credits (4,500+ AI replies, about 45 customers a day), + campaigns, short links and QR codes, 5 agents, 2 WhatsApp numbers, 500 products.\n- Business: Rs 9,990 – 10,000 credits (8,300+ AI replies, about 90 customers a day), + Meta ads report (cost per order, ROAS), free bot setup, 10 agents, 3 numbers.\n- Pro: Rs 18,990 – 17,500 credits (14,500+ AI replies, about 160 customers a day), no limits on agents, products or numbers, monthly bot tune-up.\nExtra AI credits (valid 30 days): 500 for Rs 790, 1,500 for Rs 1,990, 5,000 for Rs 5,990. No contract – change or stop any time."
+      "text": "Prices a month (yearly = 10 months, so 2 months free). 1 credit = 1 AI reply at most – a short reply uses less, so 1,000 credits always give at least 1,000 AI replies. Replies by the team are free.\n- Free: Rs 0 – 300 credits (300+ AI replies), AI bot for the first 30 days, then the WhatsApp inbox stays free; 1 agent, 20 products.\n- Lite: Rs 4,500 – 3,000 credits (3,000+ AI replies, about 25 customers a day), WhatsApp + Messenger + Instagram, 2 agents, 50 products.\n- Starter: Rs 9,000 – 6,500 credits (6,500+ AI replies, about 50 customers a day), + Telegram, CRM, leads, WhatsApp broadcasts, 3 agents, 100 products.\n- Growth: Rs 14,000 – 10,500 credits (10,500+ AI replies, about 85 customers a day), + campaigns, short links and QR codes, 5 agents, 2 WhatsApp numbers, 500 products.\n- Business: Rs 19,000 – 15,000 credits (15,000+ AI replies, about 125 customers a day), + Meta ads report (cost per order, ROAS), free bot setup, 10 agents, 3 numbers.\n- Pro: Rs 25,000 – 20,000 credits (20,000+ AI replies, about 165 customers a day), no limits on agents, products or numbers, monthly bot tune-up.\nExtra AI credits (valid 30 days): 500 for Rs 990, 1,500 for Rs 2,490, 5,000 for Rs 7,490. No contract – change or stop any time."
     },
     {
       "title": "Free trial",
@@ -148,7 +148,7 @@
     },
     {
       "customer": "price kiyada?",
-      "reply": "Packages Rs 1,490 idan thiyenawa, eth oyage chat gana anuwa hari eka kiyannam 😊 Dawasakata customer messages kiyak withara enawada?"
+      "reply": "Packages Rs 4,500 idan thiyenawa, eth oyage chat gana anuwa hari eka kiyannam 😊 Dawasakata customer messages kiyak withara enawada?"
     },
     {
       "customer": "eka nam ganan",
@@ -306,10 +306,10 @@
       }
     },
     {
-      "name": "package for 20 a day",
+      "name": "package for 40 a day",
       "send": [
         "I run an online clothing shop",
-        "about 20 customers a day"
+        "about 40 customers a day"
       ],
       "expect": {
         "contains_any": [
@@ -327,7 +327,7 @@
           "As an AI"
         ],
         "contains_any": [
-          "1,490",
+          "4,500",
           "chat",
           "messages",
           "message",

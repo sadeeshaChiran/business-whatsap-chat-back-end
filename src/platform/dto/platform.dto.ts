@@ -134,6 +134,10 @@ export class CreditSettingsDto {
   /** average tokens per bot reply - only used for the "≈ N AI replies" text on packages */
   @IsOptional() @Type(() => Number) @IsInt() @Min(500) @Max(200_000)
   tokens_per_reply?: number;
+
+  /** true = one AI reply uses at most 1 credit */
+  @IsOptional() @IsBoolean()
+  cap_per_reply?: boolean;
 }
 
 export class GrantTrialDto {

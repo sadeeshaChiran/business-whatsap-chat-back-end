@@ -85,7 +85,7 @@ export class SuperAdminController {
   limitCatalog() { return this.service.limitCatalog(); }
 
   @Put('credit-settings')
-  setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit, dto.tokens_per_reply); }
+  setCreditSettings(@Body() dto: CreditSettingsDto) { return this.service.setCreditSettings(dto.tokens_per_credit, dto.tokens_per_reply, dto.cap_per_reply); }
 }
 
 /** For every signed-in company user: token usage WITHOUT any cost. */

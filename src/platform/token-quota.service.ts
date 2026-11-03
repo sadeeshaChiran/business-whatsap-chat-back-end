@@ -245,8 +245,9 @@ export class TokenQuotaService implements OnModuleInit {
     const freeEnded = pkg?.bot_days != null && sub.bot_free_until != null && new Date(sub.bot_free_until) <= new Date();
     // after the free days only bought credits count – earlier free use this month does not eat them
     const usedSince = freeEnded && new Date(sub.bot_free_until as Date) > new Date(sub.token_period_start) ? sub.bot_free_until : sub.token_period_start;
+    const charged = await this.planService.chargedTokensSql();
     const [usedRow] = await this.dataSource.query(
-      `SELECT COALESCE(SUM(input_tokens + output_tokens), 0)::bigint AS used
+      `SELECT COALESCE(SUM(${charged}), 0)::bigint AS used
          FROM bot_ai_usage WHERE company_id = $1 AND created_at >= $2`,
       [companyId, usedSince],
     ).catch(() => [{ used: 0 }]);
