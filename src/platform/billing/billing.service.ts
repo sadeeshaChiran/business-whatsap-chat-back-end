@@ -19,7 +19,7 @@ import type { BankDetailsDto, CheckoutDto, PaypalRateDto, TokenPackDto } from '.
 import { PaymentsLkError, lkrCents, paymentsLk, paymentsLkConfig, paymentsLkEnabled, verifyPaymentsLkSignature } from './paymentslk';
 import { PaypalError, approveLink, marketUsdRate, paypal, paypalConfig, paypalEnabled, usd, verifyWebhook } from './paypal';
 import { addSmsCredits } from '../../sms/sms-wallet';
-import { buildInvoicePdf } from './invoice-pdf';
+import { renderInvoicePdf } from '../../bot-admin/invoice-pdf';
 import { cancelPayhereSubscription, checkoutHash, payhereAmount, payhereConfig, payhereEnabled, payhereStatus, verifyNotifySignature } from './payhere';
 
 type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; size: number };
@@ -261,7 +261,9 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
   async invoiceFile(companyId: number | null, paymentId: number) {
     const payment = await this.paymentRepository.findOne({ where: companyId ? { id: paymentId, company_id: companyId } : { id: paymentId } });
     if (!payment || payment.status !== 'paid') throw new NotFoundException('Invoice not found.');
-    if (!payment.invoice_media_key || !readChatMedia(payment.invoice_media_key)) await this.createInvoice(payment);
+    const existing = payment.invoice_media_key ? readChatMedia(payment.invoice_media_key) : null;
+    // made again when missing, or when it is an old plain-text invoice (before the designed layout; same number, same details)
+    if (!existing || existing.buffer.includes('/Helvetica')) await this.createInvoice(payment);
     const file = readChatMedia(payment.invoice_media_key as string);
     if (!file) throw new NotFoundException('Invoice file missing.');
     return { buffer: file.buffer, fileName: `${payment.invoice_no ?? `invoice-${payment.id}`}.pdf` };
@@ -403,26 +405,31 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
     const paypalLine = payment.method === 'paypal' && payment.amount_usd != null
       ? [{ text: `Paid: US$ ${usd(num(payment.amount_usd))} (1 USD = Rs ${num(payment.usd_rate).toFixed(2)})${payment.paypal_payment_id ? ` · PayPal ${payment.paypal_payment_id}` : ''}` }] : [];
     const brand = BrandingService.current();
-    const seller = [brand.company_name, brand.address, [brand.support_email, brand.support_phone].filter(Boolean).join(' · '), brand.website].filter(Boolean);
-    const pdf = buildInvoicePdf([
-      { text: brand.name, size: 22, bold: true, gap: 10 },
-      ...(brand.by_line ? [{ text: brand.by_line, size: 11 }] : []),
-      ...seller.map((text) => ({ text, size: 9 })),
-      { text: 'INVOICE', size: 16, bold: true, gap: 40 },
-      { text: `Invoice no: ${payment.invoice_no}` },
-      { text: `Date: ${new Date(payment.paid_at ?? Date.now()).toISOString().slice(0, 10)}` },
-      { text: `Order: ${payment.order_id}` },
-      { text: 'Billed to', bold: true, gap: 30 },
-      { text: String(company?.name ?? `Company #${payment.company_id}`) },
-      { text: String(company?.email ?? '') },
-      { text: 'Description', bold: true, gap: 30 },
-      { text: payment.description },
-      { text: `Amount: ${rs(num(payment.amount))} (${payment.currency})`, bold: true, gap: 24 },
-      ...paypalLine,
-      { text: `Payment method: ${method}` },
-      { text: 'Status: PAID', bold: true },
-      { text: `Thank you for choosing ${brand.name}.`, gap: 40 },
-    ]);
+    const seller = [brand.by_line, brand.company_name, brand.address, brand.support_phone ? `Phone: ${brand.support_phone}` : '', brand.support_email, brand.website]
+      .filter((line): line is string => Boolean(line && String(line).trim()));
+    const paidOn = new Date(payment.paid_at ?? Date.now()).toISOString().slice(0, 10);
+    // "500 AI credits – 500 AI credits" → one line; the rest goes under it
+    const parts = Array.from(new Set(String(payment.description).split(/\s+[–-]\s+/).map((part) => part.trim()).filter(Boolean)));
+    const amount = rs(num(payment.amount));
+    const paymentLines = [method, `Order ${payment.order_id}`, `Paid on ${paidOn}`];
+    if (payment.method === 'paypal' && payment.amount_usd != null) paymentLines.push(`US$ ${usd(num(payment.amount_usd))} (1 USD = Rs ${num(payment.usd_rate).toFixed(2)})`);
+    if (payment.paypal_payment_id) paymentLines.push(`PayPal ID ${payment.paypal_payment_id}`);
+    if (payment.plk_payment_id) paymentLines.push(`Payments.lk ID ${payment.plk_payment_id}`);
+    const pdf = await renderInvoicePdf({
+      title: 'INVOICE',
+      number: String(payment.invoice_no),
+      date: paidOn,
+      status: 'PAID',
+      shop: { name: brand.name, lines: seller },
+      billTo: { label: 'Billed to', lines: [String(company?.name ?? `Company #${payment.company_id}`), String(company?.email ?? '')].filter(Boolean) },
+      side: { label: 'Payment', lines: paymentLines },
+      columns: ['Item', 'Qty', 'Price', 'Amount'],
+      rows: [{ name: parts[0] ?? payment.description, detail: parts.slice(1).join(' · ') || undefined, qty: '1', unit: amount, amount }],
+      totals: [{ label: 'Subtotal', value: amount }],
+      total: { label: `Total (${payment.currency})`, value: amount },
+      note: 'Paid in full. One AI reply uses at most 1 credit; replies by your team are free.',
+      footer: `Thank you for choosing ${brand.name}.`,
+    });
     payment.invoice_media_key = saveChatMedia(Number(payment.company_id), pdf, 'application/pdf', `${payment.invoice_no}.pdf`);
     await this.paymentRepository.save(payment);
   }
@@ -666,7 +673,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           purchase_units: [{ reference_id: payment.order_id, custom_id: String(payment.id), invoice_id: payment.order_id, description: payment.description.slice(0, 127),
             amount: { currency_code: 'USD', value: usd(usdAmount) } }],
           // landing_page GUEST: opens the "Pay with debit or credit card" form first, no PayPal account needed
-          payment_source: { paypal: { experience_context: { brand_name: brand, user_action: 'PAY_NOW', landing_page: 'GUEST', shipping_preference: 'NO_SHIPPING', return_url: returnUrl, cancel_url: cancelUrl } } },
+          payment_source: { paypal: { experience_context: { brand_name: brand, user_action: 'PAY_NOW', landing_page: 'GUEST_CHECKOUT', shipping_preference: 'NO_SHIPPING', return_url: returnUrl, cancel_url: cancelUrl } } },
         });
         payment.paypal_order_id = String(order.id);
         link = approveLink(order);
