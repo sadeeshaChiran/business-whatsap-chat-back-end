@@ -665,7 +665,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           intent: 'CAPTURE',
           purchase_units: [{ reference_id: payment.order_id, custom_id: String(payment.id), invoice_id: payment.order_id, description: payment.description.slice(0, 127),
             amount: { currency_code: 'USD', value: usd(usdAmount) } }],
-          payment_source: { paypal: { experience_context: { brand_name: brand, user_action: 'PAY_NOW', shipping_preference: 'NO_SHIPPING', return_url: returnUrl, cancel_url: cancelUrl } } },
+          // landing_page GUEST: opens the "Pay with debit or credit card" form first, no PayPal account needed
+          payment_source: { paypal: { experience_context: { brand_name: brand, user_action: 'PAY_NOW', landing_page: 'GUEST', shipping_preference: 'NO_SHIPPING', return_url: returnUrl, cancel_url: cancelUrl } } },
         });
         payment.paypal_order_id = String(order.id);
         link = approveLink(order);
