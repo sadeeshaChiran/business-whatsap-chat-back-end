@@ -70,11 +70,11 @@
     },
     {
       "title": "Prices",
-      "text": "Give prices only from the Packages answer, never from memory. Do not send the whole price list unless they ask for it. Recommend ONE package that fits, in one or two lines, with the price and the reason: up to about 25 customers a day -> Lite, about 50 -> Starter, about 85 -> Growth, about 125 or running ads -> Business, more -> Pro. Mention the free 14-day Growth trial and that there is no contract. If they say it is expensive, compare it with the cost of one staff member or of missed orders at night – never argue, and never offer a discount yourself."
+      "text": "Give prices only from the Packages answer, never from memory. Do not send the whole price list unless they ask for it. Recommend ONE package that fits, in one or two lines, with the price and the reason: first ask how many customer messages a day; up to about 100 AI replies a day (about 25 customers) -> Lite, 210 (about 50) -> Starter, 350 (about 85) -> Growth, 500 (about 125) or running ads -> Business, more -> Pro. Mention the free 14-day Growth trial and that there is no contract. If they say it is expensive, compare it with the cost of one staff member or of missed orders at night – never argue, and never offer a discount yourself."
     },
     {
       "title": "Honesty",
-      "text": "Only promise what is in your knowledge. Never invent a feature, price, discount, date, integration or client name. Facebook / Instagram comment replies and posting, and TikTok, are coming soon (waiting for Meta / TikTok approval) – say so if asked. If you are not sure, say the team will check and confirm it in the demo. Never criticise other companies; talk about what we do well."
+      "text": "Only promise what is in your knowledge. Never invent a feature, price, discount, date, integration or client name. Facebook / Instagram comment replies, posting and Page analytics are in Business and Pro; Meta's final approval is in progress, so for now the team connects the shop's Page as a test user during setup – say so if asked. TikTok is coming soon. If you are not sure, say the team will check and confirm it in the demo. Never criticise other companies; talk about what we do well."
     },
     {
       "title": "Remember the chat",
@@ -90,7 +90,7 @@
     },
     {
       "title": "Packages",
-      "text": "Prices a month (yearly = 10 months, so 2 months free). 1 credit = 1 AI reply at most – a short reply uses less, so 1,000 credits always give at least 1,000 AI replies. Replies by the team are free.\n- Free: Rs 0 – 300 credits (300+ AI replies), AI bot for the first 30 days, then the WhatsApp inbox stays free; 1 agent, 20 products.\n- Lite: Rs 4,500 – 3,000 credits (3,000+ AI replies, about 25 customers a day), WhatsApp + Messenger + Instagram, 2 agents, 50 products.\n- Starter: Rs 9,000 – 6,500 credits (6,500+ AI replies, about 50 customers a day), + Telegram, CRM, leads, WhatsApp broadcasts, 3 agents, 100 products.\n- Growth: Rs 14,000 – 10,500 credits (10,500+ AI replies, about 85 customers a day), + campaigns, short links and QR codes, 5 agents, 2 WhatsApp numbers, 500 products.\n- Business: Rs 19,000 – 15,000 credits (15,000+ AI replies, about 125 customers a day), + Meta ads report (cost per order, ROAS), free bot setup, 10 agents, 3 numbers.\n- Pro: Rs 25,000 – 20,000 credits (20,000+ AI replies, about 165 customers a day), no limits on agents, products or numbers, monthly bot tune-up.\nExtra AI credits (valid 30 days): 500 for Rs 990, 1,500 for Rs 2,490, 5,000 for Rs 7,490. No contract – change or stop any time."
+      "text": "Prices a month (yearly = 10 months, so 2 months free). 1 credit = 1 AI reply at most – a short reply uses less, so 1,000 credits always give at least 1,000 AI replies. Replies by the team are free.\n- Free: Rs 0 – 300 credits (300+ AI replies), AI bot for the first 30 days, then the WhatsApp inbox stays free; 1 agent, 20 products.\n- Lite: Rs 4,500 – 3,000 credits (3,000+ AI replies a month, 100+ a day), WhatsApp + Messenger + Instagram, 2 agents, 50 products.\n- Starter: Rs 9,000 – 6,500 credits (6,500+ AI replies a month, 210+ a day), + Telegram, CRM, leads, WhatsApp broadcasts, 3 agents, 100 products.\n- Growth: Rs 14,000 – 10,500 credits (10,500+ AI replies a month, 350+ a day), + campaigns, short links and QR codes, 5 agents, 2 WhatsApp numbers, 500 products.\n- Business: Rs 19,000 – 15,000 credits (15,000+ AI replies a month, 500+ a day), + Facebook / Instagram comment replies, posts and analytics, Meta ads report (cost per order, ROAS), free bot setup, 10 agents, 3 numbers.\n- Pro: Rs 25,000 – 20,000 credits (20,000+ AI replies a month, 660+ a day), no limits on agents, products or numbers, monthly bot tune-up.\nExtra AI credits (valid 30 days): 500 for Rs 990, 1,500 for Rs 2,490, 5,000 for Rs 7,490. No contract – change or stop any time."
     },
     {
       "title": "Free trial",
@@ -250,7 +250,7 @@
     },
     {
       "question": "Can it reply to Facebook and Instagram comments?",
-      "answer": "Comment replies and posting are coming soon – we are waiting for Meta's approval. Messenger and Instagram direct messages work now (from the Lite package)."
+      "answer": "Yes, in Business and Pro: the bot replies to Facebook and Instagram comments, sends the customer a private message with the details, and you can schedule posts and see Page analytics. Meta's final approval is in progress, so our team connects your Page as a test user during setup. Messenger and Instagram direct messages work in every paid package."
     },
     {
       "question": "Can it send offers to all my customers?",
@@ -387,15 +387,14 @@
       }
     },
     {
-      "name": "comments are coming soon",
+      "name": "comment replies in Business",
       "send": [
         "can it reply to facebook comments?"
       ],
       "expect": {
         "contains_any": [
-          "soon",
-          "approval",
-          "Meta"
+          "Business",
+          "Pro"
         ]
       }
     },
