@@ -1,0 +1,82 @@
+{
+  "key": "nimalfashion",
+  "admin_email": "demo@agentmetra.lk",
+  "note": "Demo shop from scripts/make-showcase-demo.py (showcase-demo SQL). Test only – the shop data comes from that SQL, not from make-training.mjs.",
+  "auto_test": {
+    "meaning": { "text": "office yanna gahanu kenekta lassana dress ekak ona", "category": "Women's dresses" },
+    "budget": { "text": "baby ta party frock ekak ona 3000ta adui", "max": 3000 },
+    "missing": "iPhone 16 Pro Max thiyenawada?"
+  },
+  "tests": [
+    {
+      "name": "Singlish – floral dress price",
+      "send": ["Floral maxi dress eka M size thiyenawada? kiyada"],
+      "expect": { "letters": "english", "price": 4950, "contains_any": ["M", "4,950", "4950"] }
+    },
+    {
+      "name": "Sinhala letters – answers in Sinhala",
+      "send": ["බතික් සාරිය කීයද?"],
+      "expect": { "letters": "sinhala", "price": 12500 }
+    },
+    {
+      "name": "Tamil – kids frock",
+      "send": ["kids party frock 4-5 வயது இருக்கா? விலை என்ன?"],
+      "expect": { "letters": "tamil", "price": 2850 }
+    },
+    {
+      "name": "English – handbag colours",
+      "send": ["Do you have the leather handbag? Which colours?"],
+      "expect": { "letters": "english", "contains_all": ["Tan", "Black"], "price": 6950 }
+    },
+    {
+      "name": "sold-out option is not offered",
+      "send": ["Office wrap dress eka navy colour thiyenawada?"],
+      "expect": { "contains_any": ["Black", "Maroon", "nathi", "sold", "out of stock", "na"] }
+    },
+    {
+      "name": "delivery fee by area and weight",
+      "send": ["Oxford shirt L size 2k Kandy walata yawanna kiyada delivery ekka?"],
+      "expect": { "contains_any": ["450", "6,950", "6950"] }
+    },
+    {
+      "name": "free delivery over Rs 10,000",
+      "send": ["Bathik saree ekak Galle walata delivery kiyada?"],
+      "expect": { "contains_any": ["free", "Free", "0", "nomile"] }
+    },
+    {
+      "name": "full order with summary",
+      "send": ["Floral maxi dress M ekak ganna one", "Kumari Perera, No 12 Nawala Road Rajagiriya, 0771234567, cash on delivery", "ok confirm"],
+      "expect": { "order": true, "contains_any": ["5,300", "5300"] }
+    },
+    {
+      "name": "salon price",
+      "send": ["Hair cut ekak kiyada?"],
+      "expect": { "price": 2500 }
+    },
+    {
+      "name": "salon booking asks for a time",
+      "send": ["Heta facial ekak book karanna one"],
+      "expect": { "contains_any": ["11", "time", "welawa", "welawak", "kiyata", ":00"] }
+    },
+    {
+      "name": "bridal package (FAQ)",
+      "send": ["Bridal dressing package eka gana kiyanna"],
+      "expect": { "contains_any": ["45,000", "45000", "trial"] }
+    },
+    {
+      "name": "exchange policy (FAQ)",
+      "send": ["size eka hari nathnam maru karanna puluwanda?"],
+      "expect": { "contains_any": ["7", "exchange", "maru"] }
+    },
+    {
+      "name": "wholesale goes to the team",
+      "send": ["I want 20 pieces of the floral maxi dress wholesale for my boutique"],
+      "expect": { "contains_any": ["15%", "team", "quote"] }
+    },
+    {
+      "name": "only the asked product goes in the order",
+      "send": ["Matte lipstick berry shade ekak ona"],
+      "expect": { "order": false, "not_contains": ["Handbag", "Saree"] }
+    }
+  ]
+}

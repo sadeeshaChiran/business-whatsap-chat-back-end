@@ -1,4 +1,4 @@
-import { looksLikeServiceMessage } from './system-message';
+import { isOfficialSender, looksLikeServiceMessage } from './system-message';
 
 describe('looksLikeServiceMessage', () => {
   it.each([
@@ -19,4 +19,11 @@ describe('looksLikeServiceMessage', () => {
     'Call me on 0771234567',
     '',
   ])('customer: %s', (text) => expect(looksLikeServiceMessage(text)).toBe(false));
+
+  it('treats WhatsApp / Meta accounts as service senders, whatever they write', () => {
+    expect(looksLikeServiceMessage('Continue setting up your account. Go to your Setup guidance on desktop.', { phone: '16465894168', name: 'WhatsApp Business' })).toBe(true);
+    expect(looksLikeServiceMessage('Welcome!', { phone: '94771234567', name: 'WhatsApp' })).toBe(true);
+    expect(looksLikeServiceMessage('I want to set up my WhatsApp Business account', { phone: '94771234567', name: 'Kasun' })).toBe(false);
+    expect(isOfficialSender('+1 646 589 4168', '')).toBe(true);
+  });
 });

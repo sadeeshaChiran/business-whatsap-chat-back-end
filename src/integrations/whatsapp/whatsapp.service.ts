@@ -1,4 +1,4 @@
-import { looksLikeServiceMessage } from '../../agent-routing/system-message';
+import { isOfficialSender, looksLikeServiceMessage } from '../../agent-routing/system-message';
 import { MarketingHook } from '../../common/marketing-hook';
 import { isTestPhone, testSendResult } from '../../common/test-phone';
 import { FlowHook } from '../../common/flow-hook';
@@ -243,7 +243,8 @@ export class WhatsappService {
             provider_message_id: normalized.message_id?.trim() || undefined,
           }
         : undefined,
-      { serviceMessage: looksLikeServiceMessage(row?.content) },
+      { serviceMessage: looksLikeServiceMessage(row?.content, { phone: normalized.phone, name: normalized.display_name }),
+        officialSender: isOfficialSender(normalized.phone, normalized.display_name) },
     );
 
     // OTP / service messages from other companies: kept for admins only – no flows, ads, AI or agent
