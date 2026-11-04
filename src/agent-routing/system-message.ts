@@ -15,8 +15,23 @@ const WORDS = [
   /(කේතය|රහස්\s*අංකය|කිසිවෙකුට\s*(ලබා\s*)?නොදෙන්න|குறியீடு|கடவுச்சொல்|யாருடனும்\s*பகிர)/,
 ];
 
-/** true for an OTP / verification-code style message (a code plus the words around one). */
-export function looksLikeServiceMessage(text: string | null | undefined): boolean {
+/** WhatsApp's / Meta's own accounts that write to a business number (setup steps, notices, verification). */
+const OFFICIAL_NUMBERS = new Set(['16465894168', '16505551111', '16315555555']);
+const OFFICIAL_NAMES = /^(whatsapp|whatsapp business|whatsapp support|meta|meta business|meta for business|meta verified|meta business suite|facebook|instagram)$/i;
+
+/** true when the sender is WhatsApp / Meta itself (by its number or its exact profile name). */
+export function isOfficialSender(phone?: string | null, name?: string | null): boolean {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  if (digits && OFFICIAL_NUMBERS.has(digits)) return true;
+  return OFFICIAL_NAMES.test(String(name ?? '').trim());
+}
+
+/**
+ * true for an OTP / verification-code style message (a code plus the words around one),
+ * or any message from WhatsApp / Meta's own accounts.
+ */
+export function looksLikeServiceMessage(text: string | null | undefined, sender: { phone?: string | null; name?: string | null } = {}): boolean {
+  if (isOfficialSender(sender.phone, sender.name)) return true;
   const t = String(text ?? '').trim();
   if (!t || t.length > 600) return false;
   return CODE.test(t) && WORDS.some((rule) => rule.test(t));

@@ -974,7 +974,7 @@ export class AgentRoutingService {
     phone: string,
     displayName?: string,
     inbound?: InboundWhatsAppMessage,
-    opts: { serviceMessage?: boolean } = {},
+    opts: { serviceMessage?: boolean; officialSender?: boolean } = {},
   ): Promise<{
     conversationId: number | null;
     assignedAgentId: number | null;
@@ -1039,6 +1039,8 @@ export class AgentRoutingService {
       );
     } else {
       channelUser.last_seen_at = new Date();
+      // WhatsApp / Meta's own account that is already in the inbox from before: move it to System messages
+      if (opts.officialSender && channelUser.system_kind !== 'system' && channelUser.system_kind !== 'normal') channelUser.system_kind = 'system';
       if (displayName?.trim() && (!channelUser.display_name?.trim() || channelUser.display_name === normalizedPhone)) {
         channelUser.display_name = displayName.trim();
       }
