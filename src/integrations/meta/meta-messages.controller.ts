@@ -451,7 +451,7 @@ export class MetaMessagesController {
   /* ───────── message → rows in the formats the inbox understands ───────── */
 
   private async buildRows(companyId: number, message: MessagingEvent['message'], postback: MessagingEvent['postback'],
-    ctx: { token?: string | null; mid?: string | null; pageId?: string | null; igId?: string | null; isEcho?: boolean } = {}): Promise<SavedRow[]> {
+    ctx: { token?: string | null; mid?: string | null; pageId?: string | null; igId?: string | null; isEcho?: boolean; note?: string } = {}): Promise<SavedRow[]> {
     if (postback) {
       return [{ message_type: 'text', content: postback.title?.trim() || postback.payload?.trim() || '[button]', media_url: null }];
     }
@@ -461,8 +461,13 @@ export class MetaMessagesController {
     if (!attachments.length) {
       if (!text) return [];
       // a shared link to one of our posts / reels → what that post says, so the bot knows which item they mean
-      const note = ctx.isEcho ? null : await this.describeSharedLink(text, ctx).catch(() => null);
-      return [{ message_type: 'text', content: text, media_url: null, media_note: note }];
+      const shared = ctx.isEcho ? null : await this.lookupShared({ text }, ctx).catch(() => null);
+      if (shared?.picture) {
+        // our own post / reel → show its picture with the link, like Messenger does
+        const stored = await this.downloadAndStore(companyId, shared.picture);
+        if (stored) return [{ message_type: 'image', content: text, media_url: stored.key, media_note: shared.note }];
+      }
+      return [{ message_type: 'text', content: text, media_url: null, media_note: shared?.note ?? null }];
     }
 
     const rows: SavedRow[] = [];
@@ -508,6 +513,22 @@ export class MetaMessagesController {
         continue;
       }
 
+      // a shared post / reel: Meta sends a page link (facebook.com/reel/…) or the reel's id, not a photo
+      const pageLink = /^https?:\/\/(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch|instagram\.com)\//i.test(url) ? url : '';
+      const reelId = String((attachment.payload as { reel_video_id?: string | number } | undefined)?.reel_video_id ?? '');
+      if (!ctx.isEcho && (pageLink || reelId || ['ig_reel', 'reel', 'ig_post', 'share'].includes(type))) {
+        const shared = await this.lookupShared({ text: pageLink, id: reelId }, ctx).catch(() => null);
+        if (shared || pageLink) {
+          const picture = shared?.picture ? await this.downloadAndStore(companyId, shared.picture) : null;
+          const what = /reel|video/i.test(`${type} ${pageLink} ${shared?.note ?? ''}`) ? '🎬 Shared a reel' : '🔗 Shared a post';
+          const content = [caption, what, title, pageLink].filter(Boolean).join('\n');
+          if (picture) { rows.push({ message_type: 'image', content, media_url: picture.key, media_note: shared?.note ?? null }); continue; }
+          if (!url || pageLink) { rows.push({ message_type: 'text', content, media_url: null, media_note: shared?.note ?? null }); continue; }
+          // not ours, but a real media link (reel video file) → stored below like any video; keep the note
+          if (shared?.note) ctx = { ...ctx, note: shared.note };
+        }
+      }
+
       const mediaType = ['image', 'video', 'audio', 'file', 'ig_reel', 'reel', 'story_mention', 'ig_post', 'share', 'animated_image'].includes(type);
       if (!url && (mediaType || type === 'unsupported_type' || !type)) {
         const found = (await mediaFromGraph())[index] ?? (await mediaFromGraph())[0];
@@ -516,7 +537,7 @@ export class MetaMessagesController {
       if (url && (mediaType || type === 'unsupported_type' || type === 'template' || type === 'fallback')) {
         const stored = await this.downloadAndStore(companyId, url);
         const contentType = stored?.contentType ?? '';
-        const looksImage = type === 'image' || type === 'animated_image' || contentType.startsWith('image/') || ((type === 'ig_post' || type === 'share') && !contentType);
+        const looksImage = type === 'image' || type === 'animated_image' || contentType.startsWith('image/');
         if (stored || mediaType) {
           const mediaUrl = stored?.key ?? url; // keep the Meta link if the download failed
           const label = type === 'ig_post' || type === 'share' ? (title ? `[shared post] ${title}` : '[shared post]')
@@ -528,7 +549,7 @@ export class MetaMessagesController {
           } else if (type === 'file' || contentType === 'application/pdf') {
             rows.push({ message_type: 'text', content: stored?.fileName || caption || 'Document', media_url: mediaUrl });
           } else {
-            rows.push({ message_type: 'text', content: [caption, label].filter(Boolean).join('\n') || '[video]', media_url: mediaUrl });
+            rows.push({ message_type: 'text', content: [caption, label].filter(Boolean).join('\n') || '[video]', media_url: mediaUrl, media_note: ctx.note ?? null });
           }
           continue;
         }
@@ -577,42 +598,52 @@ export class MetaMessagesController {
   }
 
   /**
-   * The customer pasted a Facebook / Instagram link (facebook.com/share/r/…, a reel, a post, instagram.com/p/…).
-   * When it is one of this Page's own posts or reels, read its text from Meta. Other people's posts stay a plain link.
+   * A Facebook / Instagram post or reel the customer shared (a pasted link, a shared reel card, a reel id).
+   * When it is one of this Page's own posts or reels, read its text and picture from Meta, so the team sees it and the
+   * bot knows which item they mean. Other people's posts give null (stay a plain link).
    */
-  private async describeSharedLink(text: string, ctx: { token?: string | null; pageId?: string | null; igId?: string | null }): Promise<string | null> {
-    const link = text.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch|instagram\.com)\/[^\s]+/i)?.[0];
-    if (!link || !ctx.token) return null;
+  private async lookupShared(input: { text?: string; id?: string }, ctx: { token?: string | null; pageId?: string | null; igId?: string | null }):
+    Promise<{ note: string; picture: string | null } | null> {
+    if (!ctx.token) return null;
+    const describe = (t?: string | null) => (t ?? '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    const link = input.text?.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch|instagram\.com)\/[^\s]+/i)?.[0] ?? '';
     let final = link;
     if (/\/share\/|fb\.watch/i.test(link)) {
       const res = await fetch(link, { redirect: 'follow', signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AgentMetra/1.0)' } }).catch(() => null);
       if (res?.url) final = res.url;
       try { final = decodeURIComponent(new URL(final).searchParams.get('next') ?? '') || final; } catch { /* keep */ }
     }
-    const describe = (t?: string | null) => (t ?? '').replace(/\s+/g, ' ').trim().slice(0, 400);
     // Instagram: /p/<code> or /reel/<code> → find it among the account's own posts
     const igCode = final.match(/instagram\.com\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i)?.[1];
     if (igCode && ctx.igId) {
-      const media = await this.graphService.healthGet<{ data?: Array<{ shortcode?: string; caption?: string }> }>(
-        `/${ctx.igId}/media`, ctx.token, { fields: 'shortcode,caption', limit: '100' });
+      const media = await this.graphService.healthGet<{ data?: Array<{ shortcode?: string; caption?: string; media_url?: string; thumbnail_url?: string; media_type?: string }> }>(
+        `/${ctx.igId}/media`, ctx.token, { fields: 'shortcode,caption,media_url,thumbnail_url,media_type', limit: '100' });
       const hit = media.data?.data?.find((m) => m.shortcode === igCode);
-      return hit ? `shared our Instagram post: ${describe(hit.caption) || '(no caption)'}` : null;
+      if (!hit) return null;
+      return { note: `shared our Instagram ${hit.media_type === 'VIDEO' ? 'reel' : 'post'}: ${describe(hit.caption) || '(no caption)'}`, picture: hit.thumbnail_url || (hit.media_type === 'VIDEO' ? null : hit.media_url ?? null) };
     }
-    const id = final.match(/(?:reel|videos)\/(?:[^/?]+\/)?(\d{6,})/i)?.[1]
-      ?? final.match(/[?&](?:story_fbid|v|fbid)=(\d{6,})/i)?.[1]
-      ?? final.match(/\/(?:posts|permalink)\/(?:[^/?]+\/)?(pfbid\w+|\d{6,})/i)?.[1];
+    const id = input.id || final.match(/(?:reel|videos)\/(?:[^/?]+\/)?(\d{6,})/i)?.[1]
+      || final.match(/[?&](?:story_fbid|v|fbid)=(\d{6,})/i)?.[1]
+      || final.match(/\/(?:posts|permalink)\/(?:[^/?]+\/)?(pfbid\w+|\d{6,})/i)?.[1];
     if (!id) return null;
+    const isVideo = Boolean(input.id) || /reel|videos|fb\.watch|[?&]v=/i.test(final);
     for (const objectId of [id, ctx.pageId ? `${ctx.pageId}_${id}` : '']) {
       if (!objectId) continue;
-      const res = await this.graphService.healthGet<{ message?: string; description?: string; title?: string; from?: { id?: string } }>(
-        `/${objectId}`, ctx.token, { fields: /\d+_\d+/.test(objectId) ? 'message,from' : 'description,title,from' });
+      const post = /\d+_\d+/.test(objectId);
+      const res = await this.graphService.healthGet<{ message?: string; description?: string; title?: string; picture?: string; full_picture?: string; from?: { id?: string } }>(
+        `/${objectId}`, ctx.token, { fields: post ? 'message,full_picture,from' : 'description,title,picture,from' });
       const body = res.data;
       if (!res.ok || !body) continue;
       if (ctx.pageId && body.from?.id && String(body.from.id) !== String(ctx.pageId)) return null; // someone else's post
       const words = describe([body.title, body.message ?? body.description].filter(Boolean).join(' – '));
-      return `shared our ${/reel|videos|fb\.watch|[?&]v=/i.test(final) ? 'reel / video' : 'post'}: ${words || '(no text)'}`;
+      return { note: `shared our ${isVideo ? 'reel / video' : 'post'}: ${words || '(no text)'}`, picture: body.full_picture || body.picture || null };
     }
     return null;
+  }
+
+  /** Kept for the text path and tests: the note only. */
+  private async describeSharedLink(text: string, ctx: { token?: string | null; pageId?: string | null; igId?: string | null }): Promise<string | null> {
+    return (await this.lookupShared({ text }, ctx))?.note ?? null;
   }
 
   /** Meta CDN links expire – keep our own copy so the chat can always show it. */

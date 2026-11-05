@@ -3710,12 +3710,26 @@ export class BotAdminService {
 
   async getOrders(user: AuthenticatedUser) {
     await this.assertManagerAccess(user);
-    return this.orderRepository.find({
+    const orders = await this.orderRepository.find({
       where: { company_id: user.company_id },
       relations: ['channelUser', 'items', 'statusHistory'],
       order: { id: 'DESC' },
       take: 100,
     });
+    return this.withConversationIds(Number(user.company_id), orders);
+  }
+
+  /** Each order gets the customer's chat (their latest conversation), so the Orders page can open it. */
+  private async withConversationIds<T extends { bot_channel_user_id?: number | null }>(companyId: number, orders: T[]) {
+    const ids = Array.from(new Set(orders.map((o) => Number(o.bot_channel_user_id)).filter((id) => id > 0)));
+    if (!ids.length) return orders.map((o) => ({ ...o, conversation_id: null as number | null }));
+    const rows: Array<{ user_id: string; id: string }> = await this.orderRepository.manager.query(
+      `SELECT DISTINCT ON (c.bot_channel_user_id) c.bot_channel_user_id AS user_id, c.id FROM bot_conversation c
+         JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+        WHERE u.company_id = $1 AND c.bot_channel_user_id = ANY($2::int[]) ORDER BY c.bot_channel_user_id, c.id DESC`,
+      [companyId, ids]).catch(() => []);
+    const chat = new Map(rows.map((r) => [Number(r.user_id), Number(r.id)]));
+    return orders.map((o) => ({ ...o, conversation_id: chat.get(Number(o.bot_channel_user_id)) ?? null }));
   }
 
   /**
@@ -3750,7 +3764,8 @@ export class BotAdminService {
       })
       .orderBy('o.id', 'DESC')
       .take(100)
-      .getMany();
+      .getMany()
+      .then((orders) => this.withConversationIds(companyId, orders));
   }
 
   async createOrder(user: AuthenticatedUser, payload: CreateBotOrderDto) {
