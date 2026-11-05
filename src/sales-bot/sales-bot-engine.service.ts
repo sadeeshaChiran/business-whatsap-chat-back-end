@@ -434,11 +434,12 @@ export class SalesBotEngineService implements OnModuleInit {
     const markAnswered = () => this.messageRepository.query(
       `UPDATE bot_conversation SET bot_answered_inbound_id = GREATEST(COALESCE(bot_answered_inbound_id, 0), $2) WHERE id = $1`, [conversationId, answeredUpTo]).catch(() => undefined);
 
+    const isShared = (row: { media_note?: string | null }) => String(row.media_note ?? '').startsWith('shared our');
     const message = pending
       .map((row) => {
         let text = String(row.content ?? '').split('\n').filter((line) => !PLACEHOLDER.test(line.trim())).join('\n').trim();
         // a pasted link to one of our posts / reels → what that post says
-        if (text && row.media_note && row.message_type !== 'image') text = `${text}\n[the customer ${row.media_note}]`;
+        if (row.media_note && (row.message_type !== 'image' || isShared(row))) text = `${text}\n[the customer ${row.media_note}]`.trim();
         // "Mata me pack eka danna" quoting an earlier message → the AI sees which message "me pack eka" is
         return text ? withQuote(row, text) : '';
       })
@@ -448,7 +449,8 @@ export class SalesBotEngineService implements OnModuleInit {
     // Messenger / Instagram chats are answered through the connected Page, not a WhatsApp channel
     const channel = simulated || social ? null : await this.whatsappService.getChannelForCompany(companyId, channelUser.external_user_id).catch(() => null);
     // the customer's photos of this turn – or the earlier photo they replied to ("mekata kiyada?")
-    const photoRows = pending.filter((row) => row.media_url && row.message_type === 'image').slice(-3);
+    // a shared post / reel of the shop already says what it is (media_note) – do not guess a product from its picture
+    const photoRows = pending.filter((row) => row.media_url && row.message_type === 'image' && !isShared(row)).slice(-3);
     if (!photoRows.length) {
       const quoting = [...pending].reverse().find((row) => row.reply_to_message_id);
       const target = quoting ? await this.messageRepository.findOne({ where: { id: Number(quoting.reply_to_message_id), conversation_id: conversationId } }) : null;

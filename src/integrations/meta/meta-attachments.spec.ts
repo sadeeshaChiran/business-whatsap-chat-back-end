@@ -34,3 +34,19 @@ describe('Meta attachments', () => {
     await expect(c.describeSharedLink('no link here', { token: 't' })).resolves.toBeNull();
   });
 });
+
+describe('shared reel card', () => {
+  it('our own reel shared in Messenger shows its picture and tells the bot what it is', async () => {
+    const graph = { healthGet: jest.fn().mockResolvedValue({ ok: true, data: { description: '4pcs box set Rs 775', picture: 'https://cdn/thumb.jpg', from: { id: '262' } } }) };
+    const rows = await controller(graph).buildRows(5, { attachments: [{ type: 'reel', payload: { url: 'https://www.facebook.com/reel/123456789', reel_video_id: 123456789 } as never }] }, undefined, { token: 't', pageId: '262' });
+    expect(rows[0].message_type).toBe('image');
+    expect(rows[0].content).toContain('Shared a reel');
+    expect(rows[0].media_note).toContain('4pcs box set Rs 775');
+  });
+  it("someone else's post stays a link (no broken photo)", async () => {
+    const graph = { healthGet: jest.fn().mockResolvedValue({ ok: true, data: { message: 'x', from: { id: '999' } } }) };
+    const rows = await controller(graph).buildRows(5, { attachments: [{ type: 'share', payload: { url: 'https://www.facebook.com/somepage/posts/1234567890' } }] }, undefined, { token: 't', pageId: '262' });
+    expect(rows[0].message_type).toBe('text');
+    expect(rows[0].content).toContain('https://www.facebook.com/somepage/posts/1234567890');
+  });
+});
