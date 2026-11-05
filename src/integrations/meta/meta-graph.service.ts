@@ -29,7 +29,8 @@ type GraphErrorBody = {
 export const PAGE_FIELDS = ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_referrals', 'message_deliveries', 'message_reads', 'feed', 'standby'];
 /** App-level webhook fields we need (Meta Developers → Webhooks). */
 export const APP_WEBHOOK_FIELDS: Record<'page' | 'instagram', string[]> = {
-  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed', 'standby'],
+  // "standby" is only a Page-level field now – the Meta app webhook list no longer has it (Conversation routing replaced it)
+  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed'],
   instagram: ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments'],
 };
 
