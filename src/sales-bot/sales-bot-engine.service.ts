@@ -96,6 +96,9 @@ function usageTools(tools: unknown): string {
   return names.join(',').slice(0, 300);
 }
 const PLACEHOLDER = /^\[[^\]]*\]$/;
+/** Chat history sent to the bot with every message: at most this many messages and about this much text. */
+const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 40;
+const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 9000;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
 type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number };
@@ -433,7 +436,9 @@ export class SalesBotEngineService implements OnModuleInit {
 
     const message = pending
       .map((row) => {
-        const text = String(row.content ?? '').split('\n').filter((line) => !PLACEHOLDER.test(line.trim())).join('\n').trim();
+        let text = String(row.content ?? '').split('\n').filter((line) => !PLACEHOLDER.test(line.trim())).join('\n').trim();
+        // a pasted link to one of our posts / reels → what that post says
+        if (text && row.media_note && row.message_type !== 'image') text = `${text}\n[the customer ${row.media_note}]`;
         // "Mata me pack eka danna" quoting an earlier message → the AI sees which message "me pack eka" is
         return text ? withQuote(row, text) : '';
       })
@@ -625,19 +630,30 @@ export class SalesBotEngineService implements OnModuleInit {
       .where('m.conversation_id = :conversationId', { conversationId })
       .andWhere('m.id < :beforeId', { beforeId })
       .orderBy('m.id', 'DESC')
-      // the last 14 messages (history is not cached – every message pays for it); older facts live in CHAT MEMORY,
+      // up to the last 40 messages, cut to a text budget below (bots often answer in several bubbles, so 20 rows was
+      // only a few customer turns and the bot "forgot" what was said a minute ago); older facts live in CHAT MEMORY,
       // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
-      .limit(20)
+      .limit(HISTORY_ROWS)
       .getMany();
-    return rows.reverse().map((row) => {
+    // newest first: keep messages until the text budget is used, then put them back in order
+    let budget = HISTORY_CHARS;
+    const kept: typeof rows = [];
+    for (const row of rows) {
+      const size = Math.min(String(row.content ?? '').length, 900) + 20;
+      if (kept.length >= 8 && budget - size < 0) break;
+      budget -= size;
+      kept.push(row);
+    }
+    return kept.reverse().map((row) => {
       const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
       // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
       const content = row.message_type === 'image'
         ? `[photo${row.media_note && row.direction === 'inbound' ? `: ${row.media_note}` : ''}] ${caption}`.trim()
-        : row.message_type === 'voice' ? '[voice note]' : row.content;
-      if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content) : content };
+        : row.message_type === 'voice' ? '[voice note]'
+        : row.media_note && row.direction === 'inbound' ? `${row.content}\n[the customer ${row.media_note}]` : row.content;
+      if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content.slice(0, 900)) : content };
       const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
-      return { role: isBot ? ('bot' as const) : ('agent' as const), text: content };
+      return { role: isBot ? ('bot' as const) : ('agent' as const), text: content.length > 900 ? `${content.slice(0, 900)}…` : content };
     }).filter((turn) => turn.text);
   }
 
