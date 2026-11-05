@@ -11,6 +11,7 @@ import { CompanyService } from '../../company/company.service';
 import { Company } from '../../company/entities/company.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
 import { MetaGraphService } from './meta-graph.service';
+import { releaseWhatsappNumberFromOtherCompanies } from '../../whatsapp/release-whatsapp-channel';
 
 export type WhatsappConnectInput = {
   code: string;
@@ -55,18 +56,25 @@ export class WhatsappConnectService {
     return rows.map((row) => String(row.id).trim()).filter(Boolean);
   }
 
+  /**
+   * Meta did not say which number was chosen: find it in the shared WhatsApp accounts.
+   * A number of this workspace or a free one comes first. A number another workspace has is taken only when it is
+   * the only one left (then it moves here) – never when the account also holds numbers of other businesses.
+   */
+  private async pickSharedNumber(companyId: number, accessToken: string, exclude: string[] = []) {
+    const others = new Set(await this.numbersOfOtherCompanies(companyId));
+    const all = (await this.metaGraphService.listSharedWhatsappNumbers(accessToken)).filter((n) => !exclude.includes(n.phone_number_id));
+    const free = all.filter((n) => !others.has(n.phone_number_id));
+    const pick = free.find((n) => n.fresh) ?? free[0] ?? (all.length === 1 ? all[0] : undefined);
+    return pick ? { waba_id: pick.waba_id, phone_number_id: pick.phone_number_id } : null;
+  }
+
   async connect(user: AuthenticatedUser, body: WhatsappConnectInput, addNumber?: { label?: string; purpose?: string }) {
     if (addNumber) return this.connectAnother(user, body, addNumber);
     const company = await this.assertAdmin(user);
     const existing = await this.whatsappChannelService.getForCompany(
       user.company_id,
     );
-    if (body.phone_number_id)
-      await this.companyService.assertWhatsappNumberFree(
-        Number(company.id),
-        body.phone_number_id.trim(),
-      );
-
     const accessToken = await this.metaGraphService.exchangeEmbeddedSignupCode(
       body.code,
       body.page_url,
@@ -76,19 +84,13 @@ export class WhatsappConnectService {
     let wabaId = body.waba_id?.trim() ?? '';
     let phoneNumberId = body.phone_number_id?.trim() ?? '';
     if (!wabaId || !phoneNumberId) {
-      // one WhatsApp account can hold numbers of other workspaces too: never pick those
-      const found =
-        await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, await this.numbersOfOtherCompanies(Number(company.id)));
+      const found = await this.pickSharedNumber(Number(company.id), accessToken);
       if (!found)
         throw new BadRequestException(
           'Meta did not share a WhatsApp number. Run the setup again and choose (or add) a phone number.',
         );
       wabaId = found.waba_id;
       phoneNumberId = found.phone_number_id;
-      await this.companyService.assertWhatsappNumberFree(
-        Number(company.id),
-        phoneNumberId,
-      );
     }
     const replaced =
       existing?.meta_phone_number_id &&
@@ -99,6 +101,8 @@ export class WhatsappConnectService {
       phoneNumberId,
       accessToken,
     );
+    // Meta confirmed this login owns the number: when another workspace still has it, it moves here
+    await releaseWhatsappNumberFromOtherCompanies(this.companyRepository.manager, Number(company.id), phoneNumberId);
     await this.metaGraphService.subscribeWhatsappApp(wabaId, accessToken);
     // Cloud API numbers must be registered before they can send / receive (6-digit two-step PIN)
     const pin = /^\d{6}$/.test(
@@ -160,7 +164,7 @@ export class WhatsappConnectService {
     let wabaId = body.waba_id?.trim() ?? '';
     let phoneNumberId = body.phone_number_id?.trim() ?? '';
     if (!wabaId || !phoneNumberId) {
-      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, [...taken, ...(await this.numbersOfOtherCompanies(Number(company.id)))]);
+      const found = await this.pickSharedNumber(Number(company.id), accessToken, taken);
       if (!found)
         throw new BadRequestException('Meta did not share a new WhatsApp number. Run the setup again and choose (or add) the new phone number.');
       wabaId = found.waba_id;
@@ -168,9 +172,8 @@ export class WhatsappConnectService {
     }
     if (taken.includes(phoneNumberId))
       throw new BadRequestException('This WhatsApp number is already connected to your workspace.');
-    await this.companyService.assertWhatsappNumberFree(Number(company.id), phoneNumberId);
-
     const phone = await this.metaGraphService.fetchWhatsappPhoneNumber(phoneNumberId, accessToken);
+    await releaseWhatsappNumberFromOtherCompanies(this.companyRepository.manager, Number(company.id), phoneNumberId);
     await this.metaGraphService.subscribeWhatsappApp(wabaId, accessToken);
     const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? ''))
       ? String(process.env.WHATSAPP_REGISTRATION_PIN)
