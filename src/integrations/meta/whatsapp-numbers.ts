@@ -11,6 +11,7 @@ import type { AuthenticatedUser } from '../../auth/interfaces/authenticated-user
 import { PlanService } from '../../platform/plan.service';
 import type { WhatsappChannel } from '../../whatsapp/entities/whatsapp-channel.entity';
 import { WhatsappChannelService } from '../../whatsapp/whatsapp-channel.service';
+import { releaseWhatsappChannel } from '../../whatsapp/release-whatsapp-channel';
 import { MetaGraphService } from './meta-graph.service';
 import { buildMetaOAuthState } from './meta-oauth-state.util';
 
@@ -178,18 +179,15 @@ export class WhatsappNumbersService {
     return this.list(user);
   }
 
-  /** Disconnects an extra number. Its customers are answered from the main number from now on; chats and orders stay. */
+  /**
+   * Disconnects a number. Its customers are answered from the main number from now on; chats and orders stay.
+   * The main number too: the next number becomes main, or – when it was the only one – WhatsApp is just not connected.
+   */
   async remove(user: AuthenticatedUser, id: number) {
     await this.assertOwner(user);
     const companyId = Number(user.company_id);
-    const row = await this.own(companyId, id);
-    const [{ count }] = await this.dataSource.query(`SELECT COUNT(*)::int AS count FROM whatsapp_channels WHERE company_id = $1`, [companyId]);
-    if (row.is_primary || num(count) <= 1)
-      throw new BadRequestException('This is your main number. Make another number the main one first, or change the number on this page.');
-    await this.dataSource.transaction(async (manager) => {
-      await manager.query(`UPDATE bot_channel_user SET whatsapp_channel_id = NULL WHERE company_id = $1 AND whatsapp_channel_id = $2`, [companyId, id]);
-      await manager.query(`DELETE FROM whatsapp_channels WHERE id = $1 AND company_id = $2`, [id, companyId]);
-    });
+    await this.own(companyId, id);
+    await this.dataSource.transaction((manager) => releaseWhatsappChannel(manager, companyId, id));
     return this.list(user);
   }
 
