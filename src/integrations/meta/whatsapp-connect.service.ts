@@ -47,6 +47,14 @@ export class WhatsappConnectService {
     return company;
   }
 
+  /** Meta phone number ids already connected to other workspaces. */
+  private async numbersOfOtherCompanies(companyId: number): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.companyRepository.manager
+      .query(`SELECT meta_phone_number_id AS id FROM whatsapp_channels WHERE company_id <> $1 AND COALESCE(meta_phone_number_id, '') <> ''`, [companyId])
+      .catch(() => []);
+    return rows.map((row) => String(row.id).trim()).filter(Boolean);
+  }
+
   async connect(user: AuthenticatedUser, body: WhatsappConnectInput, addNumber?: { label?: string; purpose?: string }) {
     if (addNumber) return this.connectAnother(user, body, addNumber);
     const company = await this.assertAdmin(user);
@@ -68,8 +76,9 @@ export class WhatsappConnectService {
     let wabaId = body.waba_id?.trim() ?? '';
     let phoneNumberId = body.phone_number_id?.trim() ?? '';
     if (!wabaId || !phoneNumberId) {
+      // one WhatsApp account can hold numbers of other workspaces too: never pick those
       const found =
-        await this.metaGraphService.discoverSharedWhatsappNumber(accessToken);
+        await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, await this.numbersOfOtherCompanies(Number(company.id)));
       if (!found)
         throw new BadRequestException(
           'Meta did not share a WhatsApp number. Run the setup again and choose (or add) a phone number.',
@@ -151,7 +160,7 @@ export class WhatsappConnectService {
     let wabaId = body.waba_id?.trim() ?? '';
     let phoneNumberId = body.phone_number_id?.trim() ?? '';
     if (!wabaId || !phoneNumberId) {
-      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, taken);
+      const found = await this.metaGraphService.discoverSharedWhatsappNumber(accessToken, [...taken, ...(await this.numbersOfOtherCompanies(Number(company.id)))]);
       if (!found)
         throw new BadRequestException('Meta did not share a new WhatsApp number. Run the setup again and choose (or add) the new phone number.');
       wabaId = found.waba_id;
