@@ -24,11 +24,12 @@ type GraphErrorBody = {
   error?: { message?: string; type?: string; code?: number };
 };
 
-/** Page fields our app subscribes to: messages, our own echoes, buttons, ad clicks (messaging_referrals), delivery / read ticks, comments. */
-export const PAGE_FIELDS = ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_referrals', 'message_deliveries', 'message_reads', 'feed'];
+/** Page fields our app subscribes to: messages, our own echoes, buttons, ad clicks (messaging_referrals), delivery / read ticks, comments,
+ * and "standby" – messages of chats another app / the Page inbox still holds (e.g. an old chatbot), so they are not lost. */
+export const PAGE_FIELDS = ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_referrals', 'message_deliveries', 'message_reads', 'feed', 'standby'];
 /** App-level webhook fields we need (Meta Developers → Webhooks). */
 export const APP_WEBHOOK_FIELDS: Record<'page' | 'instagram', string[]> = {
-  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed'],
+  page: ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_echoes', 'message_deliveries', 'message_reads', 'feed', 'standby'],
   instagram: ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments'],
 };
 
@@ -245,6 +246,21 @@ export class MetaGraphService {
     if (!response.ok || payload.success !== true) {
       throw new BadRequestException(payload.error?.message ?? 'Meta could not subscribe this Page to the messaging webhook.');
     }
+  }
+
+  /**
+   * Takes a Messenger chat over from the app that holds it (an old chatbot, the Page inbox), so our replies are allowed.
+   * Works when this app is the Page's default routing app. Returns false when Meta says no (nothing breaks then).
+   */
+  async takeThreadControl(pageAccessToken: string, psid: string): Promise<boolean> {
+    const cfg = this.getConfig();
+    const response = await fetch(this.graphUrl('/me/take_thread_control', cfg), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${pageAccessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: psid }, metadata: 'Agent Metra takes the chat' }),
+    }).catch(() => null);
+    const payload = (await response?.json().catch(() => ({}))) as { success?: boolean } | undefined;
+    return Boolean(response?.ok && payload?.success);
   }
 
   /** The fields our app gets for this Page (null when Meta cannot be asked). */
@@ -671,7 +687,7 @@ export class MetaGraphService {
    * returns the first phone number found (the one the customer just set up in most cases).
    */
   /** Every number in the WhatsApp accounts this login shared (fresh = just added, not on the Cloud API yet). */
-  async listSharedWhatsappNumbers(accessToken: string): Promise<Array<{ waba_id: string; phone_number_id: string; fresh: boolean }>> {
+  async listSharedWhatsappNumbers(accessToken: string): Promise<Array<{ waba_id: string; phone_number_id: string; fresh: boolean; onboarded_at: number }>> {
     const cfg = this.getConfig();
     const appToken = `${cfg.appId}|${cfg.appSecret}`;
     const debug = await this.healthGet<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>(
@@ -679,11 +695,16 @@ export class MetaGraphService {
     const wabaIds = Array.from(new Set((debug.data?.data?.granular_scopes ?? [])
       .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
       .flatMap((s) => s.target_ids ?? [])));
-    const found: Array<{ waba_id: string; phone_number_id: string; fresh: boolean }> = [];
+    const found: Array<{ waba_id: string; phone_number_id: string; fresh: boolean; onboarded_at: number }> = [];
     for (const wabaId of wabaIds) {
-      const numbers = await this.healthGet<{ data?: Array<{ id: string; platform_type?: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
+      // last_onboarded_time = when the number was last chosen in the Meta signup window → the number picked just now
+      type Numbers = { data?: Array<{ id: string; platform_type?: string; last_onboarded_time?: string }> };
+      let numbers = await this.healthGet<Numbers>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type,last_onboarded_time' });
+      // older Graph versions do not know the field: ask again without it
+      if (!numbers.ok) numbers = await this.healthGet<Numbers>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
       for (const number of numbers.data?.data ?? []) {
-        if (number.id) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
+        const onboarded = Date.parse(String(number.last_onboarded_time ?? ''));
+        if (number.id) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API', onboarded_at: Number.isFinite(onboarded) ? onboarded : 0 });
       }
     }
     return found;

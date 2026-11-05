@@ -58,12 +58,15 @@ export class WhatsappConnectService {
 
   /**
    * Meta did not say which number was chosen: find it in the shared WhatsApp accounts.
-   * A number of this workspace or a free one comes first. A number another workspace has is taken only when it is
+   * The number Meta stamped as chosen in the last 30 minutes wins. Otherwise a number of this workspace or a free one comes first. A number another workspace has is taken only when it is
    * the only one left (then it moves here) – never when the account also holds numbers of other businesses.
    */
   private async pickSharedNumber(companyId: number, accessToken: string, exclude: string[] = []) {
     const others = new Set(await this.numbersOfOtherCompanies(companyId));
     const all = (await this.metaGraphService.listSharedWhatsappNumbers(accessToken)).filter((n) => !exclude.includes(n.phone_number_id));
+    // the number chosen in the Meta window just now (Meta stamps it) – that is the one the owner wants
+    const chosen = all.filter((n) => n.onboarded_at > Date.now() - 30 * 60 * 1000).sort((a, b) => b.onboarded_at - a.onboarded_at)[0];
+    if (chosen) return { waba_id: chosen.waba_id, phone_number_id: chosen.phone_number_id };
     const free = all.filter((n) => !others.has(n.phone_number_id));
     const pick = free.find((n) => n.fresh) ?? free[0] ?? (all.length === 1 ? all[0] : undefined);
     return pick ? { waba_id: pick.waba_id, phone_number_id: pick.phone_number_id } : null;
