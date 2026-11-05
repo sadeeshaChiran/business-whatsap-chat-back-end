@@ -670,6 +670,25 @@ export class MetaGraphService {
    * Embedded Signup fallback: the business token's granular scopes list the shared WhatsApp Business Accounts;
    * returns the first phone number found (the one the customer just set up in most cases).
    */
+  /** Every number in the WhatsApp accounts this login shared (fresh = just added, not on the Cloud API yet). */
+  async listSharedWhatsappNumbers(accessToken: string): Promise<Array<{ waba_id: string; phone_number_id: string; fresh: boolean }>> {
+    const cfg = this.getConfig();
+    const appToken = `${cfg.appId}|${cfg.appSecret}`;
+    const debug = await this.healthGet<{ data?: { granular_scopes?: Array<{ scope: string; target_ids?: string[] }> } }>(
+      '/debug_token', appToken, { input_token: accessToken });
+    const wabaIds = Array.from(new Set((debug.data?.data?.granular_scopes ?? [])
+      .filter((s) => s.scope === 'whatsapp_business_management' || s.scope === 'whatsapp_business_messaging')
+      .flatMap((s) => s.target_ids ?? [])));
+    const found: Array<{ waba_id: string; phone_number_id: string; fresh: boolean }> = [];
+    for (const wabaId of wabaIds) {
+      const numbers = await this.healthGet<{ data?: Array<{ id: string; platform_type?: string }> }>(`/${wabaId}/phone_numbers`, accessToken, { fields: 'id,display_phone_number,verified_name,platform_type' });
+      for (const number of numbers.data?.data ?? []) {
+        if (number.id) found.push({ waba_id: wabaId, phone_number_id: number.id, fresh: number.platform_type !== 'CLOUD_API' });
+      }
+    }
+    return found;
+  }
+
   async discoverSharedWhatsappNumber(accessToken: string, exclude: string[] = []): Promise<{ waba_id: string; phone_number_id: string } | null> {
     const cfg = this.getConfig();
     const appToken = `${cfg.appId}|${cfg.appSecret}`;
