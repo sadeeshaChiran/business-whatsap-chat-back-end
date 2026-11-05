@@ -64,7 +64,7 @@ type MessagingEvent = {
 type WebhookEntry = { id?: string; messaging?: MessagingEvent[]; standby?: MessagingEvent[]; changes?: Array<{ field?: string }> };
 type WebhookBody = { object?: string; entry?: WebhookEntry[] };
 
-type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'>;
+type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'> & { media_note?: string | null };
 
 const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
@@ -200,10 +200,12 @@ export class MetaMessagesController {
       if (duplicate) return saved;
     }
 
-    const rows = await this.buildRows(companyId, message, postback);
+    const rows = await this.buildRows(companyId, message, postback, {
+      token: connection.page_access_token, mid: providerId, pageId: connection.page_id, igId: connection.instagram_business_account_id, isEcho,
+    });
     if (!rows.length) return saved;
 
-    const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
+    const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token, connection.page_id);
     const conversation = await this.ensureConversation(user.id);
     if (isEcho) {
       // same text already saved as our own reply (bot / agent / private reply) a moment ago → not a new message
@@ -264,6 +266,7 @@ export class MetaMessagesController {
         provider_message_id: providerId ? (index === 0 ? providerId : `${providerId}:${index}`) : null,
         content: row.content,
         media_url: row.media_url,
+        media_note: row.media_note ?? null,
         source: isEcho ? 'meta-echo' : source,
       }));
       saved++;
@@ -330,7 +333,7 @@ export class MetaMessagesController {
     let conversationId: number | null = null;
     let name = '';
     try {
-      const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token);
+      const user = await this.ensureUser(companyId, platform, accountId, senderId, connection.page_access_token, connection.page_id);
       const conversation = await this.ensureConversation(user.id);
       conversationId = conversation.id;
       name = String(user.display_name || '').trim();
@@ -447,7 +450,8 @@ export class MetaMessagesController {
 
   /* ───────── message → rows in the formats the inbox understands ───────── */
 
-  private async buildRows(companyId: number, message: MessagingEvent['message'], postback: MessagingEvent['postback']): Promise<SavedRow[]> {
+  private async buildRows(companyId: number, message: MessagingEvent['message'], postback: MessagingEvent['postback'],
+    ctx: { token?: string | null; mid?: string | null; pageId?: string | null; igId?: string | null; isEcho?: boolean } = {}): Promise<SavedRow[]> {
     if (postback) {
       return [{ message_type: 'text', content: postback.title?.trim() || postback.payload?.trim() || '[button]', media_url: null }];
     }
@@ -455,54 +459,176 @@ export class MetaMessagesController {
     const text = message.text?.trim() ?? '';
     const attachments = message.attachments ?? [];
     if (!attachments.length) {
-      return text ? [{ message_type: 'text', content: text, media_url: null }] : [];
+      if (!text) return [];
+      // a shared link to one of our posts / reels → what that post says, so the bot knows which item they mean
+      const note = ctx.isEcho ? null : await this.describeSharedLink(text, ctx).catch(() => null);
+      return [{ message_type: 'text', content: text, media_url: null, media_note: note }];
     }
 
     const rows: SavedRow[] = [];
+    // media Meta did not put in the webhook (no link) – read once from the message itself
+    let graphMedia: Array<{ url: string; kind: 'image' | 'video' | 'audio' | 'file' }> | null = null;
+    const mediaFromGraph = async () => {
+      if (graphMedia) return graphMedia;
+      graphMedia = [];
+      if (!ctx.token || !ctx.mid) return graphMedia;
+      const res = await this.graphService.healthGet<GraphMessage>(`/${encodeURIComponent(ctx.mid)}`, ctx.token, {
+        fields: 'attachments{mime_type,name,image_data,video_data,file_url}',
+      });
+      for (const a of res.data?.attachments?.data ?? []) {
+        const url = a.image_data?.url || a.video_data?.url || a.file_url || '';
+        if (!url) continue;
+        const mime = String(a.mime_type ?? '');
+        graphMedia.push({ url, kind: a.image_data ? 'image' : a.video_data ? 'video' : mime.startsWith('audio') ? 'audio' : mime.startsWith('image') ? 'image' : 'file' });
+      }
+      if (!res.ok) this.logger.warn(`media lookup for ${ctx.mid} failed: ${res.error}`);
+      return graphMedia;
+    };
+
     for (const [index, attachment] of attachments.entries()) {
       const caption = index === 0 ? text : '';
       const type = String(attachment.type ?? '').toLowerCase();
-      const url = attachment.payload?.url ?? attachment.url ?? '';
+      let url = attachment.payload?.url ?? attachment.url ?? '';
+      const title = attachment.title?.trim() || attachment.payload?.title?.trim() || '';
 
       if (type === 'location') {
         const lat = attachment.payload?.coordinates?.lat;
         const lng = attachment.payload?.coordinates?.long;
-        const name = attachment.title?.trim() || attachment.payload?.title?.trim() || 'Location';
         rows.push({
           message_type: 'text',
-          content: lat != null && lng != null ? `📍 ${name}\nhttps://maps.google.com/?q=${lat},${lng}` : '[location]',
+          content: lat != null && lng != null ? `📍 ${title || 'Location'}\nhttps://maps.google.com/?q=${lat},${lng}` : '[location]',
           media_url: null,
         });
         continue;
       }
 
-      if (['image', 'video', 'audio', 'file', 'ig_reel', 'reel', 'story_mention'].includes(type) && url) {
-        const stored = await this.downloadAndStore(companyId, url);
-        const mediaUrl = stored?.key ?? url; // keep the Meta link if download failed
-        if (type === 'image') {
-          rows.push({ message_type: 'image', content: caption || (attachment.payload?.sticker_id ? '[sticker]' : '[image]'), media_url: mediaUrl });
-        } else if (type === 'audio') {
-          rows.push({ message_type: 'voice', content: caption || '[audio]', media_url: mediaUrl });
-        } else if (type === 'file') {
-          rows.push({ message_type: 'text', content: stored?.fileName || caption || 'Document', media_url: mediaUrl });
-        } else {
-          rows.push({ message_type: 'text', content: caption || '[video]', media_url: mediaUrl });
-        }
+      // the card Meta puts on a private reply to a comment ("You are responding to a user comment…") → the comment and its post
+      if (/comment/i.test(title) && /respond|reply/i.test(title) || /[?&]comment_id=/.test(url)) {
+        rows.push(...(await this.commentContextRows(companyId, url, caption, ctx.token)));
         continue;
       }
 
-      // share / fallback / template / anything else → keep it readable
-      const title = attachment.title?.trim() || attachment.payload?.title?.trim();
+      const mediaType = ['image', 'video', 'audio', 'file', 'ig_reel', 'reel', 'story_mention', 'ig_post', 'share', 'animated_image'].includes(type);
+      if (!url && (mediaType || type === 'unsupported_type' || !type)) {
+        const found = (await mediaFromGraph())[index] ?? (await mediaFromGraph())[0];
+        if (found) url = found.url;
+      }
+      if (url && (mediaType || type === 'unsupported_type' || type === 'template' || type === 'fallback')) {
+        const stored = await this.downloadAndStore(companyId, url);
+        const contentType = stored?.contentType ?? '';
+        const looksImage = type === 'image' || type === 'animated_image' || contentType.startsWith('image/') || ((type === 'ig_post' || type === 'share') && !contentType);
+        if (stored || mediaType) {
+          const mediaUrl = stored?.key ?? url; // keep the Meta link if the download failed
+          const label = type === 'ig_post' || type === 'share' ? (title ? `[shared post] ${title}` : '[shared post]')
+            : type === 'story_mention' ? '[story mention]' : '';
+          if (looksImage) {
+            rows.push({ message_type: 'image', content: [caption, label].filter(Boolean).join('\n') || (attachment.payload?.sticker_id ? '[sticker]' : '[image]'), media_url: mediaUrl });
+          } else if (type === 'audio' || contentType.startsWith('audio/')) {
+            rows.push({ message_type: 'voice', content: caption || '[audio]', media_url: mediaUrl });
+          } else if (type === 'file' || contentType === 'application/pdf') {
+            rows.push({ message_type: 'text', content: stored?.fileName || caption || 'Document', media_url: mediaUrl });
+          } else {
+            rows.push({ message_type: 'text', content: [caption, label].filter(Boolean).join('\n') || '[video]', media_url: mediaUrl });
+          }
+          continue;
+        }
+      }
+
+      // anything else → keep it readable, and log what Meta sent so it can be supported later
+      if (!url && !title) this.logger.warn(`unsupported ${type || 'attachment'} from Meta: ${JSON.stringify(attachment).slice(0, 400)}`);
       const parts = [caption, title, url].filter(Boolean);
       rows.push({ message_type: 'text', content: parts.join('\n') || '[unsupported]', media_url: null });
     }
     return rows;
   }
 
+  /**
+   * A private reply to a comment: show what the customer commented and on which post (with the post photo),
+   * so the team and the bot know what the chat is about.
+   */
+  private async commentContextRows(companyId: number, url: string, caption: string, token?: string | null): Promise<SavedRow[]> {
+    let commentId = '';
+    try { commentId = new URL(url).searchParams.get('comment_id') ?? ''; } catch { /* not a link */ }
+    type Row = { message: string; post_id: string | null; post_text: string; post_link: string | null };
+    const rows = commentId
+      ? ((await this.messageRepository.query(
+        `SELECT message, post_id, post_text, post_link FROM social_comment
+          WHERE company_id = $1 AND (comment_id = $2 OR comment_id LIKE '%\\_' || $2) ORDER BY id DESC LIMIT 1`,
+        [companyId, commentId]).catch(() => [])) as Row[])
+      : [];
+    const comment = rows[0];
+    let picture: string | null = null;
+    let postText = comment?.post_text ?? '';
+    let link = comment?.post_link || url || null;
+    if (comment?.post_id && token) {
+      const post = await this.graphService.healthGet<{ full_picture?: string; message?: string; permalink_url?: string }>(
+        `/${encodeURIComponent(comment.post_id)}`, token, { fields: 'full_picture,message,permalink_url' });
+      if (post.data?.full_picture) picture = (await this.downloadAndStore(companyId, post.data.full_picture))?.key ?? null;
+      postText ||= post.data?.message ?? '';
+      link = post.data?.permalink_url || link;
+    }
+    const lines = [
+      caption,
+      comment?.message ? `💬 Reply to their comment: “${comment.message.slice(0, 300)}”` : '💬 Reply to their comment on your post',
+      postText ? `📝 Post: ${postText.replace(/\s+/g, ' ').slice(0, 200)}` : '',
+      link ?? '',
+    ].filter(Boolean);
+    return [{ message_type: picture ? 'image' : 'text', content: lines.join('\n'), media_url: picture }];
+  }
+
+  /**
+   * The customer pasted a Facebook / Instagram link (facebook.com/share/r/…, a reel, a post, instagram.com/p/…).
+   * When it is one of this Page's own posts or reels, read its text from Meta. Other people's posts stay a plain link.
+   */
+  private async describeSharedLink(text: string, ctx: { token?: string | null; pageId?: string | null; igId?: string | null }): Promise<string | null> {
+    const link = text.match(/https?:\/\/(?:www\.|m\.|web\.)?(?:facebook\.com|fb\.watch|instagram\.com)\/[^\s]+/i)?.[0];
+    if (!link || !ctx.token) return null;
+    let final = link;
+    if (/\/share\/|fb\.watch/i.test(link)) {
+      const res = await fetch(link, { redirect: 'follow', signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AgentMetra/1.0)' } }).catch(() => null);
+      if (res?.url) final = res.url;
+      try { final = decodeURIComponent(new URL(final).searchParams.get('next') ?? '') || final; } catch { /* keep */ }
+    }
+    const describe = (t?: string | null) => (t ?? '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    // Instagram: /p/<code> or /reel/<code> → find it among the account's own posts
+    const igCode = final.match(/instagram\.com\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i)?.[1];
+    if (igCode && ctx.igId) {
+      const media = await this.graphService.healthGet<{ data?: Array<{ shortcode?: string; caption?: string }> }>(
+        `/${ctx.igId}/media`, ctx.token, { fields: 'shortcode,caption', limit: '100' });
+      const hit = media.data?.data?.find((m) => m.shortcode === igCode);
+      return hit ? `shared our Instagram post: ${describe(hit.caption) || '(no caption)'}` : null;
+    }
+    const id = final.match(/(?:reel|videos)\/(?:[^/?]+\/)?(\d{6,})/i)?.[1]
+      ?? final.match(/[?&](?:story_fbid|v|fbid)=(\d{6,})/i)?.[1]
+      ?? final.match(/\/(?:posts|permalink)\/(?:[^/?]+\/)?(pfbid\w+|\d{6,})/i)?.[1];
+    if (!id) return null;
+    for (const objectId of [id, ctx.pageId ? `${ctx.pageId}_${id}` : '']) {
+      if (!objectId) continue;
+      const res = await this.graphService.healthGet<{ message?: string; description?: string; title?: string; from?: { id?: string } }>(
+        `/${objectId}`, ctx.token, { fields: /\d+_\d+/.test(objectId) ? 'message,from' : 'description,title,from' });
+      const body = res.data;
+      if (!res.ok || !body) continue;
+      if (ctx.pageId && body.from?.id && String(body.from.id) !== String(ctx.pageId)) return null; // someone else's post
+      const words = describe([body.title, body.message ?? body.description].filter(Boolean).join(' – '));
+      return `shared our ${/reel|videos|fb\.watch|[?&]v=/i.test(final) ? 'reel / video' : 'post'}: ${words || '(no text)'}`;
+    }
+    return null;
+  }
+
   /** Meta CDN links expire – keep our own copy so the chat can always show it. */
-  private async downloadAndStore(companyId: number, url: string): Promise<{ key: string; fileName: string } | null> {
+  private async downloadAndStore(companyId: number, url: string): Promise<{ key: string; fileName: string; contentType: string } | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const stored = await this.downloadOnce(companyId, url);
+      if (stored) return stored;
+    }
+    this.logger.warn(`could not download media from Meta: ${url.slice(0, 120)}`);
+    return null;
+  }
+
+  private async downloadOnce(companyId: number, url: string): Promise<{ key: string; fileName: string; contentType: string } | null> {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      // some Meta CDN links (Instagram lookaside) refuse requests without a browser-like agent
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AgentMetra/1.0)', Accept: '*/*' } });
       if (!res.ok) return null;
       const size = Number(res.headers.get('content-length') ?? 0);
       if (size > MAX_DOWNLOAD_BYTES) return null;
@@ -510,7 +636,7 @@ export class MetaMessagesController {
       if (!buffer.length || buffer.length > MAX_DOWNLOAD_BYTES) return null;
       const contentType = (res.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim();
       const fileName = this.fileNameFromUrl(url, res.headers.get('content-disposition'));
-      return { key: saveChatMedia(companyId, buffer, contentType, fileName), fileName };
+      return { key: saveChatMedia(companyId, buffer, contentType, fileName), fileName, contentType };
     } catch {
       return null;
     }
@@ -574,7 +700,7 @@ export class MetaMessagesController {
     }
     return true;
   }
-  private async ensureUser(companyId: number, platform: 'messenger' | 'instagram', accountId: string, senderId: string, pageToken: string) {
+  private async ensureUser(companyId: number, platform: 'messenger' | 'instagram', accountId: string, senderId: string, pageToken: string, pageId?: string | null) {
     let user = await this.userRepository.findOne({
       where: { company_id: companyId, platform, source_account_id: accountId, external_user_id: senderId },
     });
@@ -597,12 +723,18 @@ export class MetaMessagesController {
       });
     }
     if (!user.display_name || user.display_name === senderId) {
+      let name = '';
       try {
         const profile = await this.graphService.fetchMessagingProfile(senderId, pageToken, platform);
-        user.display_name = (profile.username || profile.name || senderId).trim();
-      } catch {
-        user.display_name = user.display_name || senderId;
+        name = (profile.username || profile.name || '').trim();
+      } catch { /* the profile needs an extra Meta feature – the chat's participants below work without it */ }
+      if (!name && pageId) {
+        const res = await this.graphService.healthGet<{ data?: Array<{ participants?: { data?: Array<{ id?: string; name?: string; username?: string }> } }> }>(
+          `/${pageId}/conversations`, pageToken, { platform, user_id: senderId, fields: 'participants' });
+        const person = res.data?.data?.[0]?.participants?.data?.find((p) => String(p.id) === senderId);
+        name = (person?.username || person?.name || '').trim();
       }
+      user.display_name = name || user.display_name || senderId;
     }
     user.last_seen_at = new Date();
     return this.userRepository.save(user);
