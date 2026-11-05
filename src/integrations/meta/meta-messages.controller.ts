@@ -61,7 +61,7 @@ type MessagingEvent = {
   referral?: Record<string, unknown>;
   postback?: { mid?: string; title?: string; payload?: string };
 };
-type WebhookEntry = { id?: string; messaging?: MessagingEvent[] };
+type WebhookEntry = { id?: string; messaging?: MessagingEvent[]; standby?: MessagingEvent[]; changes?: Array<{ field?: string }> };
 type WebhookBody = { object?: string; entry?: WebhookEntry[] };
 
 type SavedRow = Pick<BotMessage, 'message_type' | 'content' | 'media_url'>;
@@ -108,7 +108,10 @@ export class MetaMessagesController {
     @Headers('x-hub-signature-256') signature?: string,
   ) {
     const events = (body?.entry ?? []).reduce((n, e) => n + (e.messaging?.length ?? 0), 0);
-    this.logger.log(`webhook received: object=${body?.object ?? '?'} entries=${body?.entry?.length ?? 0} messaging=${events}`);
+    const standby = (body?.entry ?? []).reduce((n, e) => n + (e.standby?.length ?? 0), 0);
+    const changes = Array.from(new Set((body?.entry ?? []).flatMap((e) => (e.changes ?? []).map((c) => c.field ?? '?'))));
+    this.logger.log(`webhook received: object=${body?.object ?? '?'} entries=${body?.entry?.length ?? 0} messaging=${events}`
+      + `${standby ? ` standby=${standby}` : ''}${changes.length ? ` changes=${changes.join(',')}` : ''} account=${(body?.entry ?? []).map((e) => e.id ?? '?').join(',')}`);
     webhookReceived('messenger');
     const secrets = metaAppSecrets();
     const raw = request.rawBody;
@@ -149,6 +152,16 @@ export class MetaMessagesController {
 
       for (const event of entry.messaging ?? []) {
         saved += await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-webhook');
+      }
+      // "standby": another app (an old chatbot) or the Page inbox still holds this chat. Take the chat over so the
+      // bot / team can answer, then handle the message like any other. Echoes in standby are just saved.
+      for (const event of entry.standby ?? []) {
+        const customer = String(event.sender?.id ?? '').trim();
+        if (platform === 'messenger' && event.message && !event.message.is_echo && customer && customer !== accountId && connection.page_access_token) {
+          const taken = await this.graphService.takeThreadControl(connection.page_access_token, customer);
+          if (!taken) this.logger.warn(`standby: could not take the chat of ${customer} on page ${accountId} – set Agent Metra as the default routing app`);
+        }
+        saved += await this.handleEvent(connection, companyId, platform, accountId, event, 'meta-webhook-standby');
       }
     }
     return { ok: true, saved };

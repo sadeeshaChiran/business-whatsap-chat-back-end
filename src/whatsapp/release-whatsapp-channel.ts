@@ -2,9 +2,8 @@
 type Db = { query: (sql: string, params?: unknown[]) => Promise<unknown> };
 
 /**
- * Takes one WhatsApp number off a workspace. Chats, customers and orders stay.
- * - another number exists: the row goes; when it was the main number the next one becomes main
- * - it was the only number: the row stays (settings, bot switch) but the Meta account is taken off it
+ * Takes one WhatsApp number off a workspace completely – as if it was never connected. Chats, customers and orders stay.
+ * When it was the main number and another number is left, that one becomes the main number.
  */
 export async function releaseWhatsappChannel(db: Db, companyId: number, channelId: number): Promise<void> {
   const rows = (await db.query(
@@ -13,18 +12,9 @@ export async function releaseWhatsappChannel(db: Db, companyId: number, channelI
   const row = rows.find((r) => Number(r.id) === Number(channelId));
   if (!row) return;
   const others = rows.filter((r) => Number(r.id) !== Number(channelId));
-  if (!others.length) {
-    await db.query(
-      `UPDATE whatsapp_channels
-          SET status = 'DISCONNECTED', instance_name = $3, meta_phone_number_id = NULL, meta_access_token = NULL,
-              meta_waba_id = NULL, display_phone = NULL, verified_name = NULL
-        WHERE id = $1 AND company_id = $2`,
-      [channelId, companyId, `meta-${companyId}`]);
-    return;
-  }
   await db.query(`UPDATE bot_channel_user SET whatsapp_channel_id = NULL WHERE company_id = $1 AND whatsapp_channel_id = $2`, [companyId, channelId]);
   await db.query(`DELETE FROM whatsapp_channels WHERE id = $1 AND company_id = $2`, [channelId, companyId]);
-  if (row.is_primary) {
+  if (others.length && (row.is_primary || !others.some((r) => r.is_primary))) {
     await db.query(`UPDATE whatsapp_channels SET is_primary = (id = $1) WHERE company_id = $2`, [Number(others[0].id), companyId]);
   }
 }

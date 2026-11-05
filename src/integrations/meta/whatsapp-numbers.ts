@@ -181,7 +181,7 @@ export class WhatsappNumbersService {
 
   /**
    * Disconnects a number. Its customers are answered from the main number from now on; chats and orders stay.
-   * The main number too: the next number becomes main, or – when it was the only one – WhatsApp is just not connected.
+   * The main number too: the next number becomes main, or – when it was the only one – WhatsApp is not connected at all.
    */
   async remove(user: AuthenticatedUser, id: number) {
     await this.assertOwner(user);
