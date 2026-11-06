@@ -914,7 +914,68 @@ export class AgentRoutingService {
       }
     }
 
+    // more agents online now: untouched chats are shared fairly (see rebalanceUntouchedChats)
+    assigned += await this.rebalanceUntouchedChats(companyId).catch((error) => {
+      this.logger.warn(`Rebalance failed for company ${companyId}: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    });
     return assigned;
+  }
+
+  /**
+   * Share the work fairly when more agents are online: chats an agent has NOT started yet (no message from them since
+   * the chat was given, not opened) move from the busiest online agent to the least busy one until everyone has about
+   * the same number (difference at most 1). Chats an agent already works on, sticky customers (they talked to that
+   * agent before) and chats given by hand never move. Example: 10 chats went to the first agent who came online;
+   * a second agent comes online -> 5 / 5; a third -> 4 / 3 / 3 (only the untouched ones move).
+   */
+  async rebalanceUntouchedChats(companyId: number): Promise<number> {
+    const agents = await this.getActiveAgents(companyId);
+    if (agents.length < 2) return 0;
+    const ids = agents.map((agent) => Number(agent.id));
+    const loadRows: Array<{ agent_id: number; n: number }> = await this.conversationRepository.query(
+      `SELECT c.assigned_agent_id AS agent_id, COUNT(*)::int AS n
+         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.assigned_agent_id = ANY($2::int[]) AND c.status IN ('pending', 'active')
+          AND c.last_message_at::timestamptz >= NOW() - INTERVAL '24 hours'
+        GROUP BY 1`,
+      [companyId, ids],
+    );
+    const load = new Map<number, number>(ids.map((id) => [id, 0]));
+    for (const row of loadRows) load.set(Number(row.agent_id), Number(row.n));
+    const movableRows: Array<{ id: number; agent_id: number }> = await this.conversationRepository.query(
+      `SELECT c.id, c.assigned_agent_id AS agent_id
+         FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+        WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.assigned_agent_id = ANY($2::int[]) AND c.status IN ('pending', 'active')
+          AND COALESCE(c.assignment_mode, 'round_robin') NOT IN ('sticky', 'manual')
+          AND c.last_message_at::timestamptz >= NOW() - INTERVAL '24 hours'
+          AND (c.agent_last_read_at IS NULL OR c.assigned_at IS NULL OR c.agent_last_read_at::timestamptz < c.assigned_at::timestamptz)
+          AND NOT EXISTS (SELECT 1 FROM bot_message m
+                           WHERE m.conversation_id = c.id AND m.sender_user_id = c.assigned_agent_id
+                             AND (c.assigned_at IS NULL OR m.created_at::timestamptz >= c.assigned_at::timestamptz))
+        ORDER BY c.last_message_at DESC NULLS LAST, c.id DESC`,
+      [companyId, ids],
+    );
+    const movable = new Map<number, number[]>(ids.map((id) => [id, []]));
+    for (const row of movableRows) movable.get(Number(row.agent_id))?.push(Number(row.id));
+    let moved = 0;
+    for (let guard = 0; guard < 500; guard++) {
+      const least = ids.reduce((a, b) => ((load.get(b) ?? 0) < (load.get(a) ?? 0) ? b : a));
+      const busiest = ids
+        .filter((id) => (movable.get(id)?.length ?? 0) > 0)
+        .reduce<number | null>((a, b) => (a === null || (load.get(b) ?? 0) > (load.get(a) ?? 0) ? b : a), null);
+      if (busiest === null || (load.get(busiest) ?? 0) - (load.get(least) ?? 0) <= 1) break;
+      const conversationId = movable.get(busiest)!.shift()!;
+      await this.assignConversationToAgent(companyId, conversationId, least, 'round_robin');
+      this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', {
+        conversation_id: conversationId, agent_id: least, previous_agent_id: busiest, assignment_mode: 'round_robin', rebalanced: true,
+      });
+      load.set(busiest, (load.get(busiest) ?? 0) - 1);
+      load.set(least, (load.get(least) ?? 0) + 1);
+      moved += 1;
+    }
+    if (moved > 0) this.logger.log(`Shared ${moved} untouched chat(s) between ${ids.length} online agents (company ${companyId})`);
+    return moved;
   }
 
   private async isAgentOnline(agentId: number): Promise<boolean> {
