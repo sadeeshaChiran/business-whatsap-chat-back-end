@@ -591,6 +591,49 @@
         "letters": "english",
         "price": 4495
       }
+    },
+    {
+      "name": "two products + quantity in one order",
+      "send": [
+        "Kimrox Baby Pant M 20 dekak saha Baby Cheramy soap ekak ona. Nimali Perera, 25 Galle Road, Panadura, Kalutara, 0771234567, 0712345678, cash on delivery",
+        "ow confirm"
+      ],
+      "expect": {
+        "contains_all": [
+          "2 x",
+          "Kimrox"
+        ],
+        "order": true,
+        "not_contains": [
+          "(id"
+        ]
+      }
+    },
+    {
+      "name": "asked about another product, takes only the first",
+      "send": [
+        "Kimrox Baby Pant M 20 ekak ona",
+        "Carewell Baby Pants M 30 kiyada?",
+        "eka epa, Kimrox eka witharak. Kasun Silva, 10 Temple Road, Kalutara, 0771112233, 0712223344, COD",
+        "ow confirm"
+      ],
+      "expect": {
+        "order": true,
+        "not_contains": [
+          "(id"
+        ]
+      }
+    },
+    {
+      "name": "ok after the order is placed: no second confirm question",
+      "send": [
+        "Velona Tape Jumbo Nb ekak ona. Sanduni, 5 Station Road, Panadura, Kalutara, 0773334455, 0714445566, COD",
+        "ow confirm",
+        "ok"
+      ],
+      "expect": {
+        "order": true
+      }
     }
   ],
   "use_default_policies": false
