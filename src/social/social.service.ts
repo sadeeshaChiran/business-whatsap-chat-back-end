@@ -13,6 +13,7 @@ import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
 
 export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean; format?: string };
 type Platform = 'facebook' | 'instagram';
+type PostAi = { post_id: string; auto_reply: boolean; kind: string | null; summary: string | null; read_at: string | null };
 type Page = { page_id: string; page_name: string | null; page_access_token: string; instagram_business_account_id: string | null };
 /** What is published: a feed post (photos, one video or text), a reel (one video) or a story (one photo or video, 24 h). */
 export type PostFormat = 'post' | 'reel' | 'story';
@@ -417,8 +418,9 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         { recipient: { comment_id: c.comment_id }, message: { text } });
       await this.dataSource.query(`UPDATE social_comment SET private_reply = $2, private_replied_at = NOW(), updated_at = NOW() WHERE id = $1`, [id, text]);
       if (sent?.recipient_id) {
+        const post = await this.withPost(companyId, c).catch(() => c);
         await this.saveToInbox(companyId, c.platform === 'instagram' ? 'instagram' : 'messenger', sender, String(sent.recipient_id),
-          c.author_name ?? '', text, sent.message_id ?? null).catch((error: unknown) =>
+          c.author_name ?? '', text, sent.message_id ?? null, { comment: String(c.message ?? ''), post_text: String(post.post_text ?? ''), post_link: post.post_link ?? null }).catch((error: unknown) =>
           this.logger.warn(`private reply ${id} → inbox: ${error instanceof Error ? error.message : String(error)}`));
       }
     } catch (error) {
@@ -487,7 +489,8 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Shows a private reply in the chat inbox (same contact + conversation the customer's Messenger / Instagram answers will use). */
-  private async saveToInbox(companyId: number, platform: 'messenger' | 'instagram', accountId: string, customerId: string, name: string, text: string, mid: string | null) {
+  private async saveToInbox(companyId: number, platform: 'messenger' | 'instagram', accountId: string, customerId: string, name: string, text: string, mid: string | null,
+    origin?: { comment: string; post_text: string; post_link: string | null }) {
     let [user] = await this.dataSource.query(
       `SELECT id FROM bot_channel_user WHERE company_id = $1 AND platform = $2 AND source_account_id = $3 AND external_user_id = $4 LIMIT 1`,
       [companyId, platform, accountId, customerId]);
@@ -504,6 +507,17 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         INSERT INTO bot_conversation (bot_channel_user_id, status, assignment_mode, last_message_at) VALUES ($1, 'open', 'unassigned', NOW()) RETURNING id`, [user.id]);
     } else {
       await this.dataSource.query(`UPDATE bot_conversation SET last_message_at = NOW() WHERE id = $1`, [conversation.id]);
+    }
+    if (origin) {
+      // the same card as when Meta sends it ("💬 Reply to their comment …"): the inbox shows the comment + post, the bot reads it
+      const card = [
+        origin.comment ? `💬 Reply to their comment: “${origin.comment.slice(0, 300)}”` : '💬 Reply to their comment on your post',
+        origin.post_text ? `📝 Post: ${origin.post_text.replace(/\s+/g, ' ').slice(0, 200)}` : '',
+        origin.post_link ?? '',
+      ].filter(Boolean).join('\n');
+      await this.dataSource.query(`
+        INSERT INTO bot_message (conversation_id, direction, message_type, platform, delivery_status, content, source)
+        VALUES ($1, 'outbound', 'text', $2, 'sent', $3, 'social-comment-card')`, [conversation.id, platform, card]);
     }
     await this.dataSource.query(`
       INSERT INTO bot_message (conversation_id, direction, message_type, platform, provider_message_id, delivery_status, content, source)
@@ -540,13 +554,120 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     return this.suggestFor(companyId, id);
   }
 
+  private postCache = new Map<string, { text: string; link: string | null; at: number }>();
+
+  /**
+   * A comment that came by webhook has no post text (Meta does not send it): take it from another comment on the same post
+   * or read it from Meta once (cached), so the AI knows what the post is about - a quiz post's answers ("52") were read
+   * as product names and got private messages with random products.
+   */
+  private async withPost(companyId: number, c: any) {
+    if (String(c.post_text ?? '').trim() || !c.post_id) return c;
+    const key = String(c.post_id);
+    let found = this.postCache.get(key);
+    if (!found || Date.now() - found.at > 30 * 60_000) {
+      const [sibling] = await this.dataSource.query(
+        `SELECT post_text, post_link FROM social_comment WHERE company_id = $1 AND post_id = $2 AND post_text <> '' ORDER BY id DESC LIMIT 1`,
+        [companyId, key]).catch(() => []);
+      found = { text: String(sibling?.post_text ?? ''), link: sibling?.post_link ?? null, at: Date.now() };
+      if (!found.text) {
+        try {
+          const page = await this.page(companyId);
+          const post = await graphRequest<{ message?: string; caption?: string; permalink_url?: string; permalink?: string }>('GET', `/${key}`,
+            page.page_access_token, { fields: c.platform === 'instagram' ? 'caption,permalink' : 'message,permalink_url' });
+          found = { text: String(post?.message ?? post?.caption ?? ''), link: post?.permalink_url ?? post?.permalink ?? found.link, at: Date.now() };
+        } catch (error) {
+          this.logger.warn(`post text ${key}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      this.postCache.set(key, found);
+      if (found.text || found.link) {
+        await this.dataSource.query(
+          `UPDATE social_comment SET post_text = CASE WHEN post_text = '' THEN $3 ELSE post_text END, post_link = COALESCE(post_link, $4)
+            WHERE company_id = $1 AND post_id = $2`, [companyId, key, found.text.slice(0, 3000), found.link]).catch(() => undefined);
+      }
+    }
+    return { ...c, post_text: found.text, post_link: c.post_link ?? found.link };
+  }
+
+  private postReads = new Map<string, Promise<PostAi>>();
+
+  /**
+   * What the post is about, read ONCE per post by the AI from its text AND its photo (kind: product / service / offer /
+   * engagement / info), plus the per-post switch for AI comment replies (on by default). Every comment on the post is
+   * answered by this: a product post's comments get that product, a quiz post's answers get a friendly reply, not a sale.
+   */
+  private async postAi(companyId: number, c: any, force = false): Promise<PostAi> {
+    const postId = String(c?.post_id ?? '');
+    if (!postId) return { post_id: '', auto_reply: true, kind: null, summary: null, read_at: null };
+    const [row] = await this.dataSource.query(`SELECT * FROM social_post_ai WHERE company_id = $1 AND post_id = $2`, [companyId, postId]).catch(() => []);
+    if (row?.read_at && !force) return row;
+    const key = `${companyId}:${postId}`;
+    if (!force && this.postReads.has(key)) return this.postReads.get(key)!;   // 100 comments at once: the post is read once
+    const run = (async (): Promise<PostAi> => {
+      const withText = await this.withPost(companyId, c).catch(() => c);
+      let text = String(withText.post_text ?? '');
+      let picture: string | null = null;
+      try {
+        const page = await this.page(companyId);
+        const post = await graphRequest<Record<string, string | undefined>>('GET', `/${postId}`, page.page_access_token,
+          { fields: c.platform === 'instagram' ? 'caption,media_url,thumbnail_url,media_type' : 'message,full_picture' });
+        text ||= String(post?.message ?? post?.caption ?? '');
+        picture = post?.full_picture ?? (post?.media_type === 'VIDEO' ? post?.thumbnail_url : post?.media_url) ?? post?.thumbnail_url ?? null;
+      } catch (error) {
+        this.logger.warn(`post ${postId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      let image = '';
+      let mime = 'image/jpeg';
+      if (picture) {
+        const res = await fetch(picture, { signal: AbortSignal.timeout(15_000) }).catch(() => null);
+        const buffer = res?.ok ? Buffer.from(await res.arrayBuffer()) : null;
+        if (buffer && buffer.length <= 5_000_000) { image = buffer.toString('base64'); mime = res?.headers.get('content-type')?.split(';')[0] || mime; }
+      }
+      if (!text && !image) return { post_id: postId, auto_reply: row?.auto_reply ?? true, kind: null, summary: null, read_at: null };
+      const read = await this.callBot<{ kind: string; summary: string }>('/social/post-read',
+        { platform: c.platform ?? 'facebook', post_text: text, image_b64: image, mime_type: mime }, companyId);
+      const [saved] = await this.dataSource.query(`
+        INSERT INTO social_post_ai (company_id, post_id, platform, kind, summary, read_at) VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (company_id, post_id) DO UPDATE SET kind = EXCLUDED.kind, summary = EXCLUDED.summary, read_at = NOW(), updated_at = NOW()
+        RETURNING *`, [companyId, postId, c.platform ?? 'facebook', String(read.kind ?? '').slice(0, 16), String(read.summary ?? '').slice(0, 1000)]);
+      return saved;
+    })();
+    this.postReads.set(key, run);
+    try {
+      return await run;
+    } catch (error) {
+      this.logger.warn(`post read ${postId}: ${error instanceof Error ? error.message : String(error)}`);
+      return { post_id: postId, auto_reply: row?.auto_reply ?? true, kind: null, summary: null, read_at: null };
+    } finally {
+      this.postReads.delete(key);
+    }
+  }
+
+  /** The post's AI card for the post viewer: what the AI understood + the switch (reads the post when not read yet). */
+  async postAiInfo(user: AuthenticatedUser, postId: string, platform: string, again = false) {
+    const companyId = await this.adminCompany(user);
+    return this.postAi(companyId, { post_id: postId, platform, post_text: '' }, again);
+  }
+
+  async setPostAutoReply(user: AuthenticatedUser, postId: string, platform: string, on: boolean) {
+    const companyId = await this.adminCompany(user);
+    const [row] = await this.dataSource.query(`
+      INSERT INTO social_post_ai (company_id, post_id, platform, auto_reply) VALUES ($1, $2, $3, $4)
+      ON CONFLICT (company_id, post_id) DO UPDATE SET auto_reply = EXCLUDED.auto_reply, updated_at = NOW() RETURNING *`,
+      [companyId, postId, platform, on]);
+    return row;
+  }
+
   private async suggestFor(companyId: number, id: number) {
-    const c = await this.comment(companyId, id);
+    const c = await this.withPost(companyId, await this.comment(companyId, id));
+    const post = await this.postAi(companyId, c);
     const settings = await this.settings(companyId);
     const ai = await this.callBot<{ reply: string; dm: string; intent: string; hide: boolean }>('/social/comment-reply', {
       platform: c.platform, post_text: c.post_text, comment: c.message, author: c.author_name,
       // private messages on: price / details go to the customer's inbox as a normal chat message, the public reply stays short
       dm_enabled: settings.auto_dm !== false,
+      post_kind: post.kind ?? '', post_summary: post.summary ?? '',
     }, companyId);
     await this.dataSource.query(`UPDATE social_comment SET ai_reply = $2, ai_dm = $3, ai_intent = $4, updated_at = NOW() WHERE id = $1`,
       [id, ai.reply ?? '', ai.dm ?? '', String(ai.intent ?? '').slice(0, 20)]);
@@ -558,7 +679,12 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
     const settings = await this.settings(companyId);
     if (settings.auto_reply === 'off') return;
     try {
-      if ((await this.comment(companyId, id)).status !== 'open') return; // already answered / hidden
+      const fresh = await this.comment(companyId, id);
+      if (fresh.status !== 'open') return; // already answered / hidden
+      // AI replies switched off for this post (post viewer): the comment waits for the team
+      const [post] = fresh.post_id ? await this.dataSource.query(
+        `SELECT auto_reply FROM social_post_ai WHERE company_id = $1 AND post_id = $2`, [companyId, String(fresh.post_id)]).catch(() => []) : [];
+      if (post && post.auto_reply === false) return;
       const ai = await this.suggestFor(companyId, id);
       if (ai.hide && settings.auto_hide_spam) {
         const c = await this.comment(companyId, id);

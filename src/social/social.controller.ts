@@ -21,6 +21,14 @@ class CommentsQueryDto {
   @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
   @IsOptional() @IsString() @MaxLength(100) search?: string;
 }
+class PostAiQueryDto {
+  @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
+  @IsOptional() @IsIn(['true', 'false']) again?: string;
+}
+class PostAiDto {
+  @IsBoolean() auto_reply: boolean;
+  @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
+}
 class MessageDto {
   @IsString() @MinLength(1) @MaxLength(2000) message: string;
 }
@@ -108,6 +116,12 @@ export class SocialController {
   @Get('posts') posts(@CurrentUser() user: AuthenticatedUser, @Query() query: PostsQueryDto) { return this.social.posts(user, query.platform ?? 'facebook', query.kind ?? 'all'); }
   @Get('posts/:postId/insights') postInsights(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Query() query: InsightsQueryDto) {
     return this.social.postInsights(user, postId, query.platform ?? 'facebook', query.kind);
+  }
+  @Get('posts/:postId/ai') postAi(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Query() query: PostAiQueryDto) {
+    return this.social.postAiInfo(user, postId, query.platform ?? 'facebook', query.again === 'true');
+  }
+  @Patch('posts/:postId/ai') setPostAi(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Body() dto: PostAiDto) {
+    return this.social.setPostAutoReply(user, postId, dto.platform ?? 'facebook', dto.auto_reply);
   }
   @Post('posts') create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePostDto) { return this.social.createPost(user, dto); }
   @Patch('posts/:postId') edit(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Body() dto: MessageDto) { return this.social.editPost(user, postId, dto.message); }
