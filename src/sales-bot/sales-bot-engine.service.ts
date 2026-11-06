@@ -267,6 +267,22 @@ export function planAllowsBot(company: Pick<Company, 'plan'> | null | undefined)
  *  inbound message → wait a few seconds (combine quick messages) → Python bot → send reply
  *  → save orders (re-priced from the products table), bookings, leads, or hand the chat to a person.
  */
+/** Which order this answer is about. "ow confirm" to the summary: the AI (or the bot's own guard) may send confirm_order
+ * without the items – the customer agreed to the order in progress, so it is confirmed with those items (before, this
+ * was dropped: nothing was saved while the bot said "order eka satahan kara gaththa"). Summary not shown yet ->
+ * handleOrder shows the real summary first. The AI talks about the summary but sent no order -> the order in progress. */
+export function orderToHandle(result: { reply?: string; order?: SalesBotOrder | null }, pendingNow?: PendingOrder | null): SalesBotOrder | null {
+  const pendingItems = () => (pendingNow?.items ?? []).map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, variant_name: item.variant_name, quantity: item.quantity }));
+  if (result.order?.items?.length) return result.order;
+  if (result.order?.confirm_order && pendingNow?.items?.length) return { ...result.order, items: pendingItems() } as SalesBotOrder;
+  if (SUMMARY_WORDS.test(String(result.reply ?? '')) && pendingNow?.items?.length && !result.order?.confirm_order) {
+    return { items: pendingItems(),
+      customer_name: pendingNow.customer_name, customer_phone: pendingNow.customer_phone, address: pendingNow.address,
+      delivery_area: pendingNow.delivery_area, payment_method: pendingNow.payment_method, summary_shown: true } as SalesBotOrder;
+  }
+  return null;
+}
+
 @Injectable()
 export class SalesBotEngineService implements OnModuleInit {
   private readonly logger = new Logger(SalesBotEngineService.name);
@@ -1020,12 +1036,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
     // the AI talks about the summary but sent no order: show the summary of the order in progress
     const pendingNow = session.pending_order;
-    const order = result.order?.items?.length ? result.order
-      : SUMMARY_WORDS.test(String(result.reply ?? '')) && pendingNow?.items?.length && !result.order?.confirm_order
-        ? { items: pendingNow.items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, variant_name: item.variant_name, quantity: item.quantity })),
-          customer_name: pendingNow.customer_name, customer_phone: pendingNow.customer_phone, address: pendingNow.address,
-          delivery_area: pendingNow.delivery_area, payment_method: pendingNow.payment_method, summary_shown: true } as SalesBotOrder
-        : null;
+    const order = orderToHandle(result, pendingNow);
     if (order) {
       const wantSummary = SUMMARY_WORDS.test(String(result.reply ?? '')) || (!String(pendingNow?.address ?? '').trim() && Boolean(String(order.address ?? '').trim()));
       const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, order, session, wantSummary);
