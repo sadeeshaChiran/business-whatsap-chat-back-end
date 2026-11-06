@@ -143,9 +143,12 @@ async function testShop(db, shop, log) {
     const { rows: services } = await db.query(`SELECT name, price FROM bot_service WHERE company_id = $1 AND is_active ORDER BY id`, [companyId]);
     const svc = services[0];
     const list = await step('services list', [['Hi'], ['mona mona services thiyenawada? price list ekak denna']]);
-    check('Lists real services with prices', services.filter((s) => list.text.toLowerCase().includes(words(s.name))).length >= 2, `${services.length} services`);
+    // a shop with one service (Agent Metra: only the free demo) needs only that one
+    check('Lists real services with prices', services.filter((s) => list.text.toLowerCase().includes(words(s.name))).length >= Math.min(2, services.length), `${services.length} services`);
     const price = await step(`price: ${svc.name}`, [[`${svc.name} kiyada?`]]);
-    check('Exact service price', money(price.text).includes(Math.round(Number(svc.price))), `Rs ${Number(svc.price)}`);
+    check('Exact service price', Number(svc.price) > 0
+      ? money(price.text).includes(Math.round(Number(svc.price)))
+      : /free|නොමිලේ|නිකන්|nikan|ilavasam|இலவச/i.test(price.text), Number(svc.price) > 0 ? `Rs ${Number(svc.price)}` : 'free');
     // earlier test runs booked times too – cancel those test bookings so the same time is free again
     await db.query(`UPDATE bot_booking SET status = 'cancelled' WHERE company_id = $1 AND bot_channel_user_id IN
       (SELECT id FROM bot_channel_user WHERE company_id = $1 AND external_user_id LIKE '999%')`, [companyId]).catch(() => undefined);
