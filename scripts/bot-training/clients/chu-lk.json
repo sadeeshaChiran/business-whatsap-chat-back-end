@@ -18,10 +18,10 @@
   "delivery_zones": [
     {
       "area": "*",
-      "fee": 350,
+      "fee": 425,
       "days": "2-5 days (most orders arrive in 1-2 days)",
       "included_kg": 1,
-      "per_extra_kg": 200,
+      "per_extra_kg": 100,
       "weight_rounding": "up"
     }
   ],
