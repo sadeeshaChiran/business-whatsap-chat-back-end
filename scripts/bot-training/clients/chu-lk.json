@@ -684,6 +684,37 @@
           "order කරන්න අවශ්‍යද"
         ]
       }
+    },
+    {
+      "name": "already bought at the shop -> thanks, no selling",
+      "send": [
+        "19 Pcs Silicone Utensils set eka kiyada?",
+        "husband awith gaththa masala box ekai 790 storage box set ekai"
+      ],
+      "expect": {
+        "letters": "sinhala",
+        "not_contains": [
+          "ගන්නවද",
+          "order කරන්නද",
+          "Delivery කරගන්න ඕනෙද",
+          "order කරන්න අවශ්‍යද"
+        ],
+        "order": false
+      }
+    },
+    {
+      "name": "thanks for the service -> short warm line",
+      "send": [
+        "Thanks for the service"
+      ],
+      "expect": {
+        "not_contains": [
+          "order",
+          "Order",
+          "husband"
+        ],
+        "order": false
+      }
     }
   ],
   "use_default_policies": false
