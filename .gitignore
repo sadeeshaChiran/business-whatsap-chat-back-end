@@ -5,6 +5,8 @@ coverage/
 *.tsbuildinfo
 
 # secrets – never commit real values (use .env.example)
+.env
+.env.*
 !.env.example
 
 # uploaded chat media, invoices, slips
@@ -15,9 +17,9 @@ logs/
 *.log
 .DS_Store
 .idea/
+.vscode/*
 !.vscode/extensions.json
 test-results/
 scale-test-results.csv
 __pycache__/
 scripts/bot-training/clients/.credentials
-config.bat

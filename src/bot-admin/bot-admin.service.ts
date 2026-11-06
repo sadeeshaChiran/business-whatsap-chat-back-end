@@ -821,6 +821,7 @@ export class BotAdminService {
   }
 
   private static readonly THREAD_IMAGE_URL_RE = /https?:\/\/[^\s<>"']+/gi;
+  private static readonly PICTURE_LINK_RE = /\.(?:jpe?g|png|webp|gif|bmp|heic|avif)(?:[?#]|$)|\/public\/product-images\/|placehold\.co|\/(?:chat-)?media\//i;
 
   private isDisplayableImageUrl(value: string | null | undefined): boolean {
     return isBrowserDisplayableImageUrl(String(value ?? '').trim());
@@ -855,7 +856,8 @@ export class BotAdminService {
       const matches = String(message.content ?? '').match(
         BotAdminService.THREAD_IMAGE_URL_RE,
       );
-      const fromContent = matches?.find((url) => this.isDisplayableImageUrl(url))?.trim();
+      // only a link to a picture file becomes a photo – a web page link ("Catalog: https://shop.lk") stays text
+      const fromContent = matches?.find((url) => this.isDisplayableImageUrl(url) && BotAdminService.PICTURE_LINK_RE.test(url))?.trim();
       if (fromContent) {
         mediaUrl = fromContent;
       }
@@ -2040,7 +2042,39 @@ export class BotAdminService {
       campaign: row.campaign_name ? { name: row.campaign_name, offer: row.offer_text || null } : null,
       link_name: row.link_name || null,
       clicks,
+      comment: await this.commentOrigin(conversationId, media),
     };
+  }
+
+  /**
+   * The chat started from a comment (a private reply to it): the comment, its post and links to open both,
+   * read from the "💬 Reply to their comment" card saved at the top of the chat.
+   */
+  private async commentOrigin(conversationId: number, media: (value: string | null) => string | null) {
+    const [card] = await this.messageRepository.query(`
+      SELECT m.id, m.content, m.media_url, m.created_at, u.company_id
+        FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+       WHERE m.conversation_id = $1 AND m.content LIKE '%💬 Reply to their comment%'
+       ORDER BY m.id DESC LIMIT 1`, [conversationId]).catch(() => []) as Array<{ id: number; content: string; media_url: string | null; created_at: string; company_id: number }>;
+    if (!card) return null;
+    const lines = String(card.content ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+    const text = (lines.find((line) => line.startsWith('💬')) ?? '').match(/[“"](.+)[”"]\s*$/)?.[1] ?? null;
+    const post = (lines.find((line) => line.startsWith('📝')) ?? '').replace(/^📝\s*Post:\s*/, '') || null;
+    let postLink = lines.find((line) => /^https?:\/\//i.test(line)) ?? null;
+    // the comment itself: Facebook opens it with ?comment_id=<id> on the post link
+    let commentLink: string | null = null;
+    if (text) {
+      const [found] = await this.messageRepository.query(
+        `SELECT comment_id, post_link, platform FROM social_comment WHERE company_id = $1 AND left(message, 300) = $2 ORDER BY id DESC LIMIT 1`,
+        [card.company_id, text]).catch(() => []) as Array<{ comment_id: string | null; post_link: string | null; platform: string | null }>;
+      postLink ||= found?.post_link || null;
+      const id = String(found?.comment_id ?? '').split('_').pop();
+      if (id && postLink && /facebook\.com|fb\.com/i.test(postLink) && !/[?&]comment_id=/.test(postLink)) {
+        commentLink = `${postLink}${postLink.includes('?') ? '&' : '?'}comment_id=${encodeURIComponent(id)}`;
+      }
+    }
+    if (postLink && /[?&]comment_id=/.test(postLink)) { commentLink ||= postLink; postLink = postLink.replace(/([?&])comment_id=[^&]*&?/, '$1').replace(/[?&]$/, ''); }
+    return { message_id: Number(card.id), comment: text, post, post_link: postLink, comment_link: commentLink, media_url: media(card.media_url), at: card.created_at };
   }
 
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
