@@ -66,6 +66,7 @@ import {
 } from './chat-media.store';
 import { readDocumentText, splitIntoPieces } from './document-knowledge';
 import { Inject, Optional } from '@nestjs/common';
+import { SendSafetyService } from './send-safety';
 import { ActivityLogService } from '../activity-log/activity-log';
 import { StockService } from '../reports/stock';
 
@@ -187,7 +188,21 @@ export class BotAdminService {
     private readonly whatsappService: WhatsappService,
     private readonly socialSender: MetaSocialSenderService,
     private readonly planService: PlanService,
+    @Optional() private readonly sendSafety?: SendSafetyService,
   ) {}
+
+  /**
+   * Ban safety before the team sends from the inbox (see send-safety.ts): 24-hour window on Meta WhatsApp numbers,
+   * the same text pasted to many chats, risky words (asks to confirm). Not for the bot, broadcasts or templates.
+   */
+  private async assertSafeToSend(companyId: number, conversationId: number, platform: string | null | undefined, phone: string | null,
+    text: string | null, confirmRisk = false) {
+    if (!this.sendSafety || process.env.SEND_SAFETY === 'off') return;
+    if (phone && isTestPhone(phone)) return;
+    const isWhatsapp = !platform || String(platform).toLowerCase() === 'whatsapp';
+    const channel = isWhatsapp ? await this.resolveCompanyWhatsappChannel(companyId, phone ?? undefined) : null;
+    await this.sendSafety.assertSafe({ companyId, conversationId, text, whatsappCloud: isWhatsapp && this.isMetaWhatsappChannel(channel), confirmRisk });
+  }
 
   private getEvolutionConfig() {
     // User may paste Evolution Manager URL (ends with /manager). API base is root.
@@ -1868,6 +1883,7 @@ export class BotAdminService {
     const unreadByConversation = new Map<number, number>();
     const labelsByConversation = new Map<number, Array<{ id: number; name: string; color_code: string }>>();
     const originByConversation = new Map<number, ChatOrigin | null>();
+    const fromComment = new Set<number>();
 
     if (conversationIds.length > 0) {
       // Only the newest message per conversation (was: every message of every conversation).
@@ -1931,6 +1947,14 @@ export class BotAdminService {
           FROM bot_conversation c WHERE c.id = ANY($1) AND (c.ad_source_id IS NOT NULL OR c.campaign_source IS NOT NULL)`, [conversationIds]).catch(() => []);
       for (const row of originRows) originByConversation.set(Number(row.id), chatOrigin(row));
 
+      // chats that started from a comment on a post (our private reply card / Meta's "responding to a user comment" line)
+      const commentRows: Array<{ conversation_id: number }> = await this.messageRepository.query(`
+        SELECT DISTINCT m.conversation_id FROM bot_message m
+         WHERE m.conversation_id = ANY($1)
+           AND (m.content LIKE '%💬 Reply to their comment%' OR m.content ILIKE '%responding to a user comment%'
+                OR m.source IN ('social-private-reply', 'social-comment-card'))`, [conversationIds]).catch(() => []);
+      for (const row of commentRows) fromComment.add(Number(row.conversation_id));
+
       // Tags on each chat – used by the tag filter and the chips in the chat list.
       const labelRows = await this.conversationLabelRepository
         .createQueryBuilder('cl')
@@ -1993,6 +2017,7 @@ export class BotAdminService {
         unread_count: unreadByConversation.get(Number(conversation.id)) ?? 0,
         labels: labelsByConversation.get(Number(conversation.id)) ?? [],
         origin: originByConversation.get(Number(conversation.id)) ?? null,
+        from_comment: fromComment.has(Number(conversation.id)),
       };
     });
   }
@@ -2056,7 +2081,42 @@ export class BotAdminService {
         FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
        WHERE m.conversation_id = $1 AND m.content LIKE '%💬 Reply to their comment%'
        ORDER BY m.id DESC LIMIT 1`, [conversationId]).catch(() => []) as Array<{ id: number; content: string; media_url: string | null; created_at: string; company_id: number }>;
-    if (!card) return null;
+    if (!card) {
+      // no card of ours (the customer wrote first / an older chat): Meta's own line "You are responding to a user comment …
+      // (https://facebook.com/…?comment_id=…)" still tells it started from a comment, with the link
+      const [meta] = await this.messageRepository.query(`
+        SELECT m.id, m.content, m.created_at, u.company_id
+          FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+         WHERE m.conversation_id = $1 AND m.content ILIKE '%responding to a user comment%' AND m.content ~* 'https?://'
+         ORDER BY m.id DESC LIMIT 1`, [conversationId]).catch(() => []) as Array<{ id: number; content: string; created_at: string; company_id: number }>;
+      const metaLink = String(meta?.content ?? '').match(/https?:\/\/[^\s)]+/)?.[0] ?? null;
+      if (!meta || !metaLink) {
+        // our own auto private reply to a comment (no card, no Meta line): the comment it answered tells the rest
+        const [dm] = await this.messageRepository.query(`
+          SELECT m.id, m.created_at, sc.message, sc.post_text, sc.post_link, sc.comment_id, sc.platform
+            FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id JOIN bot_channel_user u ON u.id = c.bot_channel_user_id
+            JOIN social_comment sc ON sc.company_id = u.company_id AND sc.private_reply = m.content
+           WHERE m.conversation_id = $1 AND m.source = 'social-private-reply'
+           ORDER BY m.id DESC LIMIT 1`, [conversationId]).catch(() => []) as Array<{ id: number; created_at: string; message: string; post_text: string;
+            post_link: string | null; comment_id: string | null; platform: string | null }>;
+        if (!dm) return null;
+        const commentId = String(dm.comment_id ?? '').split('_').pop();
+        const link = dm.post_link || null;
+        return { message_id: Number(dm.id), comment: String(dm.message ?? '').slice(0, 300) || null,
+          post: String(dm.post_text ?? '').replace(/\s+/g, ' ').slice(0, 200) || null, post_link: link,
+          comment_link: link && commentId && /facebook\.com|fb\.com/i.test(link) && !/[?&]comment_id=/.test(link)
+            ? `${link}${link.includes('?') ? '&' : '?'}comment_id=${encodeURIComponent(commentId)}` : null,
+          media_url: null, at: dm.created_at };
+      }
+      const id = metaLink.match(/[?&]comment_id=(\d+)/)?.[1];
+      const [found] = id ? await this.messageRepository.query(
+        `SELECT message, post_text, post_link FROM social_comment WHERE company_id = $1 AND (comment_id = $2 OR comment_id LIKE '%\\_' || $2) ORDER BY id DESC LIMIT 1`,
+        [meta.company_id, id]).catch(() => []) as Array<{ message: string; post_text: string; post_link: string | null }> : [];
+      const postLink = metaLink.replace(/([?&])comment_id=[^&]*&?/, '$1').replace(/[?&]$/, '');
+      return { message_id: Number(meta.id), comment: found?.message ? String(found.message).slice(0, 300) : null,
+        post: found?.post_text ? String(found.post_text).replace(/\s+/g, ' ').slice(0, 200) : null,
+        post_link: found?.post_link || postLink, comment_link: metaLink, media_url: null, at: meta.created_at };
+    }
     const lines = String(card.content ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
     const text = (lines.find((line) => line.startsWith('💬')) ?? '').match(/[“"](.+)[”"]\s*$/)?.[1] ?? null;
     const post = (lines.find((line) => line.startsWith('📝')) ?? '').replace(/^📝\s*Post:\s*/, '') || null;
@@ -2073,8 +2133,27 @@ export class BotAdminService {
         commentLink = `${postLink}${postLink.includes('?') ? '&' : '?'}comment_id=${encodeURIComponent(id)}`;
       }
     }
+    let postText = post;
+    if (!postLink && !commentLink) {
+      // the card has no link, but Meta's own line in the chat has it: "You are responding to a user comment to a post on
+      // your Page. View comment. (https://facebook.com/…/posts/…?comment_id=…)" - the banner takes the link from there
+      const [line] = await this.messageRepository.query(
+        `SELECT content FROM bot_message WHERE conversation_id = $1 AND content ILIKE '%responding to a user comment%' AND content ~* 'https?://'
+          ORDER BY abs(id - $2) LIMIT 1`, [conversationId, card.id]).catch(() => []) as Array<{ content: string }>;
+      const url = String(line?.content ?? '').match(/https?:\/\/[^\s)]+/i)?.[0] ?? null;
+      if (url) {
+        postLink = url;
+        const id = url.match(/[?&]comment_id=(\d+)/)?.[1];
+        if (id && !postText) {
+          const [found] = await this.messageRepository.query(
+            `SELECT post_text FROM social_comment WHERE company_id = $1 AND (comment_id = $2 OR comment_id LIKE '%\\_' || $2) LIMIT 1`,
+            [card.company_id, id]).catch(() => []) as Array<{ post_text: string | null }>;
+          postText = String(found?.post_text ?? '').replace(/\s+/g, ' ').slice(0, 200) || null;
+        }
+      }
+    }
     if (postLink && /[?&]comment_id=/.test(postLink)) { commentLink ||= postLink; postLink = postLink.replace(/([?&])comment_id=[^&]*&?/, '$1').replace(/[?&]$/, ''); }
-    return { message_id: Number(card.id), comment: text, post, post_link: postLink, comment_link: commentLink, media_url: media(card.media_url), at: card.created_at };
+    return { message_id: Number(card.id), comment: text, post: postText, post_link: postLink, comment_link: commentLink, media_url: media(card.media_url), at: card.created_at };
   }
 
   private async buildCompanyContactRows(companyId: number): Promise<CompanyContactRow[]> {
@@ -3110,6 +3189,7 @@ export class BotAdminService {
     conversationId: number,
     text: string,
     replyToMessageId?: number,
+    confirmRisk = false,
   ) {
     await this.assertConversationAccess(user, conversationId);
     const trimmed = text.trim();
@@ -3150,6 +3230,7 @@ export class BotAdminService {
     const quotedProviderId = quoted?.provider_message_id ? quoted.provider_message_id.split(':')[0] : null;
 
     const socialPlatform = channelUser.platform?.toLowerCase();
+    await this.assertSafeToSend(user.company_id, conversationId, socialPlatform, channelUser.external_user_id, trimmed, confirmRisk);
     let providerMessageId: string | null = null;
     if (socialPlatform === 'tiktok') {
       providerMessageId = await this.sendTiktok(() => TiktokHook.sendText(
@@ -3253,6 +3334,7 @@ export class BotAdminService {
     caption?: string,
   ) {
     const { conversation, channelUser, isAdmin } = await this.loadWritableConversation(user, conversationId);
+    await this.assertSafeToSend(user.company_id, conversationId, channelUser.platform, channelUser.external_user_id, caption?.trim() || null, true);
     const uploaded = this.normalizeUploadedMediaFile(file);
     const mimetype = uploaded.mimetype.split(';')[0].trim().toLowerCase() || 'application/octet-stream';
     const fileName = uploaded.originalname;
@@ -3506,6 +3588,7 @@ export class BotAdminService {
     native: { type: 'location' | 'contacts'; meta: unknown; evolutionPath: string; evolutionBody: Record<string, unknown> },
   ) {
     const { conversation, channelUser, isAdmin } = await this.loadWritableConversation(user, conversationId);
+    await this.assertSafeToSend(user.company_id, conversationId, channelUser.platform, channelUser.external_user_id, null);
     const platform = this.normalizeChannelPlatform(channelUser.platform);
     let providerMessageId: string | null = null;
     let sentNative = false;

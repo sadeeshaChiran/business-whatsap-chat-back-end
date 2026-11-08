@@ -8,7 +8,8 @@ function adIdOf(raw: unknown): string | null {
   const referral = (raw as { referral?: { source_id?: string; source_type?: string } } | null | undefined)?.referral;
   return referral?.source_id && (!referral.source_type || referral.source_type === 'ad') ? String(referral.source_id) : null;
 }
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { CoexistenceService } from './coexistence';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AgentRoutingService } from '../../agent-routing/agent-routing.service';
@@ -35,6 +36,7 @@ export class WhatsappService {
     private readonly providerFactory: WhatsappProviderFactory,
     private readonly metaAdapter: MetaAdapter,
     private readonly agentRoutingService: AgentRoutingService,
+    @Optional() private readonly coexistence?: CoexistenceService,
   ) {}
 
   async resolveMetaDisplayPhoneNumber(
@@ -98,10 +100,15 @@ export class WhatsappService {
   }
 
   async processInboundWebhook(body: unknown) {
+    // WhatsApp Business app + Cloud API on one number: messages sent from the phone, past chats, phone contacts
+    const coexistence = await this.coexistence?.handle(body).catch((error: unknown) => {
+      this.logger.warn(`coexistence webhook failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
     const statusResult = await this.processMetaStatusCallbacks(body);
     const normalizedMessages = this.providerFactory.normalizeInboundWebhooks(body);
     if (!normalizedMessages.length) {
-      return statusResult ?? { accepted: false, reason: 'unsupported_payload' };
+      return statusResult ?? coexistence ?? { accepted: false, reason: 'unsupported_payload' };
     }
 
     const results: Awaited<ReturnType<WhatsappService['processNormalizedInbound']>>[] = [];

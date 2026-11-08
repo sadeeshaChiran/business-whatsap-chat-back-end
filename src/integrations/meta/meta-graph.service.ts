@@ -88,7 +88,7 @@ export class MetaGraphService {
    * WhatsApp Embedded Signup as a full-page redirect (same way as the Facebook Page login): no popup and no Meta
    * browser SDK, so nothing can get stuck in the browser. Meta comes back to META_OAUTH_REDIRECT_URI with a code.
    */
-  buildWhatsappAuthUrl(state: string): string {
+  buildWhatsappAuthUrl(state: string, businessApp = false): string {
     const cfg = this.getConfig();
     const configId = process.env.META_WHATSAPP_CONFIG_ID?.trim() ?? '';
     if (!configId) throw new BadRequestException('One-click WhatsApp connection is not switched on for this platform yet (META_WHATSAPP_CONFIG_ID).');
@@ -99,7 +99,8 @@ export class MetaGraphService {
       response_type: 'code',
       config_id: configId,
       override_default_response_type: 'true',
-      extras: JSON.stringify({ setup: {}, featureType: '', sessionInfoVersion: '3' }),
+      // whatsapp_business_app_onboarding = coexistence: the number stays in the WhatsApp Business app on the phone too
+      extras: JSON.stringify({ setup: {}, featureType: businessApp ? 'whatsapp_business_app_onboarding' : '', sessionInfoVersion: '3' }),
     });
     return `https://www.facebook.com/${cfg.graphVersion}/dialog/oauth?${params.toString()}`;
   }
@@ -666,6 +667,31 @@ export class MetaGraphService {
     const message = payload.error?.message ?? `Meta answered ${response.status}`;
     if (/already registered|already been registered/i.test(message)) return { registered: true, message: 'Number was already registered.' };
     return { registered: false, message };
+  }
+
+  /**
+   * Coexistence: asks Meta to send the phone's contacts (smb_app_state_sync) and up to 6 months of chats (history) to our
+   * webhook. Allowed once each, within 24 hours after the number was connected.
+   */
+  async requestBusinessAppSync(phoneNumberId: string, accessToken: string): Promise<{ contacts: string; history: string }> {
+    const cfg = this.getConfig();
+    const ask = async (syncType: 'smb_app_state_sync' | 'history') => {
+      try {
+        const response = await fetch(this.graphUrl(`/${encodeURIComponent(phoneNumberId)}/smb_app_data`, cfg), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: syncType }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const payload = (await response.json().catch(() => ({}))) as GraphErrorBody;
+        return response.ok ? 'requested' : payload.error?.message ?? `Meta answered ${response.status}`;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    const contacts = await ask('smb_app_state_sync');
+    const history = await ask('history');
+    return { contacts, history };
   }
 
   /** Small GET helper for the connection health check (returns null on any error). */

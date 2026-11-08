@@ -63,7 +63,7 @@ export class MetaOAuthController {
             role: 'admin',
             is_super_admin: false,
           },
-          { code: code.trim(), via_redirect: true },
+          { code: code.trim(), via_redirect: true, business_app: payload.x === 1 },
           payload.a ? { label: payload.l, purpose: payload.p } : undefined,
         );
         const params = new URLSearchParams({

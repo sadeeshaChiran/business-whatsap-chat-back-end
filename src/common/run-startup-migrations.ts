@@ -86,6 +86,8 @@ const MIGRATION_FILES = [
   'supabase_paymentslk.sql',
   'supabase_system_senders.sql',
   'supabase_social_post_ai.sql',
+  'supabase_open_api.sql',
+  'supabase_inbox_privacy_number_agents.sql',
 ] as const;
 
 function migrationDir(): string | null {

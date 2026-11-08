@@ -11,6 +11,8 @@ export type MetaOAuthStatePayload = {
   a?: 1;
   l?: string;
   p?: string;
+  /** 1 = WhatsApp Business app number (coexistence: the phone app keeps working) */
+  x?: 1;
 };
 
 const STATE_TTL_MS = 15 * 60 * 1000;
@@ -31,6 +33,7 @@ export function buildMetaOAuthState(
   returnPath?: string,
   whatsapp = false,
   addNumber?: { label?: string; purpose?: string },
+  businessApp = false,
 ): string {
   const payload: MetaOAuthStatePayload = {
     c: companyId,
@@ -43,6 +46,7 @@ export function buildMetaOAuthState(
   if (whatsapp) {
     payload.w = 1;
     payload.r = '/channels/whatsapp';
+    if (businessApp) payload.x = 1;
     if (addNumber) {
       payload.a = 1;
       if (addNumber.label?.trim()) payload.l = addNumber.label.trim().slice(0, 40);

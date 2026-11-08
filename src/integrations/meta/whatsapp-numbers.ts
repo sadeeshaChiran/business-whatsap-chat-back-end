@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get,
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { DataSource } from 'typeorm';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AdminOnly } from '../../auth/decorators/roles.decorator';
@@ -25,11 +25,15 @@ export class WhatsappNumberUpdateDto {
   @IsOptional() @IsBoolean() bot_enabled?: boolean;
   /** true = make this the main number */
   @IsOptional() @IsBoolean() is_primary?: boolean;
+  /** Only these agents get the chats of this number; [] / null = every agent */
+  @IsOptional() @IsArray() @ArrayMaxSize(100) @IsInt({ each: true }) agent_ids?: number[] | null;
 }
 
 export class WhatsappNumberAddDto {
   @IsOptional() @IsString() @MaxLength(40) label?: string;
   @IsOptional() @IsIn([...NUMBER_PURPOSES]) purpose?: string;
+  /** "1" = a number that stays in the WhatsApp Business app on the phone (coexistence) */
+  @IsOptional() @IsIn(['1', '0', 'true', 'false']) app?: string;
 }
 
 export class WhatsappNumberStatsDto {
@@ -115,8 +119,15 @@ export class WhatsappNumbersService {
       }
     }
     const max = await this.maxNumbers(companyId);
+    // agents the owner can give a number to (Channels → WhatsApp → "Agents for this number")
+    const team = (await this.dataSource.query(
+      `SELECT u.id, u.name FROM app_user u JOIN companies co ON co.id = u.company_id
+        WHERE u.company_id = $1 AND COALESCE(u.is_active, TRUE) = TRUE AND u.id <> COALESCE(co.admin_user_id, 0)
+          AND COALESCE(u.team_role, 'agent') <> 'supervisor'
+        ORDER BY u.name ASC`, [companyId]).catch(() => [])) as Array<{ id: number; name: string }>;
     return {
       days,
+      agents: team.map((agent) => ({ id: Number(agent.id), name: agent.name })),
       max_numbers: max,
       can_add: max === null || rows.length < max,
       purposes: NUMBER_PURPOSES,
@@ -128,6 +139,8 @@ export class WhatsappNumbersService {
           purpose: row.purpose ?? null,
           bot_note: row.bot_note ?? null,
           bot_enabled: row.bot_enabled !== false,
+          business_app: row.coexistence === true,
+          agent_ids: (row.agent_ids ?? []).map((id) => Number(id)).filter((id) => id > 0),
           is_primary: rows.length === 1 ? true : Boolean(row.is_primary),
           display_phone: row.display_phone ?? null,
           verified_name: row.verified_name ?? null,
@@ -170,6 +183,16 @@ export class WhatsappNumbersService {
     if (body.purpose !== undefined) put('purpose', body.purpose || null);
     if (body.bot_note !== undefined) put('bot_note', body.bot_note?.trim() || null);
     if (body.bot_enabled !== undefined) put('bot_enabled', body.bot_enabled);
+    if (body.agent_ids !== undefined) {
+      const wanted = [...new Set((body.agent_ids ?? []).map((value) => Number(value)).filter((value) => value > 0))];
+      const ok = wanted.length
+        ? ((await this.dataSource.query(`SELECT id FROM app_user WHERE company_id = $1 AND id = ANY($2::bigint[])`, [companyId, wanted])) as Array<{ id: number }>)
+            .map((row) => Number(row.id))
+        : [];
+      if (ok.length !== wanted.length) throw new BadRequestException('Choose agents of your own team.');
+      params.push(ok.length ? ok : null);
+      sets.push(`agent_ids = $${params.length}::bigint[]`);
+    }
     await this.dataSource.transaction(async (manager) => {
       if (sets.length) await manager.query(`UPDATE whatsapp_channels SET ${sets.join(', ')} WHERE id = $1 AND company_id = $2`, params);
       if (body.is_primary === true) {
@@ -200,8 +223,9 @@ export class WhatsappNumbersService {
     if (count === 0) throw new BadRequestException('Connect your main WhatsApp number first.');
     if (max !== null && count >= max)
       throw new ForbiddenException(`Your package allows ${max} WhatsApp number${max === 1 ? '' : 's'}. Upgrade in Billing to add more.`);
-    const state = buildMetaOAuthState(companyId, Number(user.id), '/channels/whatsapp', true, { label: body.label, purpose: body.purpose });
-    return { url: this.metaGraph.buildWhatsappAuthUrl(state) };
+    const businessApp = body.app === '1' || body.app === 'true';
+    const state = buildMetaOAuthState(companyId, Number(user.id), '/channels/whatsapp', true, { label: body.label, purpose: body.purpose }, businessApp);
+    return { url: this.metaGraph.buildWhatsappAuthUrl(state, businessApp) };
   }
 }
 
