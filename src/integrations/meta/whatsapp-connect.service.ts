@@ -78,6 +78,18 @@ export class WhatsappConnectService {
    * Coexistence number connected: mark it, then ask Meta for the phone's contacts and the last 6 months of chats
    * (they come to our webhook – see integrations/whatsapp/coexistence.ts). Never fails the connection.
    */
+  /**
+   * Is this number really in the WhatsApp Business app (coexistence)? The owner may press "Use my WhatsApp Business app
+   * number" for a number that is not in the app – Meta then onboards it as a normal Cloud API number (no QR step), and it
+   * must be registered like any other number.
+   */
+  private async onBusinessApp(phoneNumberId: string, accessToken: string): Promise<boolean> {
+    const phone = await this.metaGraphService
+      .healthGet<{ is_on_biz_app?: boolean; platform_type?: string }>(`/${phoneNumberId}`, accessToken, { fields: 'is_on_biz_app,platform_type' })
+      .catch(() => null);
+    return phone?.data?.is_on_biz_app === true;
+  }
+
   private async afterBusinessAppConnect(companyId: number, phoneNumberId: string, accessToken: string) {
     await this.companyRepository.manager
       .query(`UPDATE whatsapp_channels SET coexistence = TRUE WHERE company_id = $1 AND meta_phone_number_id = $2`, [companyId, phoneNumberId])
@@ -130,7 +142,8 @@ export class WhatsappConnectService {
       ? String(process.env.WHATSAPP_REGISTRATION_PIN)
       : String(Math.floor(100000 + Math.random() * 900000));
     // coexistence numbers are NOT registered (that would take the number away from the phone app)
-    const registration = body.business_app
+    const coexistence = body.business_app === true && (await this.onBusinessApp(phoneNumberId, accessToken));
+    const registration = coexistence
       ? { registered: true, message: 'WhatsApp Business app number (coexistence).' }
       : await this.metaGraphService.registerWhatsappNumber(
           phoneNumberId,
@@ -160,7 +173,7 @@ export class WhatsappConnectService {
       },
       user,
     );
-    if (body.business_app) await this.afterBusinessAppConnect(Number(company.id), phoneNumberId, accessToken);
+    if (coexistence) await this.afterBusinessAppConnect(Number(company.id), phoneNumberId, accessToken);
     return {
       company: savedCompany,
       display_phone_number: phone.display_phone_number,
@@ -201,7 +214,8 @@ export class WhatsappConnectService {
     const pin = /^\d{6}$/.test(String(process.env.WHATSAPP_REGISTRATION_PIN ?? ''))
       ? String(process.env.WHATSAPP_REGISTRATION_PIN)
       : String(Math.floor(100000 + Math.random() * 900000));
-    const registration = body.business_app
+    const coexistence = body.business_app === true && (await this.onBusinessApp(phoneNumberId, accessToken));
+    const registration = coexistence
       ? { registered: true, message: 'WhatsApp Business app number (coexistence).' }
       : await this.metaGraphService.registerWhatsappNumber(phoneNumberId, accessToken, pin);
     const main = existing[0] ?? null;
@@ -216,7 +230,7 @@ export class WhatsappConnectService {
       label: addNumber.label?.trim() || null,
       purpose: addNumber.purpose?.trim() || null,
     });
-    if (body.business_app) await this.afterBusinessAppConnect(Number(company.id), phoneNumberId, accessToken);
+    if (coexistence) await this.afterBusinessAppConnect(Number(company.id), phoneNumberId, accessToken);
     return {
       company,
       display_phone_number: phone.display_phone_number,
