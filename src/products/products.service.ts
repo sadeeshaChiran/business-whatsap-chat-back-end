@@ -81,6 +81,13 @@ export function cleanBrand(value: string | null | undefined): string | null {
   return text || null;
 }
 
+/** A product sent by the shop's own system (Shop API). */
+export type ApiProductInput = {
+  sku?: string; name?: string; brand?: string; category?: string; price?: number; description?: string; weight?: number;
+  available?: boolean; show_to_bot?: boolean; selling_points?: string; image_urls?: string[];
+  variants?: Array<{ name: string; value: string; price?: number; sku?: string; available?: boolean; weight?: number; image_url?: string }>;
+};
+
 @Injectable()
 export class ProductsService implements OnModuleInit {
   private readonly logger = new Logger(ProductsService.name);
@@ -1532,6 +1539,75 @@ export class ProductsService implements OnModuleInit {
       warnings,
       items: createdProducts,
     };
+  }
+
+  /**
+   * Shop API (open-api): add or update products from the shop's own system, same rules as the file import – a product
+   * with the same SKU (or name) is UPDATED, otherwise added. Fields left out keep their value on an update (name and
+   * category too). Each product is handled on its own: one bad product never stops the others.
+   */
+  async upsertFromApi(items: ApiProductInput[], user: AuthenticatedUser) {
+    await this.assertProductBusiness(user.company_id);
+    const results: Array<{ sku: string | null; name: string; id?: number; action: 'created' | 'updated' | 'error'; error?: string }> = [];
+    const existing = new Map<number, Product>();
+    for (const [index, item] of items.entries()) {
+      const sku = String(item.sku ?? '').trim();
+      const found = sku ? await this.productRepository.findOne({ where: { company_id: user.company_id, is_deleted: false, sku } as never, relations: ['category'] }) : null;
+      if (found) existing.set(index, found);
+    }
+    await this.assertProductRoom(Number(user.company_id), items.length - existing.size);
+    for (const [index, item] of items.entries()) {
+      const found = existing.get(index);
+      const sku = String(item.sku ?? '').trim();
+      const name = String(item.name ?? found?.name ?? '').trim();
+      try {
+        if (!name) throw new BadRequestException('name is required for a new product');
+        const yesNo = (v: boolean | undefined) => (v === undefined ? undefined : v ? 'yes' : 'no');
+        const base: Record<string, unknown> = {
+          name,
+          sku: item.sku ?? '',
+          brand: item.brand ?? '',
+          category: item.category ?? (found as unknown as { category?: { name?: string } } | null)?.category?.name ?? '',
+          price: item.price ?? '',
+          description: item.description ?? '',
+          weight: item.weight ?? '',
+          available: yesNo(item.available) ?? '',
+          show_to_bot: yesNo(item.show_to_bot) ?? '',
+          selling_points: item.selling_points ?? '',
+          image_urls: (item.image_urls ?? []).join(', '),
+        };
+        const variants = item.variants ?? [];
+        const rows = variants.length
+          ? variants.map((v, i) => ({ ...(i ? { name } : base), ...(i ? { category: base.category } : {}), variant_name: v.name, variant_value: v.value,
+              variant_price: v.price ?? '', variant_sku: v.sku ?? '', variant_available: yesNo(v.available) ?? '', variant_weight: v.weight ?? '',
+              variant_image_url: v.image_url ?? '' }))
+          : [base];
+        if (item.selling_points === undefined) rows.forEach((row) => delete (row as Record<string, unknown>).selling_points);
+        if (item.show_to_bot === undefined) rows.forEach((row) => delete (row as Record<string, unknown>).show_to_bot);
+        const [group] = this.normalizeImportRows(rows);
+        if (!group) throw new BadRequestException('nothing to save');
+        const saved = await this.persistImportGroup(group, user);
+        results.push({ sku: sku || null, name, id: Number((saved.product as unknown as { id: number }).id), action: saved.updated ? 'updated' : 'created' });
+      } catch (error) {
+        results.push({ sku: sku || null, name, action: 'error', error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (results.some((r) => r.action !== 'error')) this.photoJobSoon();
+    return { results, created: results.filter((r) => r.action === 'created').length, updated: results.filter((r) => r.action === 'updated').length,
+      errors: results.filter((r) => r.action === 'error').length };
+  }
+
+  /** Shop API: the product with this SKU (product SKU, or the SKU of one of its options). */
+  async findBySkuForApi(companyId: number, sku: string): Promise<{ product: Product; variantValue?: string } | null> {
+    const product = await this.productRepository.findOne({ where: { company_id: companyId, is_deleted: false, sku } as never });
+    if (product) return { product };
+    const [row] = await this.productRepository.query(
+      `SELECT p.id, v->>'variant_value' AS value FROM product p JOIN product_variant pv ON pv.product_id = p.id
+         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(pv.variants::jsonb, '[]'::jsonb)) v
+        WHERE p.company_id = $1 AND p.is_deleted = FALSE AND LOWER(v->>'sku') = LOWER($2) LIMIT 1`, [companyId, sku]).catch(() => []) as Array<{ id: number; value: string }>;
+    if (!row) return null;
+    const owner = await this.productRepository.findOne({ where: { id: row.id, company_id: companyId } as never });
+    return owner ? { product: owner, variantValue: row.value } : null;
   }
 
   /** One tap from the list / app: the whole product, or one variant option (by its value, e.g. "Red / M"). */

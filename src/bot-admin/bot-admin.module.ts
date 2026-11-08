@@ -8,6 +8,8 @@ import { User } from '../users/entities/user.entity';
 import { PusherService } from '../common/pusher.service';
 import { BotAdminController } from './bot-admin.controller';
 import { BotAdminService } from './bot-admin.service';
+import { MessagePrivacyService } from './message-privacy';
+import { SendSafetyService } from './send-safety';
 import { BotChannelUser } from './entities/bot-channel-user.entity';
 import { BotConversation } from './entities/bot-conversation.entity';
 import { BotFlag } from './entities/bot-flag.entity';
@@ -57,8 +59,8 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
   ],
   // ChatMediaPublicController serves the signed public links (invoice PDFs, Instagram media)
   controllers: [BotAdminController, ChatMediaPublicController],
-  providers: [BotAdminService, PusherService, MetaSocialSenderService],
+  providers: [BotAdminService, PusherService, MetaSocialSenderService, MessagePrivacyService, SendSafetyService],
   // the sales bot reuses order messages and invoices
-  exports: [BotAdminService],
+  exports: [BotAdminService, MessagePrivacyService],
 })
 export class BotAdminModule {}

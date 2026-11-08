@@ -13,6 +13,8 @@ import {
 } from './whatsapp-provider.factory';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
 import { WhatsappService } from './whatsapp.service';
+import { CoexistenceService } from './coexistence';
+import { PusherService } from '../../common/pusher.service';
 
 @Module({
   imports: [AuthModule, AgentRoutingModule, WhatsappModule, TypeOrmModule.forFeature([WhatsappChannel, BotMessage])],
@@ -23,6 +25,8 @@ import { WhatsappService } from './whatsapp.service';
     WhatsappProviderFactory,
     WhatsappRoutingService,
     WhatsappService,
+    CoexistenceService,
+    PusherService,
   ],
   exports: [WhatsappService, WhatsappProviderFactory],
 })

@@ -50,6 +50,6 @@ import { PhotoMatchService } from './photo-match';
   ],
   controllers: [SalesBotController],
   providers: [SalesBotClient, SalesBotContextService, PhotoMatchService, SalesBotEngineService, SalesBotAdminService, ManualOrdersService, PusherService, MetaSocialSenderService],
-  exports: [SalesBotContextService],
+  exports: [SalesBotContextService, SalesBotAdminService],
 })
 export class SalesBotModule {}

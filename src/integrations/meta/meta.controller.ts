@@ -55,6 +55,10 @@ function eventsCheck(companyId: number | null | undefined, platform: 'messenger'
   };
 }
 
+/** Meta phone number statuses where the number cannot send or receive, and a PIN / re-register does not help. */
+const NUMBER_BLOCKED = new Set(['BANNED', 'RESTRICTED', 'DISCONNECTED', 'DELETED']);
+const NUMBER_BLOCKED_TEXT = /^Status: (BANNED|RESTRICTED|DISCONNECTED|DELETED)\./;
+
 export function presentChecks(checks: HealthCheck[], channel: 'whatsapp' | 'messenger' | 'instagram'): HealthCheck[] {
   return checks.map((raw) => {
     if (TECH_KEYS.has(raw.key)) return { ...raw, tech: true };
@@ -67,7 +71,9 @@ export function presentChecks(checks: HealthCheck[], channel: 'whatsapp' | 'mess
         return { ...check, label: 'Number health', detail: QUALITY[check.detail] ?? check.detail };
       case 'registered':
         return { ...check, label: 'Number can send and receive messages',
-          detail: check.ok ? 'Ready' : 'Not ready yet. Press “Fix it” and enter your 6-digit WhatsApp PIN (or choose a new one).' };
+          detail: check.ok ? 'Ready'
+            : NUMBER_BLOCKED_TEXT.test(check.detail) ? `Blocked by Meta (${check.detail.match(NUMBER_BLOCKED_TEXT)?.[1]}). Messages are not sent or received. Open WhatsApp Manager → Account quality and request a review.`
+            : 'Not ready yet. Press “Fix it” and enter your 6-digit WhatsApp PIN (or choose a new one).' };
       case 'webhook':
         return { ...check, label: 'New messages come to your Inbox',
           detail: check.ok ? 'On' : check.fix ? 'Off – press “Fix it”.' : `Off – ${check.detail}` };
@@ -138,10 +144,12 @@ export class MetaController {
 
   /** Redirect flow for WhatsApp (like the Facebook Page login): the browser goes to Meta and comes back. */
   @Get('whatsapp/auth-url')
-  async getWhatsappAuthUrl(@CurrentUser() user: AuthenticatedUser) {
+  async getWhatsappAuthUrl(@CurrentUser() user: AuthenticatedUser, @Query('app') app?: string) {
     await this.assertAdmin(user);
-    const state = buildMetaOAuthState(user.company_id, user.id, '/channels/whatsapp', true);
-    return { url: this.metaGraphService.buildWhatsappAuthUrl(state) };
+    // ?app=1: the number stays in the WhatsApp Business app on the phone too (coexistence)
+    const businessApp = app === '1' || app === 'true';
+    const state = buildMetaOAuthState(user.company_id, user.id, '/channels/whatsapp', true, undefined, businessApp);
+    return { url: this.metaGraphService.buildWhatsappAuthUrl(state, businessApp) };
   }
 
   @Post('whatsapp/connect')
@@ -222,10 +230,14 @@ export class MetaController {
       if (phone.ok) {
         whatsapp.push({ key: 'quality', label: 'Number quality', ok: phone.data?.quality_rating !== 'RED', detail: phone.data?.quality_rating ?? 'unknown' });
         const registered = phone.data?.platform_type === 'CLOUD_API';
+        const status = String(phone.data?.status ?? '').toUpperCase();
+        const blocked = NUMBER_BLOCKED.has(status);   // banned / restricted by Meta: a PIN does not help
         whatsapp.push({
-          key: 'registered', label: 'Number is registered for the Cloud API', ok: registered,
-          detail: registered ? `Status: ${phone.data?.status ?? 'CONNECTED'}` : `Meta says: ${phone.data?.platform_type ?? 'not registered'} / ${phone.data?.status ?? '?'}. A number that is not registered cannot send or receive. Press “Fix it” and enter the 6-digit two-step PIN (or a new one if none was set).`,
-          fix: registered ? undefined : 'whatsapp_register',
+          key: 'registered', label: 'Number is registered for the Cloud API', ok: registered && !blocked,
+          detail: blocked
+            ? `Status: ${status}. Meta has blocked this number – it cannot send or receive messages. Open WhatsApp Manager (business.facebook.com → WhatsApp Manager → Phone numbers / Account quality) and request a review.`
+            : registered ? `Status: ${phone.data?.status ?? 'CONNECTED'}` : `Meta says: ${phone.data?.platform_type ?? 'not registered'} / ${phone.data?.status ?? '?'}. A number that is not registered cannot send or receive. Press “Fix it” and enter the 6-digit two-step PIN (or a new one if none was set).`,
+          fix: registered || blocked ? undefined : 'whatsapp_register',
         });
       }
       if (channel.meta_waba_id) {

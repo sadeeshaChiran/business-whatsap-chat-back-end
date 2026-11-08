@@ -33,6 +33,7 @@ import { SmsModule } from './sms/sms.controller';
 import { RealtimeModule } from './realtime/realtime.controller';
 import { PublicHelpModule } from './public-help/public-help';
 import { PublicDemoModule } from './public-demo/public-demo';
+import { OpenApiModule } from './open-api/open-api';
 
 const supabaseDatabaseUrl = getSupabaseDatabaseUrl();
 if (!supabaseDatabaseUrl) {
@@ -80,6 +81,7 @@ if (!supabaseDatabaseUrl) {
     RealtimeModule,
     PublicHelpModule,
     PublicDemoModule,
+    OpenApiModule,
   ],
   controllers: [AppController],
   providers: [

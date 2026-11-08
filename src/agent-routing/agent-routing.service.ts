@@ -222,6 +222,24 @@ export class AgentRoutingService {
     return Number(row.assigned_agent_id);
   }
 
+  /**
+   * Channels → WhatsApp → "Agents for this number": when the number the customer wrote to has agents set, only those
+   * agents get the chat. null = no limit (every agent, as before).
+   */
+  async numberAgentIds(conversationId: number): Promise<number[] | null> {
+    const rows: Array<{ agent_ids: Array<string | number> | null }> = await this.conversationRepository
+      .query(
+        `SELECT wc.agent_ids FROM bot_conversation c
+           JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
+           JOIN whatsapp_channels wc ON wc.id = COALESCE(cu.whatsapp_channel_id, cu.first_whatsapp_channel_id)
+          WHERE c.id = $1 AND cu.platform = 'whatsapp'`,
+        [conversationId],
+      )
+      .catch(() => []);
+    const ids = (rows[0]?.agent_ids ?? []).map((id) => Number(id)).filter((id) => id > 0);
+    return ids.length ? ids : null;
+  }
+
   private async resolveStickyAgent(
     companyId: number,
     phone: string,
@@ -436,11 +454,14 @@ export class AgentRoutingService {
       }
     }
 
-    const stickyAgent = await this.resolveStickyAgent(
+    const allowed = await this.numberAgentIds(conversationId);
+    const resolvedSticky = await this.resolveStickyAgent(
       companyId,
       phone,
       excludeAgentId,
     );
+    // a number with its own agents: the customer's earlier agent only when he is one of them
+    const stickyAgent = resolvedSticky && (!allowed || allowed.includes(Number(resolvedSticky.id))) ? resolvedSticky : null;
     if (stickyAgent) {
       await this.assignConversationToAgent(
         companyId,
@@ -453,10 +474,11 @@ export class AgentRoutingService {
       return { agentId: stickyAgent.id, assignmentMode: 'sticky' };
     }
 
-    const agents = await this.getActiveAgents(companyId, excludeAgentId);
+    const agents = (await this.getActiveAgents(companyId, excludeAgentId))
+      .filter((agent) => !allowed || allowed.includes(Number(agent.id)));
     if (agents.length === 0) {
       this.logger.warn(
-        `No online agents for company ${companyId}; conversation ${conversationId} left unassigned`,
+        `No online agents for company ${companyId}${allowed ? ' (agents of this number)' : ''}; conversation ${conversationId} left unassigned`,
       );
       await this.returnConversationToQueue(companyId, conversationId);
       return { agentId: null, assignmentMode: 'unassigned' };
@@ -948,6 +970,10 @@ export class AgentRoutingService {
          FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id
         WHERE CAST(cu.company_id AS BIGINT) = $1 AND c.assigned_agent_id = ANY($2::int[]) AND c.status IN ('pending', 'active')
           AND COALESCE(c.assignment_mode, 'round_robin') NOT IN ('sticky', 'manual')
+          -- chats of a number with its own agents stay with them
+          AND NOT EXISTS (SELECT 1 FROM whatsapp_channels wc
+                           WHERE cu.platform = 'whatsapp' AND wc.id = COALESCE(cu.whatsapp_channel_id, cu.first_whatsapp_channel_id)
+                             AND COALESCE(cardinality(wc.agent_ids), 0) > 0)
           AND c.last_message_at::timestamptz >= NOW() - INTERVAL '24 hours'
           AND (c.agent_last_read_at IS NULL OR c.assigned_at IS NULL OR c.agent_last_read_at::timestamptz < c.assigned_at::timestamptz)
           AND NOT EXISTS (SELECT 1 FROM bot_message m

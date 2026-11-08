@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   ParseIntPipe,
@@ -45,13 +46,29 @@ import { UpdateOrderNoteDto } from './dto/update-order-note.dto';
 import { UpdateBotOrderDto } from './dto/update-bot-order.dto';
 import { RawResponse } from '../common/decorators/raw-response.decorator';
 import { SaveMessageTemplateDto, SendMessageTemplateDto } from './dto/save-message-template.dto';
+import { MessagePrivacyService, maskRows, maskThread, type MessagePrivacy } from './message-privacy';
 
 @Controller('bot')
 @ApiTags('Bot Admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 export class BotAdminController {
-  constructor(private readonly botAdminService: BotAdminService) { }
+  constructor(
+    private readonly botAdminService: BotAdminService,
+    private readonly privacy: MessagePrivacyService,
+  ) { }
+
+  /** Settings → Inbox privacy (owner): hide the message text of WhatsApp / Messenger / Instagram chats in the inbox. */
+  @Get('message-privacy')
+  getMessagePrivacy(@CurrentUser() user: AuthenticatedUser) {
+    return this.privacy.get(Number(user.company_id));
+  }
+
+  @Put('message-privacy')
+  @AdminOnly()
+  setMessagePrivacy(@CurrentUser() user: AuthenticatedUser, @Body() body: Partial<MessagePrivacy>) {
+    return this.privacy.set(Number(user.company_id), body ?? {});
+  }
 
   @Get('stats')
   getStats(@CurrentUser() user: AuthenticatedUser) {
@@ -90,16 +107,17 @@ export class BotAdminController {
   }
 
   @Get('conversations')
-  getConversations(
+  async getConversations(
     @CurrentUser() user: AuthenticatedUser,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.botAdminService.getConversations(
+    const rows = await this.botAdminService.getConversations(
       user,
       page == null ? undefined : Number(page),
       limit == null ? undefined : Number(limit),
     );
+    return maskRows(rows, await this.privacy.get(Number(user.company_id)));
   }
 
   @Patch('conversations/:id/lead-stage')
@@ -153,18 +171,19 @@ export class BotAdminController {
   }
 
   @Get('conversations/evolution/messages')
-  getEvolutionInboxMessages(
+  async getEvolutionInboxMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Query('remoteJid') remoteJid: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.botAdminService.getEvolutionInboxMessages(
+    const result = await this.botAdminService.getEvolutionInboxMessages(
       user,
       remoteJid,
       Number(page ?? 1),
       Number(limit ?? 30),
     );
+    return maskThread(result as { messages?: Array<Record<string, any>> }, await this.privacy.get(Number(user.company_id)), 'whatsapp');
   }
 
   @Post('conversations/evolution/messages')
@@ -205,13 +224,15 @@ export class BotAdminController {
     return this.botAdminService.sendConversationTemplate(user, id, templateId, payload);
   }
   @Get('conversations/:id/messages/search')
-  searchConversationMessages(
+  async searchConversationMessages(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseIntPipe) id: number,
     @Query('q') q?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.botAdminService.searchConversationMessages(user, id, q ?? '', limit == null ? undefined : Number(limit));
+    const result = await this.botAdminService.searchConversationMessages(user, id, q ?? '', limit == null ? undefined : Number(limit));
+    // hidden chat text is not searchable either
+    return (await this.privacy.conversationHidden(Number(user.company_id), id)) ? { results: [] } : result;
   }
 
   /** Where the chat came from (ad / post / link / broadcast) – the banner at the top of the open chat. */
@@ -221,7 +242,7 @@ export class BotAdminController {
   }
 
   @Get('conversations/:id')
-  getConversation(
+  async getConversation(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseIntPipe) id: number,
     @Query('page') page?: string,
@@ -230,7 +251,7 @@ export class BotAdminController {
     @Query('after_id') afterId?: string,
     @Query('light') light?: string,
   ) {
-    return this.botAdminService.getConversation(
+    const result = await this.botAdminService.getConversation(
       user,
       id,
       page == null ? undefined : Number(page),
@@ -241,6 +262,8 @@ export class BotAdminController {
         light: light === '1' || light === 'true',
       },
     );
+    const platform = (result.conversation as { channelUser?: { platform?: string } } | null)?.channelUser?.platform;
+    return maskThread(result, await this.privacy.get(Number(user.company_id)), platform);
   }
 
   @Get('conversations/:conversationId/messages/:messageId/media')
@@ -250,6 +273,9 @@ export class BotAdminController {
     @Param('conversationId', ParseIntPipe) conversationId: number,
     @Param('messageId', ParseIntPipe) messageId: number,
   ) {
+    if (await this.privacy.conversationHidden(Number(user.company_id), conversationId)) {
+      throw new ForbiddenException('Messages of this channel are hidden (Settings → Inbox privacy).');
+    }
     const media = await this.botAdminService.getConversationMessageMedia(
       user,
       conversationId,
@@ -297,7 +323,7 @@ export class BotAdminController {
     @Param('id', ParseIntPipe) id: number,
     @Body() payload: SendConversationMessageDto,
   ) {
-    return this.botAdminService.sendConversationMessage(user, id, payload.text, payload.reply_to_message_id);
+    return this.botAdminService.sendConversationMessage(user, id, payload.text, payload.reply_to_message_id, payload.confirm_risk === true);
   }
 
   /** Share a map location from the chat (the 📎 → Location button) */
@@ -353,13 +379,15 @@ export class BotAdminController {
   /** The agent's inbox (same rows as the admin inbox, only the agent's own chats) */
   @Get('agent/inbox')
   getAgentInbox(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.botAdminService.getAgentInbox(user, page ? Number(page) : 1, limit ? Number(limit) : 80);
+    return this.botAdminService.getAgentInbox(user, page ? Number(page) : 1, limit ? Number(limit) : 80)
+      .then(async (rows) => maskRows(rows, await this.privacy.get(Number(user.company_id))));
   }
 
   /** Get only conversations assigned to the currently logged-in agent */
   @Get('agent/conversations')
   getAgentConversations(@CurrentUser() user: AuthenticatedUser) {
-    return this.botAdminService.getAgentConversations(user);
+    return this.botAdminService.getAgentConversations(user)
+      .then(async (rows) => maskRows(rows, await this.privacy.get(Number(user.company_id))));
   }
 
   /** Orders for clients currently assigned to this agent only */

@@ -85,5 +85,13 @@ export class WhatsappChannel {
 
   @Column({ type: 'text', nullable: true })
   verified_name: string | null;
+
+  /** WhatsApp Business app number (coexistence): the phone app and the Cloud API work at the same time */
+  @Column({ type: 'boolean', default: false })
+  coexistence: boolean;
+
+  /** Only these agents get the chats of this number (null / empty = every agent) */
+  @Column({ type: 'bigint', array: true, nullable: true })
+  agent_ids: string[] | null;
 }
 
