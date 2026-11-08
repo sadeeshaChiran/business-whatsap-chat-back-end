@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 
 export class ConnectWhatsappEmbeddedDto {
   @IsString()
@@ -21,4 +21,9 @@ export class ConnectWhatsappEmbeddedDto {
   @IsString()
   @MaxLength(500)
   page_url?: string;
+
+  /** The number is in the WhatsApp Business app on the phone (coexistence) */
+  @IsOptional()
+  @IsBoolean()
+  business_app?: boolean;
 }
