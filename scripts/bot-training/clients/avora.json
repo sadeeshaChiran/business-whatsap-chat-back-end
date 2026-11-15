@@ -8,7 +8,7 @@
     "tone": "professional, warm and friendly like a polite human shop assistant; short natural WhatsApp messages; respectful Miss / Madam / Sir; emojis are fine; never pushy, never robotic",
     "default_language": "auto",
     "greeting": "✨ එකක් – රු. 1,450\n🚚 ඩිලිවරි – රු. 450\n\n😍 දෙකක් එකවර ගත්තොත් රු. 2,900\n🎁 ඩිලිවරි සම්පූර්ණයෙන්ම FREE! 🚚\n\nමිස්, Order එකක් දාන්න කැමතිද? 😊💕",
-    "about": "AVORA is a Sri Lankan online shop that sells its products on Facebook and WhatsApp. Every item is Rs 1,450. Delivery is Rs 450 for one item; when the customer buys two or more items together, delivery is completely FREE (2 items = Rs 2,900 with free delivery). Most items come in several colours and sizes. Island-wide delivery, cash on delivery.",
+    "about": "AVORA is a Sri Lankan online shop selling uncommon-design girls' oversized T-shirts (100% cotton) on Facebook and WhatsApp. Designs: Teddy Beanie, Pure Love Teddy and Girl & Puppy – each in many colours, sizes M / L / XL. Every T-shirt is Rs 1,450. Delivery Rs 450 for one; buy two or more together and delivery is FREE (2 = Rs 2,900). Island-wide cash on delivery.",
     "opening_hours": "WhatsApp orders any time, every day.",
     "payment_methods": "Cash on delivery",
     "sells": "products",
@@ -17,7 +17,11 @@
     "free_delivery_over": 2900
   },
   "delivery_zones": [
-    { "area": "*", "fee": 450, "days": "2-4 days" }
+    {
+      "area": "*",
+      "fee": 450,
+      "days": "2-4 days"
+    }
   ],
   "policies": [
     {
@@ -92,47 +96,142 @@
     }
   ],
   "faqs": [
-    { "question": "How much is one item?", "answer": "Rs 1,450 each. Delivery Rs 450 for one item." },
-    { "question": "Is delivery free?", "answer": "Yes – when you buy two or more items together delivery is completely FREE. One item has Rs 450 delivery." },
-    { "question": "How do I pay?", "answer": "Cash on delivery – pay when you receive the parcel." },
-    { "question": "How long does delivery take?", "answer": "Usually 2-4 working days island-wide." },
-    { "question": "Do you deliver island-wide?", "answer": "Yes, to anywhere in Sri Lanka." }
+    {
+      "question": "How much is one item?",
+      "answer": "Rs 1,450 each. Delivery Rs 450 for one item."
+    },
+    {
+      "question": "Is delivery free?",
+      "answer": "Yes – when you buy two or more items together delivery is completely FREE. One item has Rs 450 delivery."
+    },
+    {
+      "question": "How do I pay?",
+      "answer": "Cash on delivery – pay when you receive the parcel."
+    },
+    {
+      "question": "How long does delivery take?",
+      "answer": "Usually 2-4 working days island-wide."
+    },
+    {
+      "question": "Do you deliver island-wide?",
+      "answer": "Yes, to anywhere in Sri Lanka."
+    },
+    {
+      "question": "What sizes are there?",
+      "answer": "M, L and XL (oversized fit)."
+    },
+    {
+      "question": "What is the fabric?",
+      "answer": "100% cotton."
+    },
+    {
+      "question": "How do I order?",
+      "answer": "Send the T-shirt photo (or design name), the colour and the size, then your name, address, phone number, nearby city and district. Island-wide cash on delivery."
+    }
   ],
   "tests": [
     {
       "name": "first message = price message (Sinhala)",
-      "send": ["Hi"],
-      "expect": { "letters": "sinhala", "contains_all": ["1,450", "450", "2,900", "FREE"] }
+      "send": [
+        "Hi"
+      ],
+      "expect": {
+        "letters": "sinhala",
+        "contains_all": [
+          "1,450",
+          "450",
+          "2,900",
+          "FREE"
+        ]
+      }
     },
     {
       "name": "price in English",
-      "send": ["How much is this?"],
-      "expect": { "contains_all": ["1,450", "2,900"] }
+      "send": [
+        "How much is this?"
+      ],
+      "expect": {
+        "contains_all": [
+          "1,450",
+          "2,900"
+        ]
+      }
     },
     {
       "name": "two items free delivery",
-      "send": ["dekak gaththoth delivery kiyada?"],
-      "expect": { "contains_any": ["FREE", "free", "නොමිලේ"], "not_contains": ["450 delivery"] }
+      "send": [
+        "dekak gaththoth delivery kiyada?"
+      ],
+      "expect": {
+        "contains_any": [
+          "FREE",
+          "free",
+          "නොමිලේ"
+        ],
+        "not_contains": [
+          "450 delivery"
+        ]
+      }
     },
     {
       "name": "order asks for colour and details",
-      "send": ["Hi", "ow order ekak danna one"],
-      "expect": { "contains_any": ["colour", "Colour", "color", "Address", "ලිපිනය"] }
+      "send": [
+        "Hi",
+        "ow order ekak danna one"
+      ],
+      "expect": {
+        "contains_any": [
+          "colour",
+          "Colour",
+          "color",
+          "Address",
+          "ලිපිනය"
+        ]
+      }
     },
     {
       "name": "respectful title",
-      "send": ["Hi", "mata ekak one"],
-      "expect": { "contains_any": ["මිස්", "Miss", "Madam", "Sir"], "not_contains": ["ඔයා"] }
+      "send": [
+        "Hi",
+        "mata ekak one"
+      ],
+      "expect": {
+        "contains_any": [
+          "මිස්",
+          "Miss",
+          "Madam",
+          "Sir"
+        ],
+        "not_contains": [
+          "ඔයා"
+        ]
+      }
     },
     {
       "name": "no invented discount",
-      "send": ["discount ekak denna puluwanda?"],
-      "expect": { "not_contains": ["10%", "20%", "discount ekak denna puluwan"] }
+      "send": [
+        "discount ekak denna puluwanda?"
+      ],
+      "expect": {
+        "not_contains": [
+          "10%",
+          "20%",
+          "discount ekak denna puluwan"
+        ]
+      }
     },
     {
       "name": "Tamil reply",
-      "send": ["விலை என்ன?"],
-      "expect": { "letters": "tamil", "contains_any": ["1,450", "1450"] }
+      "send": [
+        "விலை என்ன?"
+      ],
+      "expect": {
+        "letters": "tamil",
+        "contains_any": [
+          "1,450",
+          "1450"
+        ]
+      }
     }
   ]
 }
