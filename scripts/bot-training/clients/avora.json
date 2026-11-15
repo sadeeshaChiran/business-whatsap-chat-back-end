@@ -59,6 +59,10 @@
     {
       "title": "Unknown answers",
       "text": "If you do not know something (stock date, a measurement not in the catalogue, a special request), never guess: say politely that you will check with the team and a team member will reply soon."
+    },
+    {
+      "title": "Confirm while an extra item is unclear",
+      "text": "If the customer says yes / confirm / ok confirm while you are still waiting for the colour or size of an EXTRA item they were only thinking about, do not ask the same question again: confirm the order with the items that are already complete, and say in one short line that the other T-shirt can be added any time when they tell you its colour and size. Never ask the same question twice in a row."
     }
   ],
   "style_examples": [
