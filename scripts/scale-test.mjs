@@ -242,8 +242,11 @@ async function testShop(db, shop, log) {
       `${(en1 ?? '').slice(0, 25)} | ${(si ?? '').slice(0, 25)} | ${(en2 ?? '').slice(0, 25)}`);
 
     // 8) order: an option product when there is one (exact variant + total), else a simple product; then "ok"
-    const orderProduct = (priced?.p) ?? products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available);
-    const orderOption = priced?.v ?? null;
+    // a shop where every product has options (all at the base price): order one option of a product with options
+    const anyOption = withOptions.flatMap((p) => p.variants.map((v) => ({ p, v }))).find(({ p, v }) => p.is_available && v.available !== false);
+    const orderProduct = (priced?.p) ?? products.find((p, i) => !p.has_variants && p.is_available && i > products.length / 3) ?? products.find((p) => !p.has_variants && p.is_available) ?? anyOption?.p;
+    const orderOption = priced?.v ?? (orderProduct && orderProduct === anyOption?.p ? anyOption.v : null);
+    if (!orderProduct) throw new Error('no available product to order');
     const what = `${orderProduct.name}${orderOption ? ` ${String(orderOption.variant_value).replace(' / ', ' ')}` : ''}`;
     const unit = Number(orderOption?.price ?? orderProduct.price);
     const zone = flat ?? zones[0];
@@ -264,7 +267,8 @@ async function testShop(db, shop, log) {
     // 8b) after the summary the customer asks about ANOTHER product, then says "ok" to that answer:
     //     no order yet (that "ok" was not a yes to the summary), the other product is not added; then a clear yes saves it
     const other = products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available && p.category !== orderProduct.category)
-      ?? products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available);
+      ?? products.find((p) => p.id !== orderProduct.id && !p.has_variants && p.is_available)
+      ?? products.find((p) => p.id !== orderProduct.id && p.is_available);
     if (other) {
       const browse = await step(`asks about another product after the summary: ${other.name}`,
         [[`${what} 1k ona. Nimal Perera, 10 Temple Road, ${areaWord}. COD`], [`${other.name} kiyada?`], ['ok'], ['ow confirm karanna']]);
