@@ -82,6 +82,15 @@ export class CreateProductDto {
   @IsString({ each: true })
   gallery?: string[];
 
+  @ApiPropertyOptional({
+    example: ['https://cdn.example.com/size-chart.jpg'],
+    description: 'Gallery photos that are size charts – the sales bot sends them when a customer asks about sizes',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  size_charts?: string[];
+
   @ApiPropertyOptional({ example: 0.35, minimum: 0, description: 'Weight in kg – only needed when delivery is charged by weight' })
   @IsOptional()
   @Type(() => Number)

@@ -327,6 +327,7 @@ export class ProductsService implements OnModuleInit {
       return cache.get(text) as string;
     };
     if (dto.gallery) dto.gallery = dto.gallery.map(store).filter(Boolean);
+    if (dto.size_charts) dto.size_charts = dto.size_charts.map(store).filter(Boolean);
     if (dto.image_url !== undefined) dto.image_url = store(dto.image_url) || undefined;
     for (const variant of dto.variants ?? []) if (variant.image_url) variant.image_url = store(variant.image_url);
     if (dto.variant_image_match?.images) {
@@ -377,6 +378,12 @@ export class ProductsService implements OnModuleInit {
         throw new ForbiddenException('Products are not available for service-based businesses');
       }
     }
+  }
+
+  /** Size charts are gallery photos (a chart that is not in the gallery any more is dropped). */
+  private normalizeSizeCharts(sizeCharts: string[] | null | undefined, gallery: string[]): string[] {
+    const inGallery = new Set(gallery.map((url) => url.trim()));
+    return [...new Set((sizeCharts ?? []).map((url) => String(url ?? '').trim()).filter((url) => url && inGallery.has(url)))].slice(0, 10);
   }
 
   private normalizeGallery(gallery?: string[] | null): string[] {
@@ -723,6 +730,7 @@ export class ProductsService implements OnModuleInit {
       has_variants: hasVariants,
       image_url: coverImage,
       gallery,
+      size_charts: this.normalizeSizeCharts(createProductDto.size_charts, gallery),
       weight: createProductDto.weight != null ? Number(createProductDto.weight) : null,
       selling_points: createProductDto.selling_points?.trim() ?? '',
       brand: cleanBrand(createProductDto.brand),
@@ -884,6 +892,11 @@ export class ProductsService implements OnModuleInit {
 
     product.gallery = gallery;
     product.image_url = coverImage;
+    // size charts stay gallery photos: a chart removed from the gallery is dropped
+    product.size_charts = this.normalizeSizeCharts(
+      updateProductDto.size_charts !== undefined ? updateProductDto.size_charts : product.size_charts,
+      gallery,
+    );
     if (updateProductDto.weight !== undefined) {
       product.weight = updateProductDto.weight != null ? Number(updateProductDto.weight) : null;
     }

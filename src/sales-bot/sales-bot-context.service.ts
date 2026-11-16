@@ -26,6 +26,8 @@ export type ContextProduct = {
   brand?: string;
   photo_count: number;
   image_urls: string[];
+  /** the product has a size chart photo */
+  size_chart?: boolean;
   /** what the photos show (colour, pattern, style) – helps match photos customers send */
   image_notes?: string;
   description: string;
@@ -154,7 +156,17 @@ export function photoOption(product: Product, url: string): { label: string; pri
 /** Every photo of a product as a full link: cover, gallery, then variant photos (our own stored photos made absolute). */
 export function productImages(product: Product): string[] {
   const variantPhotos = productOptions(product).map((option) => option.image_url ?? '');
+  const charts = new Set(productSizeCharts(product));
   const urls = [product.image_url ?? '', ...(Array.isArray(product.gallery) ? product.gallery : []), ...variantPhotos]
+    .map((url) => absoluteProductImage(String(url ?? '').trim()))
+    .filter((url) => /^https?:\/\//i.test(url) || /\/public\/product-images\//.test(url))
+    .filter((url) => !charts.has(url));   // a size chart is never sent as a product photo
+  return [...new Set(urls)];
+}
+
+/** The product's size chart photos as full links (gallery photos the owner marked "Size chart"). */
+export function productSizeCharts(product: Pick<Product, 'size_charts'>): string[] {
+  const urls = (Array.isArray(product.size_charts) ? product.size_charts : [])
     .map((url) => absoluteProductImage(String(url ?? '').trim()))
     .filter((url) => /^https?:\/\//i.test(url) || /\/public\/product-images\//.test(url));
   return [...new Set(urls)];
@@ -444,6 +456,8 @@ export class SalesBotContextService {
       brand: String(product.brand ?? '').trim(),
       photo_count: images.length,
       image_urls: images,
+      // the bot sends it (size_chart_product_ids) when the customer asks about sizes
+      ...(productSizeCharts(product).length ? { size_chart: true } : {}),
       image_notes: String(product.image_notes ?? '').slice(0, 300),
       description: String(product.description ?? '').slice(0, 600),
       selling_points: String(product.selling_points ?? '').slice(0, 1000),

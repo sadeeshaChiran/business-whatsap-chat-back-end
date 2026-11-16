@@ -40,7 +40,8 @@ import { absoluteProductImage, readOwnProductImage, sniffImage } from '../produc
 import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-match';
 import { StockService } from '../reports/stock';
 import { DemandService } from '../reports/reports';
-import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
+import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productSizeCharts, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
+import { sizeChartPicks } from './size-chart';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
@@ -552,8 +553,16 @@ export class SalesBotEngineService implements OnModuleInit {
     const picks = photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
     const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
+    // the customer asked about sizes → the size chart photo(s) the owner marked (never a "here it is" with nothing)
+    const chartsSent = await this.sendSizeCharts(companyId, conversation, channelUser, channel, simulated, {
+      aiIds: result.size_chart_product_ids ?? [], customerText,
+      inChat: [...picks.map((pick) => pick.id), ...photoIds, ...(session.pending_order?.items ?? []).map((item) => Number(item.product_id))],
+    }).catch((error: unknown) => {
+      this.logger.warn(`size chart not sent: ${error instanceof Error ? error.message : String(error)}`);
+      return 0;
+    });
     // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
-    if (text && !outcome.replyOverride && !photosSent) text = withoutPhotoPointer(text, result.language);
+    if (text && !outcome.replyOverride && !photosSent && !chartsSent) text = withoutPhotoPointer(text, result.language);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -883,36 +892,88 @@ export class SalesBotEngineService implements OnModuleInit {
           this.logger.warn(`product ${product.id} photo could not be loaded: ${url}`);
           continue;
         }
-        let messageId: string | null = null;
-        let failed = false;
         const caption = label === lastLabel ? undefined : label;
-        if (!simulated && social) {
-          try {
-            if (caption) await this.sendText(companyId, conversation, channelUser, channel, caption, null, false);
-            messageId = await this.socialSender.sendImage(companyId, social, channelUser.source_account_id, channelUser.external_user_id, {
-              url: absoluteProductImage(url), buffer: file?.buffer, mimetype: file?.mimetype, fileName: `${product.name}.${(file?.mimetype || 'image/jpeg').split('/')[1] || 'jpg'}`,
-            });
-          } catch (error) {
-            failed = true;
-            this.logger.warn(`sending product ${product.id} photo on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        } else if (!simulated && channel && file) {
-          try {
-            messageId = (await this.providerFactory.getAdapterForChannel(channel).sendMedia(channel, channelUser.external_user_id, {
-              buffer: file.buffer, mimetype: file.mimetype, fileName: `${product.name}.${file.mimetype.split('/')[1] || 'jpg'}`, mediaType: 'image',
-              ...(caption ? { caption } : {}),
-            })).messageId;
-          } catch (error) {
-            failed = true;
-            this.logger.warn(`sending product ${product.id} photo failed: ${error instanceof Error ? error.message : String(error)}`);
-          }
-        }
+        const { messageId, failed } = await this.deliverImage(companyId, conversation, channelUser, channel, social, simulated,
+          { url, file, caption, fileName: product.name, what: `product ${product.id} photo` });
         if (failed) continue;
         lastLabel = label;
         await this.messageRepository.save(this.messageRepository.create({
           conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: social ?? (channelUser.platform || 'whatsapp'),
           provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: label, media_url: url, source: BOT_SOURCE,
           media_note: `bot sent a photo of our product ${product.name}${variant ? ` (${variant})` : ''} #${product.id}`,
+        }));
+        sent += 1;
+      }
+    }
+    if (sent) await this.touch(companyId, conversation.id);
+    return sent;
+  }
+
+  /** One image to the customer on their channel (WhatsApp / Messenger / Instagram); the simulator sends nothing. */
+  private async deliverImage(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    channel: WhatsappChannel | null, social: SocialPlatform | null, simulated: boolean,
+    image: { url: string; file: { buffer: Buffer; mimetype: string } | null; caption?: string; fileName: string; what: string }): Promise<{ messageId: string | null; failed: boolean }> {
+    const { url, file, caption, fileName, what } = image;
+    let messageId: string | null = null;
+    if (!simulated && social) {
+      try {
+        if (caption) await this.sendText(companyId, conversation, channelUser, channel, caption, null, false);
+        messageId = await this.socialSender.sendImage(companyId, social, channelUser.source_account_id, channelUser.external_user_id, {
+          url: absoluteProductImage(url), buffer: file?.buffer, mimetype: file?.mimetype, fileName: `${fileName}.${(file?.mimetype || 'image/jpeg').split('/')[1] || 'jpg'}`,
+        });
+      } catch (error) {
+        this.logger.warn(`sending ${what} on ${social} failed: ${error instanceof Error ? error.message : String(error)}`);
+        return { messageId: null, failed: true };
+      }
+    } else if (!simulated && channel && file) {
+      try {
+        messageId = (await this.providerFactory.getAdapterForChannel(channel).sendMedia(channel, channelUser.external_user_id, {
+          buffer: file.buffer, mimetype: file.mimetype, fileName: `${fileName}.${file.mimetype.split('/')[1] || 'jpg'}`, mediaType: 'image',
+          ...(caption ? { caption } : {}),
+        })).messageId;
+      } catch (error) {
+        this.logger.warn(`sending ${what} failed: ${error instanceof Error ? error.message : String(error)}`);
+        return { messageId: null, failed: true };
+      }
+    }
+    return { messageId, failed: false };
+  }
+
+  /** The size chart photos of the products the customer asks about (not again within 10 minutes). Returns how many went out. */
+  private async sendSizeCharts(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    channel: WhatsappChannel | null, simulated: boolean, ask: { aiIds: number[]; customerText: string; inChat: number[] }): Promise<number> {
+    const withCharts = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false } as never }))
+      .filter((product) => productSizeCharts(product).length > 0);
+    if (!withCharts.length) return 0;
+    const recent: Array<{ media_url: string | null; media_note: string | null; age_min: number }> = await this.messageRepository.query(
+      `SELECT media_url, media_note, EXTRACT(EPOCH FROM (LOCALTIMESTAMP - created_at)) / 60 AS age_min FROM bot_message
+        WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' ORDER BY id DESC LIMIT 20`, [conversation.id]).catch(() => []);
+    // products whose photos went out earlier in this chat (newest first) also count as "in the chat"
+    const shownBefore = recent.map((row) => Number(/#(\d+)\s*$/.exec(String(row.media_note ?? ''))?.[1] ?? 0)).filter((id) => id > 0);
+    const ids = sizeChartPicks({
+      aiIds: ask.aiIds, customerText: ask.customerText, inChat: [...ask.inChat, ...shownBefore],
+      withChart: new Set(withCharts.map((product) => Number(product.id))),
+    });
+    const social = socialPlatformOf(channelUser.platform);
+    let sent = 0;
+    for (const id of ids) {
+      const product = withCharts.find((p) => Number(p.id) === id);
+      if (!product) continue;
+      for (const url of productSizeCharts(product).slice(0, 2)) {
+        if (recent.some((row) => row.media_url === url && Number(row.age_min) < 10)) continue;
+        const file = simulated ? null : await this.photoFile(url);
+        if (!simulated && !file && (!social || social === 'messenger')) {
+          this.logger.warn(`product ${product.id} size chart could not be loaded: ${url}`);
+          continue;
+        }
+        const label = `📏 Size chart – ${product.name}`;
+        const { messageId, failed } = await this.deliverImage(companyId, conversation, channelUser, channel, social, simulated,
+          { url, file, caption: label, fileName: `${product.name} size chart`, what: `product ${product.id} size chart` });
+        if (failed) continue;
+        await this.messageRepository.save(this.messageRepository.create({
+          conversation_id: conversation.id, direction: 'outbound', message_type: 'image', platform: social ?? (channelUser.platform || 'whatsapp'),
+          provider_message_id: messageId, delivery_status: messageId ? 'sent' : null, content: label, media_url: url, source: BOT_SOURCE,
+          media_note: `bot sent the size chart of our product ${product.name} #${product.id}`,
         }));
         sent += 1;
       }

@@ -52,6 +52,10 @@ export class Product {
   @Column({ type: 'jsonb', default: () => "'[]'" })
   gallery: string[];
 
+  /** Gallery photos that are size charts: the sales bot sends them when a customer asks about sizes (never as a product photo) */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  size_charts: string[];
+
   @Column({ type: 'decimal', precision: 10, scale: 3, nullable: true })
   weight: number | null;
 
