@@ -121,7 +121,7 @@ export class SalesBotClient {
       reply: String(result.reply ?? '').trim(),
       photo_product_ids: Array.isArray(result.photo_product_ids) ? result.photo_product_ids.map(Number).filter((id) => id > 0) : [],
       photo_variants: Array.isArray(result.photo_variants)
-        ? result.photo_variants.map((v) => ({ product_id: Number(v?.product_id), variant_id: Number(v?.variant_id) })).filter((v) => v.product_id > 0 && v.variant_id > 0).slice(0, 3)
+        ? result.photo_variants.map((v) => ({ product_id: Number(v?.product_id), variant_id: Number(v?.variant_id) })).filter((v) => v.product_id > 0 && v.variant_id > 0).slice(0, 10)
         : [],
       photo_all: result.photo_all === true,
       size_chart_product_ids: Array.isArray(result.size_chart_product_ids)

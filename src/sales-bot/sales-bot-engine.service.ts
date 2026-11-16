@@ -128,7 +128,8 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
   const autoSet = new Set(auto);
   // an option the customer asked to see ("the blue one") goes first – only that option's photo is sent
   // what the AI chose to show is shown, also again later in the chat (only not twice in the same burst)
-  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id)) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 2 });
+  // several chosen colours of one product ("brown 2, black 2") → a photo of each
+  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id && (p.variantId === undefined || p.variantId === v.variant_id))) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 2 });
   for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 2 });
   for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 24 * 60 });
   return picks;
@@ -899,7 +900,8 @@ export class SalesBotEngineService implements OnModuleInit {
       // the customer ASKED for photos ("ewanna", "photo", "pennanna") → send again even if it went out a few minutes ago
       const askedNow = asksForPhotos(ask.customerText ?? '');
       const urls = choosePhotos(product, wanted, all && !pick.orderLine).map((photo) => photo.url)
-        .filter((url) => !sentNow.has(url) && !sentWithin(url, all || askedNow ? 2 : pick.skipIfSentWithinMin));
+        // all photos of a product / the customer asked → every one of them, also the one sent with a list a minute ago
+        .filter((url) => !sentNow.has(url) && (all || askedNow || pick.orderLine || !sentWithin(url, pick.skipIfSentWithinMin)));
       let lastLabel = '';
       for (const url of urls) {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
