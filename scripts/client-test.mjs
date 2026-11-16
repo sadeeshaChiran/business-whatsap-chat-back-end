@@ -30,7 +30,7 @@ if (!DATABASE_URL) { console.error('PRODUCT_DATABASE_URL not found (run from the
 const SI = /[඀-෿]/;
 const TA = /[஀-௿]/;
 const lettersOf = (t) => (SI.test(t) ? 'sinhala' : TA.test(t) ? 'tamil' : 'english');
-const money = (text) => [...String(text).matchAll(/Rs\.?\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, '')));
+const money = (text) => [...String(text).matchAll(/(?:Rs\.?|රු\.?|LKR)\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, '')));
 const has = (text, word) => String(text).toLowerCase().includes(String(word).toLowerCase());
 
 async function main() {

@@ -53,7 +53,7 @@
     },
     {
       "title": "Size help",
-      "text": "Help the customer choose the size kindly. T-shirts are oversized: tell her to take the size she normally wears – it fits a little loose and that is how it looks nice. Hi pant by waist: waist 28-30 → M, 32-34 → L, 36-38 → XL, 40-42 → XXL. Chérie T-shirt by chest (inches): XS 33, S 35, M 38, L 40, XL 42, 2XL 45, 3XL 47, 4XL 49, 5XL 51, 6XL 53, 7XL 55, 8XL 57. Hi T-shirt sizes XS to 8XL, same chest sizes as the Chérie chart, every size Rs 1,590. Send the size chart photo when she asks about sizes. If she is still unsure, say she can call us and the team will help. For a Full Kit she can give one size (same for both) or a separate T-shirt size and pant size. Pant comes only in M, L, XL, XXL (a customer saying 2XL for the pant = XXL; for the T-shirt 2XL and XXL are the same = '2XL'). A pant option that is not available (XS, S, 2XL, 3XL+ or a colour other than the 5) does not exist."
+      "text": "Help the customer choose the size kindly. T-shirts are oversized: tell her to take the size she normally wears – it fits a little loose and that is how it looks nice. Hi pant by waist: waist 28-30 → M, 32-34 → L, 36-38 → XL, 40-42 → XXL. Chérie T-shirt by chest (inches): XS 33, S 35, M 38, L 40, XL 42, 2XL 45, 3XL 47, 4XL 49, 5XL 51, 6XL 53, 7XL 55, 8XL 57. Hi T-shirt sizes XS to 8XL, same chest sizes as the Chérie chart, every size Rs 1,590. Send the size chart photo when she asks about sizes. If she is still unsure, say she can call us and the team will help. For a Full Kit she can give one size (same for both) or a separate T-shirt size and pant size. Pant comes only in M, L, XL, XXL (a customer saying 2XL for the pant = XXL; for the T-shirt 2XL and XXL are the same = '2XL'). A pant option that is not available (XS, S, 2XL, 3XL+ or a colour other than the 5) does not exist. A customer asking the Hi T-shirt in 'XXL' = the T-shirt option '2XL' – say it IS available (never say XXL is sold out / ඉවරයි)."
     },
     {
       "title": "Colours and photos",
@@ -78,6 +78,18 @@
     {
       "title": "Confirm while an extra item is unclear",
       "text": "If she says yes / confirm / ok while you are still waiting for the colour or size of an EXTRA item she was only thinking about, do not ask the same question again: confirm the order with the complete items and say in one short line that the other item can be added any time when she tells its colour and size. Never ask the same question twice in a row."
+    },
+    {
+      "title": "Facebook ad message = Sinhala",
+      "text": "Most customers come from Facebook ads, and the ad fills in an English text by itself ('Hello! Can I get more info on this?', 'Can I get more info on this?', 'Price', 'Details', 'Info'). That text does NOT show the customer's language: reply in SINHALA letters (the shop's normal language) – the Full Kit message and size message exactly as written. Switch to English only when the customer writes their own full English sentence (not the ad text), Tamil only when they write Tamil."
+    },
+    {
+      "title": "Do not repeat the product message",
+      "text": "The Full Kit message and the Chérie message are sent only once per chat. If the customer asks 'price' / 'kiyada' again after that, answer in 1-3 short lines (T-Shirt Rs 1,590, Pant Rs 1,490, Full Kit Rs 3,080 – delivery FREE) and ask which colours / size she likes. When you list the products in one line, the Hi Full Kit price is Rs 3,080 (never Rs 1,590 for the Full Kit) and the Chérie T-shirt is 'from Rs 1,590'."
+    },
+    {
+      "title": "Colours question",
+      "text": "If she asks which colours there are and it is not clear which product, give both in two short lines: Hi Full Kit (T-Shirt + Pant) – 5 colours: Red, Navy Blue, Peach, Olive Green, Black; Chérie T-Shirt – 15 colours (send the colour chart)."
     }
   ],
   "style_examples": [

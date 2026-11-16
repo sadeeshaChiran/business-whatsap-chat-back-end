@@ -101,7 +101,7 @@ async function chat(db, token, phone, bursts, log) {
   return { conversationId, replies, turns, photos: replies.filter((r) => r.message_type === 'image'), text: texts.map((r) => String(r.content)).join(' \n ') };
 }
 
-const money = (text) => [...String(text).matchAll(/Rs\.?\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, ''))).filter((n) => n > 0);
+const money = (text) => [...String(text).matchAll(/(?:Rs\.?|රු\.?|LKR)\s?([\d,]+)/gi)].map((m) => Number(m[1].replace(/,/g, ''))).filter((n) => n > 0);
 const words = (name) => String(name).toLowerCase().split(/\s+/).slice(0, 2).join(' ');
 const mentions = (text, product) => String(text).toLowerCase().includes(words(product.name)) || money(text).includes(Math.round(Number(product.price)));
 const notAvailable = (text) => /\bna\b|\bnaa\b|naha|nehe|nathi|not available|out of stock|sold out|don't have|do not have|samawenna|sorry|ivara|iwara|නැ|නෑ|ඉවර/i.test(text);
