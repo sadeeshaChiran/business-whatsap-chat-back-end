@@ -2,7 +2,7 @@ import { asksForSizeChart, sizeChartPicks } from './size-chart';
 
 describe('size charts', () => {
   it('knows when the customer asks for the size chart', () => {
-    for (const text of ['size chart eka ewanna', 'size eka kohomada thoranne?', 'Size table ekak thiyenawada', 'mona size da thiyenne', 'සයිස් ගැන කියන්න', 'size chart please', 'size kohomada wenne', 'pant eke size monawada'])
+    for (const text of ['size chart eka ewanna', 'size eka kohomada thoranne?', 'Size table ekak thiyenawada', 'mona size da thiyenne', 'සයිස් ගැන කියන්න', 'size chart please', 'size kohomada wenne', 'pant eke size monawada', 'size monda thiyenne', 'size monada thiyenne'])
       expect(asksForSizeChart(text)).toBe(true);
     for (const text of ['L size ekak ona', 'XL size ganna', 'price kiyada', 'ok confirm', 'Red / M'])
       expect(asksForSizeChart(text)).toBe(false);
