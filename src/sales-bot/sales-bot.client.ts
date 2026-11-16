@@ -23,6 +23,8 @@ export type SalesBotOrder = {
   delivery_fee?: number | null;
   summary_shown?: boolean;
   confirm_order?: boolean;
+  /** the shop's own details form filled from the customer's answer (labels as the shop writes them) */
+  details?: Array<{ label: string; value: string }>;
 };
 
 export type SalesBotResult = {

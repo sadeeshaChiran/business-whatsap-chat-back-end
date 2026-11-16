@@ -42,6 +42,8 @@ import { StockService } from '../reports/stock';
 import { DemandService } from '../reports/reports';
 import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productSizeCharts, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
 import { asksForSizeChart, sizeChartPicks } from './size-chart';
+import { splitOrderPhones } from './order-phones';
+import { cleanOrderDetails, mergeOrderDetails, orderDetailsNote, type OrderDetail } from './order-details';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
@@ -58,6 +60,10 @@ type PendingOrder = {
   items: PricedItem[]; subtotal: number; delivery_area: string | null; total_weight_kg: number;
   delivery_fee: number | null; total: number;
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
+  /** more numbers the customer gave (many shops ask for two – for the courier) */
+  other_phones?: string[];
+  /** the shop's own details form, filled (goes into the order note) */
+  details?: OrderDetail[];
 };
 /** memory = short notes the bot keeps about this customer (older parts of the chat). handoff_at = last hand-over (unix s). */
 type BotSession = { language?: string; pending_order?: PendingOrder | null; memory?: string; handoff_at?: number };
@@ -239,11 +245,11 @@ function cartMessage(language: string, order: { items: Array<{ quantity: number;
 
 /** The order summary written by the backend (real prices): on every summary turn, and when the bot skipped it. */
 function summaryMessage(language: string, order: { items: Array<{ quantity: number; product_name: string; variant_name: string; total_price: number }>;
-  delivery_area: string | null; delivery_fee: number | null; total: number; customer_name: string; address: string; customer_phone: string; payment_method: string }): string {
+  delivery_area: string | null; delivery_fee: number | null; total: number; customer_name: string; address: string; customer_phone: string; payment_method: string; other_phones?: string[] }): string {
   const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''} – ${rs(item.total_price)}`);
   lines.push(order.delivery_fee == null ? 'Delivery: to be confirmed' : `Delivery${order.delivery_area && order.delivery_area !== '*' ? ` (${order.delivery_area})` : ''}: ${rs(order.delivery_fee)}`);
   lines.push(`Total: ${rs(order.total)}`);
-  lines.push([order.customer_name, order.address, order.customer_phone].filter(Boolean).join(', '));
+  lines.push([order.customer_name, order.address, [order.customer_phone, ...(order.other_phones ?? [])].filter(Boolean).join(' / ')].filter(Boolean).join(', '));
   lines.push(`Payment: ${order.payment_method}`);
   const ask = language === 'sinhala' ? 'Order එක confirm කරන්නද?' : language === 'tamil' ? 'ஆர்டரை உறுதிப்படுத்தவா?'
     : language === 'sinhala_latin' ? 'Order eka confirm karannada?' : 'Shall I confirm the order?';
@@ -955,8 +961,9 @@ export class SalesBotEngineService implements OnModuleInit {
       withChart: new Set(withCharts.map((product) => Number(product.id))),
     });
     const social = socialPlatformOf(channelUser.platform);
-    // the customer ASKED for the chart → send it again even if it went out a little earlier (else not within 10 min)
-    const repeatAfterMin = asksForSizeChart(ask.customerText) ? 1 : 10;
+    // the AI or the customer asked about sizes this turn → the chart goes with the answer every time
+    // (only not twice within a minute – one burst of messages); otherwise not again within 10 minutes
+    const repeatAfterMin = asksForSizeChart(ask.customerText) || ask.aiIds.length ? 1 : 10;
     let sent = 0;
     for (const id of ids) {
       const product = withCharts.find((p) => Number(p.id) === id);
@@ -1795,7 +1802,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const name = String(order.customer_name ?? '').trim();
     const isSocial = socialPlatformOf(channelUser.platform) !== null;
     // WhatsApp: the chat number is the customer's phone. Messenger / Instagram: the chat id is not a phone, the customer must give one.
-    const phone = String(order.customer_phone || (isSocial ? '' : channelUser.external_user_id) || '').replace(/[^\d+]/g, '');
+    // "0717273834, 0723472123" = two numbers (not one 20-digit number): the first is the order phone, the rest are kept
+    const { phone, others: otherPhones } = splitOrderPhones(order.customer_phone || (isSocial ? '' : channelUser.external_user_id) || '');
     const previous = session.pending_order;
     const signature = (value: { items?: Array<{ product_id: number; variant_id?: number | null; quantity: number }>; address?: string } | null | undefined) =>
       JSON.stringify({ i: (value?.items ?? []).map((item) => [item.product_id, item.variant_id ?? null, item.quantity]), a: String(value?.address ?? '').trim() });
@@ -1806,8 +1814,18 @@ export class SalesBotEngineService implements OnModuleInit {
       items, subtotal, delivery_area: zone?.area ?? (area || null), total_weight_kg: totalWeight,
       delivery_fee: fee, total, customer_name: name, customer_phone: phone, address,
       payment_method: String(order.payment_method || 'COD').slice(0, 60), summary_shown: summaryShown,
+      ...(otherPhones.length ? { other_phones: otherPhones } : {}),
     };
     pending.notes = previous?.notes ?? [];
+    const details = mergeOrderDetails(previous?.details, cleanOrderDetails(order.details));
+    if (details.length) pending.details = details;
+    // the shop's own form already holds every number; without a form the second number is kept as a note
+    if (!details.length) {
+      for (const other of otherPhones) {
+        const line = `Second phone number: ${other}`;
+        if (!pending.notes.includes(line)) pending.notes = [...pending.notes, line].slice(-10);
+      }
+    }
     if (!order.confirm_order) {
       session.pending_order = pending;
       if (summaryShown) await this.advanceLead(conversation.id, 'proposal', { order_value: total });
@@ -1866,7 +1884,8 @@ export class SalesBotEngineService implements OnModuleInit {
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
       total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
-      admin_note: ['Created by the sales bot.', ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].join('\n'),
+      admin_note: ['Created by the sales bot.', orderDetailsNote(pending.details),
+        ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].filter(Boolean).join('\n'),
       created_by: 'bot', agent_id: await this.customerAgent(conversation),
     }));
     for (const item of items) {
