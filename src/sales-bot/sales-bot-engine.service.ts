@@ -41,7 +41,7 @@ import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-matc
 import { StockService } from '../reports/stock';
 import { DemandService } from '../reports/reports';
 import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productSizeCharts, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
-import { sizeChartPicks } from './size-chart';
+import { asksForSizeChart, sizeChartPicks } from './size-chart';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
@@ -955,12 +955,14 @@ export class SalesBotEngineService implements OnModuleInit {
       withChart: new Set(withCharts.map((product) => Number(product.id))),
     });
     const social = socialPlatformOf(channelUser.platform);
+    // the customer ASKED for the chart → send it again even if it went out a little earlier (else not within 10 min)
+    const repeatAfterMin = asksForSizeChart(ask.customerText) ? 1 : 10;
     let sent = 0;
     for (const id of ids) {
       const product = withCharts.find((p) => Number(p.id) === id);
       if (!product) continue;
       for (const url of productSizeCharts(product).slice(0, 2)) {
-        if (recent.some((row) => row.media_url === url && Number(row.age_min) < 10)) continue;
+        if (recent.some((row) => row.media_url === url && Number(row.age_min) < repeatAfterMin)) continue;
         const file = simulated ? null : await this.photoFile(url);
         if (!simulated && !file && (!social || social === 'messenger')) {
           this.logger.warn(`product ${product.id} size chart could not be loaded: ${url}`);
