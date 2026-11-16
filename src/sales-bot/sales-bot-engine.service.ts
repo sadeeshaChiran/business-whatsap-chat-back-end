@@ -108,7 +108,7 @@ const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 40;
 const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 9000;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
-type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number };
+type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean };
 
 /** "📷 Cotton Romper Set (3 pcs) – Red – Rs 2,500": the label sent with a product photo. */
 /**
@@ -127,8 +127,9 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
   }
   const autoSet = new Set(auto);
   // an option the customer asked to see ("the blue one") goes first – only that option's photo is sent
-  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id)) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 15 });
-  for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 15 });
+  // what the AI chose to show is shown, also again later in the chat (only not twice in the same burst)
+  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id)) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 2 });
+  for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 2 });
   for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 24 * 60 });
   return picks;
 }
@@ -533,7 +534,12 @@ export class SalesBotEngineService implements OnModuleInit {
     this.redone.delete(conversationId);
 
     // Save first, so a blocked order never gets a "confirmed!" message
+    const orderLines = (order?: PendingOrder | null) => (order?.items ?? []).map((item) => `${item.product_id}:${item.variant_id ?? ''}:${item.quantity}`).join('|');
+    const linesBefore = orderLines(session.pending_order);
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
+    // the order's items were set / changed this turn → the photo of every chosen option + the size chart go with it,
+    // so the customer sees exactly what she is ordering
+    const orderNow = session.pending_order?.items?.length && orderLines(session.pending_order) !== linesBefore ? session.pending_order.items : [];
     session.language = result.language;
     if (result.memory) session.memory = mergeMemory(session.memory, String(result.memory));
     if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
@@ -556,12 +562,13 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    const picks = photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
+    const orderPicks: PhotoPick[] = orderNow.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true }));
+    const picks = [...orderPicks, ...photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []).filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
     const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
     // the customer asked about sizes → the size chart photo(s) the owner marked (never a "here it is" with nothing)
     const chartsSent = await this.sendSizeCharts(companyId, conversation, channelUser, channel, simulated, {
-      aiIds: result.size_chart_product_ids ?? [], customerText,
+      aiIds: [...new Set([...(result.size_chart_product_ids ?? []), ...orderNow.map((item) => Number(item.product_id))])], customerText,
       inChat: [...picks.map((pick) => pick.id), ...photoIds, ...(session.pending_order?.items ?? []).map((item) => Number(item.product_id))],
     }).catch((error: unknown) => {
       this.logger.warn(`size chart not sent: ${error instanceof Error ? error.message : String(error)}`);
@@ -835,7 +842,7 @@ export class SalesBotEngineService implements OnModuleInit {
           .filter((product) => productImages(product).length > 0)
           .sort((a, b) => String(b.name).length - String(a.name).length)
         : [];
-      for (const product of named.slice(0, 2)) { ids.add(Number(product.id)); autoIds.add(Number(product.id)); }
+      for (const product of named) { ids.add(Number(product.id)); autoIds.add(Number(product.id)); }
     }
     // a line that only held a photo link disappears completely (empty lines split the reply into messages)
     let text = reply.split('\n').flatMap((line) => {
@@ -852,7 +859,8 @@ export class SalesBotEngineService implements OnModuleInit {
       .replace(/[ \t]+$/gm, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-    return { text, productIds: [...ids].slice(0, 3), autoIds: [...autoIds] };
+    // every product the reply talks about gets its photos (no limit)
+    return { text, productIds: [...ids], autoIds: [...autoIds] };
   }
 
   /**
@@ -862,12 +870,17 @@ export class SalesBotEngineService implements OnModuleInit {
    */
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean } = {}): Promise<number> {
-    const all = Boolean(ask.all);
-    // all photos of 1-3 products, or one photo each of up to 4 products
-    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, all ? 3 : 4);
+    // ONE product talked about → every photo of it; several products (a list) → one photo of each, no limit on how many
+    // products; the customer asked for all photos / colours → all. A colour the customer named → that colour's photos.
+    // SALES_BOT_MAX_PHOTOS (default 60) only stops a runaway reply.
+    // one pick per product – or per option when the order has several colours of one product (Peach, Black, White)
+    const key = (pick: PhotoPick) => `${pick.id}:${pick.variantId ?? pick.variant ?? ''}`;
+    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => key(p) === key(pick)) === index);
     if (!unique.length) return 0;
-    const maxPhotos = all ? 10 : 6;
+    const all = Boolean(ask.all) || new Set(unique.map((pick) => pick.id)).size === 1;
+    const maxPhotos = Number(process.env.SALES_BOT_MAX_PHOTOS ?? 60) || 60;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
+    const sentNow = new Set<string>();   // never the same photo twice in one reply
     // age worked out by the database (created_at has no time zone – comparing in Node was off by the server's offset)
     const recent: Array<{ media_url: string; age_min: number }> = await this.messageRepository.query(
       `SELECT media_url, EXTRACT(EPOCH FROM (LOCALTIMESTAMP - created_at)) / 60 AS age_min FROM bot_message
@@ -879,13 +892,14 @@ export class SalesBotEngineService implements OnModuleInit {
       const product = products.find((p) => Number(p.id) === pick.id);
       if (!product) continue;
       // the colour the customer named wins ("white abc eka"); else the option the AI / the photo check chose
-      const named = askedPhotoOptions(product, ask.customerText ?? '');
+      // (an order line always shows ITS option – "Peach 2, Black 2, White 3" gives one photo per line)
+      const named = pick.orderLine ? [] : askedPhotoOptions(product, ask.customerText ?? '');
       const wanted = named.length ? named : variantPhotoOptions(product, pick.variantId, pick.variant);
       // asked again for all photos → send them even if some went out a few minutes ago
       // the customer ASKED for photos ("ewanna", "photo", "pennanna") → send again even if it went out a few minutes ago
       const askedNow = asksForPhotos(ask.customerText ?? '');
-      const urls = choosePhotos(product, wanted, all).map((photo) => photo.url)
-        .filter((url) => !sentWithin(url, all || askedNow ? 2 : pick.skipIfSentWithinMin));
+      const urls = choosePhotos(product, wanted, all && !pick.orderLine).map((photo) => photo.url)
+        .filter((url) => !sentNow.has(url) && !sentWithin(url, all || askedNow ? 2 : pick.skipIfSentWithinMin));
       let lastLabel = '';
       for (const url of urls) {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
@@ -909,6 +923,7 @@ export class SalesBotEngineService implements OnModuleInit {
           media_note: `bot sent a photo of our product ${product.name}${variant ? ` (${variant})` : ''} #${product.id}`,
         }));
         sent += 1;
+        sentNow.add(url);
       }
     }
     if (sent) await this.touch(companyId, conversation.id);
