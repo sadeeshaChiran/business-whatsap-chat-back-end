@@ -7,7 +7,7 @@
 /** The customer clearly asked to SEE the size chart / table (not just "L size ekak"). */
 export function asksForSizeChart(text: string): boolean {
   const t = String(text ?? '').toLowerCase();
-  return /size\s*(chart|char|table|tabel|list|details?|wistharay?a?|ewanna|ewa|pennanna|balanna)|size\s*[ea]ka\s*(kohomada|mokakda|thoranne|danne)|(chart|table)\s*[ea]ka|mona\s*size|sizes?\s*(mokakda|monawada|thiyenne)|measurements?|chest\s*size|සයිස්|ප්‍රමාණ|size\s*එක\s*(කොහොමද|තෝරන්නේ)|அளவு|size\s*chart/.test(t);
+  return /size\s*(chart|char|table|tabel|list|details?|wistharay?a?|ewanna|ewa|pennanna|balanna)|size\s*(eka\s*)?(kohomada|mokakda|monawada|thoranne|hariyanne|wenne|danne)|size\s*[ea]ka\s*(kohomada|mokakda|thoranne|danne)|(chart|table)\s*[ea]ka|mona\s*size|sizes?\s*(mokakda|monawada|thiyenne)|measurements?|chest\s*size|සයිස්|ප්‍රමාණ|size\s*එක\s*(කොහොමද|තෝරන්නේ)|அளவு|size\s*chart/.test(t);
 }
 
 /** Product ids whose size charts go out this turn (max 2). */
