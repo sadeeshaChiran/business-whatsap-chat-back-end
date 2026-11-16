@@ -852,7 +852,8 @@ export class SalesBotEngineService implements OnModuleInit {
       .replace(/[ \t]+$/gm, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-    return { text, productIds: [...ids].slice(0, 3), autoIds: [...autoIds] };
+    // a list of designs / products: one photo of each, up to 6
+    return { text, productIds: [...ids].slice(0, 6), autoIds: [...autoIds] };
   }
 
   /**
@@ -863,8 +864,8 @@ export class SalesBotEngineService implements OnModuleInit {
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean } = {}): Promise<number> {
     const all = Boolean(ask.all);
-    // all photos of 1-3 products, or one photo each of up to 4 products
-    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, all ? 3 : 4);
+    // all photos of 1-3 products, or one photo each of up to 6 products (a list of designs gets a photo of every design)
+    const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => p.id === pick.id) === index).slice(0, all ? 3 : 6);
     if (!unique.length) return 0;
     const maxPhotos = all ? 10 : 6;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
