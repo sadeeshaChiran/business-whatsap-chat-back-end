@@ -106,7 +106,7 @@ export function choosePhotos(product: Product, wanted: string[], all: boolean): 
     if (best > 0) {
       const own = photos.filter((photo) => score(photo.parts) === best).map((photo) => ({ url: photo.url, matched: true }));
       // several named colours ("white and black") → one photo of each; one colour → up to 2 photos of it
-      if (all) return own.slice(0, 10);
+      if (all) return own;
       const perValue = wanted.length > 1
         ? wanted.flatMap((value) => photos.filter((photo) => photo.parts.includes(value)).slice(0, 1).map((photo) => ({ url: photo.url, matched: true })))
         : own.slice(0, 2);
@@ -114,6 +114,6 @@ export function choosePhotos(product: Product, wanted: string[], all: boolean): 
     }
     // the asked option has no photo of its own → the main photo (its label does not claim that colour)
   }
-  if (all) return photos.slice(0, 10).map((photo) => ({ url: photo.url, matched: false }));
+  if (all) return photos.map((photo) => ({ url: photo.url, matched: false }));
   return [{ url: photos[0].url, matched: false }];
 }
