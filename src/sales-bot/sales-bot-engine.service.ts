@@ -595,18 +595,19 @@ export class SalesBotEngineService implements OnModuleInit {
       && !asksAboutOptions(customerText) && !promised;
     // "monada thiyenne" (what do you have?) in a small shop → one photo of EVERY product, never all photos of one
     let chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
-    if (!quietOrder && asksWhatYouHave(customerText)) {
+    const wholeShop = !quietOrder && asksWhatYouHave(customerText);
+    if (wholeShop) {
       const shown = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false, show_to_bot: true } as never, relations: ['variants'] }))
         .filter((product) => product.is_available !== false && productImages(product).length > 0);
       if (shown.length >= 2 && shown.length <= 12) chatPicks = shown.map((product) => ({ id: Number(product.id), skipIfSentWithinMin: 0.5, auto: true }));
     }
     const picks = [...orderPicks, ...chatPicks.filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
     const photoResult = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
-      { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText), promised });
+      { customerText, all: !wholeShop && (Boolean(result.photo_all) || wantsAllPhotos(customerText)), promised, oneEach: wholeShop });
     const photosSent = photoResult.sent;
     // the customer asked about sizes → the size chart photo(s) the owner marked (never a "here it is" with nothing)
     const chartsSent = await this.sendSizeCharts(companyId, conversation, channelUser, channel, simulated, {
-      aiIds: placedItems.length ? [] : result.size_chart_product_ids ?? [], customerText,
+      aiIds: placedItems.length || wholeShop ? [] : result.size_chart_product_ids ?? [], customerText,
       // the bot asks her size → the chart goes with the question
       botAsks: !placedItems.length && botAsksSize(String(text ?? '')),
       reply: String(text ?? ''),
@@ -910,7 +911,7 @@ export class SalesBotEngineService implements OnModuleInit {
    * A photo is not sent again if it went out recently in this chat (window per pick).
    */
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean; promised?: boolean } = {}): Promise<{ sent: number; hadPhotos: boolean }> {
+    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean; promised?: boolean; oneEach?: boolean } = {}): Promise<{ sent: number; hadPhotos: boolean }> {
     // ONE product talked about → every photo of it; several products (a list) → one photo of each, no limit on how many
     // products; the customer asked for all photos / colours → all. A colour the customer named → that colour's photos.
     // SALES_BOT_MAX_PHOTOS (default 60) only stops a runaway reply.
@@ -920,7 +921,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!unique.length) return { sent: 0, hadPhotos: false };
     let hadPhotos = false;
     // all photos: ONE product the AI chose to show (a product only named in a greeting / a list gets one photo)
-    const all = Boolean(ask.all) || (new Set(unique.map((pick) => pick.id)).size === 1 && !unique.every((pick) => pick.auto));
+    const all = !ask.oneEach && (Boolean(ask.all) || (new Set(unique.map((pick) => pick.id)).size === 1 && !unique.every((pick) => pick.auto)));
     const maxPhotos = Number(process.env.SALES_BOT_MAX_PHOTOS ?? 60) || 60;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
     const sentNow = new Set<string>();   // never the same photo twice in one reply
@@ -1026,6 +1027,9 @@ export class SalesBotEngineService implements OnModuleInit {
     const said = (name: string) => { const short = shortName(name); return short.split(/\s+/).length >= 2 && talk.toLowerCase().includes(short) ? 1 : 0; };
     const named = withCharts.map((product) => ({ id: Number(product.id), score: Math.max(nameMatch(product.name, talk), said(product.name)) }))
       .filter((row) => row.score >= 0.6).sort((a, b) => b.score - a.score).map((row) => row.id);
+    // only when there is a reason to send a chart (the AI chose one, she asked, or the bot asks her size)
+    const reason = ask.aiIds.length > 0 || asksForSizeChart(ask.customerText) || Boolean(ask.botAsks);
+    if (!reason) return 0;
     const aiIds = named.length ? [...named, ...ask.aiIds.filter((id) => named.includes(id))] : ask.aiIds;
     const ids = sizeChartPicks({
       aiIds, customerText: ask.customerText, botAsks: ask.botAsks, inChat: [...named, ...ask.inChat, ...shownBefore],
