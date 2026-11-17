@@ -5,6 +5,7 @@ import { MetaPageConnection } from '../../meta/entities/meta-page-connection.ent
 import { TiktokHook } from '../../common/tiktok-hook';
 import { TelegramHook } from '../../common/telegram-hook';
 import { AppChatHook } from '../../common/app-chat-hook';
+import { metaSendError } from '../../common/meta-error';
 
 export type SocialPlatform = 'messenger' | 'instagram' | 'tiktok' | 'telegram' | 'app';
 
@@ -51,8 +52,34 @@ export class MetaSocialSenderService {
 
   private async parse(response: Response): Promise<string | null> {
     const result = (await response.json().catch(() => ({}))) as { message_id?: string; error?: { message?: string } };
-    if (!response.ok) throw new Error(result.error?.message || `Meta rejected the message (${response.status})`);
+    if (!response.ok) throw new Error(metaSendError(result, response.status, `Meta rejected the message (${response.status})`, { via: 'bot' }));
     return result.message_id ?? null;
+  }
+
+  /** last send time and queue per Page + customer, so a burst of bubbles and photos is spaced out */
+  private readonly lanes = new Map<string, { last: number; chain: Promise<unknown> }>();
+
+  /**
+   * Meta treats many messages to one person within a second or two as spam and then blocks the
+   * app's sends on that Page for a while ("Application does not have permission for this action").
+   * Every Messenger / Instagram send to the same customer waits its turn and keeps a small gap.
+   */
+  private paced<T>(sendAccountId: string, recipientId: string, send: () => Promise<T>): Promise<T> {
+    const gap = Math.max(0, Number(process.env.META_SEND_GAP_MS ?? 1200) || 0);
+    const key = `${sendAccountId}:${recipientId}`;
+    const lane = this.lanes.get(key) ?? { last: 0, chain: Promise.resolve() };
+    const run = lane.chain.catch(() => undefined).then(async () => {
+      const wait = lane.last + gap - Date.now();
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      try { return await send(); } finally { lane.last = Date.now(); }
+    });
+    lane.chain = run;
+    this.lanes.set(key, lane);
+    // forget quiet lanes so the map does not grow
+    void run.catch(() => undefined).then(() => {
+      setTimeout(() => { if (this.lanes.get(key) === lane && lane.chain === run) this.lanes.delete(key); }, gap + 60_000).unref?.();
+    });
+    return run;
   }
 
   private post(sendAccountId: string, token: string, body: BodyInit, json: boolean) {
@@ -75,7 +102,7 @@ export class MetaSocialSenderService {
     // Messenger and Instagram both reject text longer than 2000 characters
     const safe = text.length > 1900 ? `${text.slice(0, 1900)}…` : text;
     const body = JSON.stringify({ recipient: { id: recipientId }, message: { text: safe }, messaging_type: 'RESPONSE' });
-    return this.parse(await this.post(t.sendAccountId, t.token, body, true));
+    return this.paced(t.sendAccountId, recipientId, async () => this.parse(await this.post(t.sendAccountId, t.token, body, true)));
   }
 
   /**
@@ -94,14 +121,14 @@ export class MetaSocialSenderService {
       form.append('messaging_type', 'RESPONSE');
       form.append('message', JSON.stringify({ attachment: { type: 'image', payload: { is_reusable: true } } }));
       form.append('filedata', new Blob([new Uint8Array(image.buffer)], { type: image.mimetype || 'image/jpeg' }), image.fileName || 'photo.jpg');
-      return this.parse(await this.post(t.sendAccountId, t.token, form, false));
+      return this.paced(t.sendAccountId, recipientId, async () => this.parse(await this.post(t.sendAccountId, t.token, form, false)));
     }
     const body = JSON.stringify({
       recipient: { id: recipientId },
       message: { attachment: { type: 'image', payload: { url: image.url } } },
       messaging_type: 'RESPONSE',
     });
-    return this.parse(await this.post(t.sendAccountId, t.token, body, true));
+    return this.paced(t.sendAccountId, recipientId, async () => this.parse(await this.post(t.sendAccountId, t.token, body, true)));
   }
 
   /**
@@ -125,7 +152,7 @@ export class MetaSocialSenderService {
     form.append('messaging_type', 'RESPONSE');
     form.append('message', JSON.stringify({ attachment: { type: 'file', payload: { is_reusable: false } } }));
     form.append('filedata', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.fileName);
-    const id = this.parse(await this.post(t.sendAccountId, t.token, form, false));
+    const id = await this.paced(t.sendAccountId, recipientId, async () => this.parse(await this.post(t.sendAccountId, t.token, form, false)));
     if (file.caption) await this.sendText(companyId, platform, accountId, recipientId, file.caption);
     return id;
   }

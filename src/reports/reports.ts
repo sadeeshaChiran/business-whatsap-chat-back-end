@@ -78,8 +78,8 @@ export class DemandService {
     const insert = (productId: number | null, event: string, option: string | null, text: string | null) =>
       this.dataSource.query(
         `INSERT INTO product_demand_event (company_id, conversation_id, bot_channel_user_id, is_test, product_id, event, option_label, query_text)
-         SELECT $1, $2, $3, $4, $5, $6, $7, $8
-          WHERE $5::int IS NULL OR EXISTS (SELECT 1 FROM product WHERE id = $5 AND company_id = $1)
+         SELECT $1::bigint, $2::int, $3::int, $4::boolean, $5::int, $6::varchar, $7::varchar, $8::varchar
+          WHERE $5::int IS NULL OR EXISTS (SELECT 1 FROM product WHERE id = $5::int AND company_id = $1::bigint)
          ON CONFLICT DO NOTHING`, [...base, productId, event, option?.slice(0, 255) ?? null, text?.slice(0, 300) ?? null]);
     const text = String(turn.customerText ?? '').trim().slice(0, 300) || null;
     for (const id of [...new Set(turn.shownProductIds.map(Number).filter((n) => n > 0))].slice(0, 10)) await insert(id, 'shown', null, null);
