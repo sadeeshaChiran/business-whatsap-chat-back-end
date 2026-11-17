@@ -1,4 +1,5 @@
 import { InvoiceDoc, renderInvoicePdf } from './invoice-pdf';
+import { metaSendError } from '../common/meta-error';
 import type { WhatsappTextOptions } from '../integrations/whatsapp/interfaces/whatsapp-service.interface';
 import { isTestPhone, testSendResult } from '../common/test-phone';
 import { BotBooking } from '../sales-bot/entities/bot-booking.entity';
@@ -2953,7 +2954,7 @@ export class BotAdminService {
       body: JSON.stringify({ recipient: { id: recipientId }, message: { text }, messaging_type: 'RESPONSE' }),
     });
     const result = await response.json() as { message_id?: string; error?: { message?: string } };
-    if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected the message. Check messaging permissions and the reply window.');
+    if (!response.ok) throw new BadRequestException(metaSendError(result, response.status, 'Meta rejected the message. Check messaging permissions and the reply window.', { via: 'agent', page: sendAccountId }));
     return result.message_id ?? null;
   }
 
@@ -2999,7 +3000,7 @@ export class BotAdminService {
       body: JSON.stringify({ recipient: { id: recipientId }, message, messaging_type: 'RESPONSE' }),
     });
     const result = await response.json() as { message_id?: string; error?: { message?: string } };
-    if (!response.ok) throw new BadRequestException(result.error?.message || 'Meta rejected this message. Check channel permissions and the reply window.');
+    if (!response.ok) throw new BadRequestException(metaSendError(result, response.status, 'Meta rejected this message. Check channel permissions and the reply window.', { via: 'agent', page: target.sendAccountId }));
     return result.message_id ?? null;
   }
 
@@ -3016,7 +3017,7 @@ export class BotAdminService {
       method: 'POST', headers: { Authorization: `Bearer ${target.connection.page_access_token}` }, body: form,
     });
     const result = await response.json() as { message_id?: string; error?: { message?: string } };
-    if (!response.ok) throw new BadRequestException(result.error?.message || 'Messenger rejected this attachment.');
+    if (!response.ok) throw new BadRequestException(metaSendError(result, response.status, 'Messenger rejected this attachment.', { via: 'agent', page: target.sendAccountId }));
     if (caption?.trim()) await this.postSocialMessage(companyId, 'messenger', accountId, recipientId, { text: caption.trim() });
     return result.message_id ?? null;
   }

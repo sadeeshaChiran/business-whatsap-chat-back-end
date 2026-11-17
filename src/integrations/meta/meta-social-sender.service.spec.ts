@@ -36,6 +36,19 @@ describe('MetaSocialSenderService', () => {
     expect(fetchMock.mock.calls[0][0]).toContain('/PAGE1/messages');
   });
 
+  it('spaces out a burst of messages to the same customer (Meta blocks bursts as spam)', async () => {
+    process.env.META_SEND_GAP_MS = '150';
+    const times: number[] = [];
+    const fetchMock = jest.fn().mockImplementation(async () => { times.push(Date.now()); return { ok: true, json: async () => ({ message_id: 'm' }) }; });
+    global.fetch = fetchMock as never;
+    const svc = new MetaSocialSenderService(repo(connection) as never);
+    await Promise.all([svc.sendText(7, 'messenger', 'PAGE1', 'USER9', 'a'), svc.sendText(7, 'messenger', 'PAGE1', 'USER9', 'b'), svc.sendText(7, 'messenger', 'PAGE1', 'USER9', 'c')]);
+    expect(fetchMock.mock.calls.map((c) => JSON.parse(c[1].body).message.text)).toEqual(['a', 'b', 'c']);
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(140);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(140);
+    delete process.env.META_SEND_GAP_MS;
+  });
+
   it('cuts text over the 2000-character limit', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ message_id: 'm.3' }) });
     global.fetch = fetchMock as never;
