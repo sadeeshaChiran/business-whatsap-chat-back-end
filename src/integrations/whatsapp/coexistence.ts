@@ -160,9 +160,18 @@ export class CoexistenceService {
       [user] = (await this.dataSource.query(
         `INSERT INTO bot_channel_user (company_id, platform, external_user_id, display_name, bot_enabled, manual_mode, last_seen_at,
                                        whatsapp_channel_id, first_whatsapp_channel_id, created_at, updated_at)
-         VALUES ($1, 'whatsapp', $2, $2, FALSE, FALSE, NOW(), $3, $3, NOW(), NOW()) RETURNING id`,
+         VALUES ($1, 'whatsapp', $2, $2, FALSE, FALSE, NOW(), $3, $3, NOW(), NOW())
+         ON CONFLICT DO NOTHING RETURNING id`,
         [companyId, phone, channelId],
       )) as Array<{ id: number }>;
+      // two webhooks for the same new customer can arrive together: the other one created the row first
+      if (!user) {
+        [user] = (await this.dataSource.query(
+          `SELECT id FROM bot_channel_user WHERE company_id = $1 AND platform = 'whatsapp' AND external_user_id = $2 ORDER BY id ASC LIMIT 1`,
+          [companyId, phone],
+        )) as Array<{ id: number }>;
+      }
+      if (!user) throw new Error(`could not create WhatsApp customer ${phone}`);
     }
     let [conversation] = (await this.dataSource.query(
       `SELECT id FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 1`,

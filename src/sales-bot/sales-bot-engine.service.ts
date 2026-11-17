@@ -194,6 +194,26 @@ export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: st
 }
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 
+/** After a change of a placed order: the AI's short line (without any amounts it worked out itself) + the saved order. */
+export function changedOrderMessage(language: string, lead: string,
+  order: { id: number; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number }): string {
+  const money = /(rs\.?|රු\.?|ரூ\.?|lkr)\s*[\d,]+|[\d,]{3,}\s*(\/-|රු)|total|එකතුව|மொத்தம்|delivery\s*free|free\s*delivery/i;
+  const kept = lead.split('\n').map((line) => line.trim()).filter((line) => line && !money.test(line)).join('\n').slice(0, 300);
+  const title = language === 'sinhala' || language === 'sinhala_latin' ? `Order #${order.id} – අලුත් විස්තර:` : language === 'tamil' ? `Order #${order.id} – புதிய விவரம்:` : `Order #${order.id} – updated:`;
+  const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_text ? ` (${item.variant_text})` : ''} – ${rs(item.total_price)}`);
+  if (order.fee != null) lines.push(`Delivery: ${order.fee ? rs(order.fee) : 'FREE'}`);
+  lines.push(`Total: ${rs(order.total)}`);
+  return [kept, [title, ...lines].join('\n')].filter(Boolean).join('\n\n');
+}
+
+/** What the customer sees on the invoice: items, prices, total, name, address and phone. */
+export function orderFingerprint(order: { total_amount?: unknown; delivery_fee?: unknown; customer_name?: unknown; address?: unknown; customer_phone?: unknown },
+  items: Array<{ product_id?: unknown; product_name?: unknown; variant_text?: unknown; quantity?: unknown; unit_price?: unknown }>): string {
+  const lines = items.map((item) => [item.product_id, item.product_name, item.variant_text ?? '', Number(item.quantity), Number(item.unit_price)].join('|')).sort();
+  return JSON.stringify([lines, Number(order.total_amount ?? 0), Number(order.delivery_fee ?? 0),
+    String(order.customer_name ?? '').trim(), String(order.address ?? '').trim(), String(order.customer_phone ?? '').trim()]);
+}
+
 /** Sent instead of the AI text when a confirmed order needs a human check. */
 function holdMessage(language: string): string {
   if (language === 'sinhala') return 'පොඩ්ඩක් ඉන්න, අපේ team එක ඔයාගේ order එක check කරලා ඉක්මනින්ම confirm කරනවා.';
@@ -422,6 +442,24 @@ export class SalesBotEngineService implements OnModuleInit {
     }
   }
 
+  /**
+   * A person replied from the phone app (WhatsApp coexistence) or from Meta Business Suite in the last
+   * SALES_BOT_OWNER_PAUSE_MIN minutes (default 60; 0 = off). Instant auto-replies of the phone app (greeting / away
+   * message, sent within a few seconds of the customer's message) do not count.
+   */
+  private async ownerRepliedRecently(conversationId: number): Promise<boolean> {
+    const minutes = Number(process.env.SALES_BOT_OWNER_PAUSE_MIN ?? 60);
+    if (!(minutes > 0)) return false;
+    const [row] = (await Promise.resolve().then(() => this.messageRepository.query(
+      `SELECT 1 FROM bot_message o
+        WHERE o.conversation_id = $1 AND o.direction::text = 'outbound' AND o.source IN ('phone-app', 'meta-echo')
+          AND o.created_at > NOW() - make_interval(mins => $2::int)
+          AND NOT EXISTS (SELECT 1 FROM bot_message c WHERE c.conversation_id = o.conversation_id AND c.direction::text = 'inbound'
+                           AND c.created_at <= o.created_at AND c.created_at > o.created_at - INTERVAL '15 seconds')
+        LIMIT 1`, [conversationId, Math.round(minutes)])).catch(() => [])) as unknown[];
+    return Boolean(row);
+  }
+
   /** Should the bot answer this chat right now? */
   private async botMayReply(company: Company | null, conversation: BotConversation, channelUser: BotChannelUser, simulated: boolean) {
     if (!company || !(await this.planService.planAllowsBot(company.plan)) || !company.bot_enabled) return false;
@@ -433,6 +471,9 @@ export class SalesBotEngineService implements OnModuleInit {
     // An agent who accepted the chat works WITH the bot: the bot keeps helping until someone switches it off for this
     // customer (bot_enabled = false). Only a closed chat stops it.
     if (conversation.status === 'closed') return false;
+    // The owner answered from the WhatsApp Business phone app / Meta Business Suite (outside our inbox, so they cannot
+    // see or switch off the bot): the bot steps back in this chat for a while, so two people never answer at once.
+    if (!simulated && (await this.ownerRepliedRecently(conversation.id))) return false;
     if (channelUser.bot_enabled) return true;
     // Never toggled by an agent (manual_mode false) → new customer: switch the bot on if the company wants that.
     if (!channelUser.manual_mode) {
@@ -515,6 +556,7 @@ export class SalesBotEngineService implements OnModuleInit {
     let fromCampaign = false;   // the customer came from an ad / boosted post that names products
     try {
       const context = await this.contextService.build(companyId, channelUser.id, botChannel(social), { conversationId: conversation.id, message });
+      if (context.campaign) await this.productsFromAdPicture(companyId, conversation.id, context.campaign, channel);
       fromCampaign = Boolean(context.campaign && ((context.campaign.product_ids ?? []).length || context.campaign.ad_headline || context.campaign.ad_body));
       if (photoMatches.length) context.photo_matches = photoMatches;
       result = await this.client.reply({
@@ -829,6 +871,57 @@ export class SalesBotEngineService implements OnModuleInit {
    * Finds which of our products the customer's photo(s) show (see photo-match.ts). The result is kept on the message
    * (media_note / media_match): the chat history, the inbox and a later reply to that photo all know what it was.
    */
+  /** ad id → products its picture shows (one match per ad, not per chat) */
+  private readonly adPictureProducts = new Map<string, { at: number; ids: number[]; names: string[] }>();
+
+  /**
+   * The ad text often does not name the product ("Dear customer… 190 GSM T-shirt…"), but the ad picture shows it.
+   * When the ad has no products linked, its picture is matched against the shop's product photos (same matcher as
+   * a customer's photo) and the bot is told which product the ad shows. Works for every shop; nothing to train.
+   */
+  private async productsFromAdPicture(companyId: number, conversationId: number,
+    campaign: { source: string; product_ids: number[]; instructions: string }, channel: WhatsappChannel | null) {
+    if (!this.photoMatcher || campaign.source !== 'ad' || campaign.product_ids.length) return;
+    const [row] = (await this.messageRepository.query(
+      `SELECT ad_source_id, ad_media_url, ad_media_type FROM bot_conversation WHERE id = $1`, [conversationId]).catch(() => [])) as
+      Array<{ ad_source_id: string | null; ad_media_url: string | null; ad_media_type: string | null }>;
+    const adId = String(row?.ad_source_id ?? '').trim();
+    const mediaUrl = String(row?.ad_media_url ?? '').trim();
+    if (!adId || !mediaUrl || (row?.ad_media_type && !/image|photo|video/i.test(row.ad_media_type))) return;
+    const key = `${companyId}:${adId}`;
+    let found = this.adPictureProducts.get(key);
+    if (!found || Date.now() - found.at > 24 * 3600_000) {
+      const file = await this.loadMedia(mediaUrl, channel);
+      if (!file?.mime_type.startsWith('image/')) return;
+      const result = await this.photoMatcher.match(companyId, file).catch((error: unknown) => {
+        this.logger.warn(`ad picture match failed (conversation ${conversationId}): ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+      });
+      if (!result) return;
+      for (const usage of result.usage) {
+        await this.usageRepository.save(this.usageRepository.create({
+          company_id: companyId, conversation_id: conversationId, model: String((usage as { model?: string }).model ?? 'photo-match'),
+          input_tokens: usage.input_tokens, cached_tokens: 0, output_tokens: usage.output_tokens, calls: usage.calls ?? 1,
+          cost_usd: usage.cost_usd, latency_ms: usage.latency_ms, is_test: false,
+        })).catch(() => undefined);
+      }
+      // exact / likely → trust from 60%; unsure (close options) → only a clear 75%+
+      const min = result.match.status === 'exact' || result.match.status === 'likely' ? 60 : result.match.status === 'unsure' ? 75 : 101;
+      const picks = result.match.products.filter((p) => p.confidence >= min);
+      // the best product, plus others that are almost as close (an ad can show two products)
+      const best = picks.length ? Math.max(...picks.map((p) => p.confidence)) : 0;
+      const chosen = [...new Map(picks.filter((p) => p.confidence >= best - 10).map((p) => [p.product_id, p])).values()].slice(0, 3);
+      found = { at: Date.now(), ids: chosen.map((p) => p.product_id), names: chosen.map((p) => p.name) };
+      this.adPictureProducts.set(key, found);
+      if (this.adPictureProducts.size > 500) this.adPictureProducts.delete(this.adPictureProducts.keys().next().value as string);
+      this.logger.log(`conv ${conversationId}: ad ${adId} picture → ${result.match.status} ${chosen.map((p) => `#${p.product_id} ${p.confidence}%`).join(', ') || '-'}`);
+    }
+    if (!found.ids.length) return;
+    campaign.product_ids = found.ids;
+    const note = `The ad picture shows ${found.names.join(' / ')} - when the customer asks about the ad ("more info on this?", "price?", "details"), answer about ${found.ids.length > 1 ? 'these products' : 'this product'}, not other products that only share words with the ad text.`;
+    campaign.instructions = campaign.instructions ? `${campaign.instructions}\n${note}` : note;
+  }
+
   private async matchPhotos(companyId: number, conversationId: number, rows: BotMessage[], mediaRow: BotMessage | undefined,
     media: { mime_type: string; data_b64: string } | null, channel: WhatsappChannel | null): Promise<PhotoMatch[]> {
     if (!this.photoMatcher || !rows.length) return [];
@@ -930,8 +1023,9 @@ export class SalesBotEngineService implements OnModuleInit {
     const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => key(p) === key(pick)) === index);
     if (!unique.length) return { sent: 0, hadPhotos: false };
     let hadPhotos = false;
-    // all photos: ONE product the AI chose to show (a product only named in a greeting / a list gets one photo)
-    const all = !ask.oneEach && (Boolean(ask.all) || (new Set(unique.map((pick) => pick.id)).size === 1 && !unique.every((pick) => pick.auto)));
+    // every photo of a product ONLY when the customer asks for them ("okkoma photos", "anith colours", "more photos");
+    // talking about a product sends ONE photo of it (the colour she named / the AI chose), the order summary one per line
+    const all = !ask.oneEach && Boolean(ask.all);
     const maxPhotos = Number(process.env.SALES_BOT_MAX_PHOTOS ?? 60) || 60;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
     const sentNow = new Set<string>();   // never the same photo twice in one reply
@@ -955,10 +1049,12 @@ export class SalesBotEngineService implements OnModuleInit {
       const askedNow = asksForPhotos(ask.customerText ?? '') || asksAboutOptions(ask.customerText ?? '') || Boolean(ask.promised);
       const candidates = choosePhotos(product, wanted, all && !pick.orderLine).map((photo) => photo.url).filter((url) => !sentNow.has(url));
       if (candidates.length) hadPhotos = true;
-      // sent again whenever the product is talked about again – only not twice within 30 seconds (same burst / retry)
+      // she asked for photos / the summary shows the order → sent (again); otherwise a photo that is already in the chat
+      // (last 3 hours) is not sent again just because the product is talked about again
+      const repeatAfter = Math.max(pick.skipIfSentWithinMin, Number(process.env.SALES_BOT_PHOTO_REPEAT_MIN ?? 180) || 0);
       const urls = askedNow || pick.orderLine ? candidates
         : all ? (candidates.every((url) => sentWithin(url, 0.5)) ? [] : candidates)
-        : candidates.filter((url) => !sentWithin(url, pick.skipIfSentWithinMin));
+        : candidates.filter((url) => !sentWithin(url, repeatAfter));
       let lastLabel = '';
       for (const url of urls) {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
@@ -1027,7 +1123,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!withCharts.length) return 0;
     const recent: Array<{ media_url: string | null; media_note: string | null; age_min: number }> = await this.messageRepository.query(
       `SELECT media_url, media_note, EXTRACT(EPOCH FROM (LOCALTIMESTAMP - created_at)) / 60 AS age_min FROM bot_message
-        WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' ORDER BY id DESC LIMIT 20`, [conversation.id]).catch(() => []);
+        WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' ORDER BY id DESC LIMIT 200`, [conversation.id]).catch(() => []);
     // products whose photos went out earlier in this chat (newest first) also count as "in the chat"
     const shownBefore = recent.map((row) => Number(/#(\d+)\s*$/.exec(String(row.media_note ?? ''))?.[1] ?? 0)).filter((id) => id > 0);
     // the product the reply / the customer is talking about wins over the AI's id ("Red Full Kit eke size?" → the Full
@@ -1046,9 +1142,9 @@ export class SalesBotEngineService implements OnModuleInit {
       withChart: new Set(withCharts.map((product) => Number(product.id))),
     });
     const social = socialPlatformOf(channelUser.platform);
-    // the AI or the customer asked about sizes this turn → the chart goes with the answer every time
-    // (only not twice within a minute – one burst of messages); otherwise not again within 10 minutes
-    const repeatAfterMin = asksForSizeChart(ask.customerText) || ask.aiIds.length || ask.botAsks ? 1 : 10;
+    // the customer asks for the chart → it comes again (not twice within a minute); the AI / the bot asking her size
+    // → a chart that is already in the chat is not sent again for 2 hours (one chat got the same chart 14 times)
+    const repeatAfterMin = asksForSizeChart(ask.customerText) ? 1 : 120;
     let sent = 0;
     for (const id of ids) {
       const product = withCharts.find((p) => Number(p.id) === id);
@@ -1244,6 +1340,9 @@ export class SalesBotEngineService implements OnModuleInit {
       const change = await this.handleOrderChange(companyId, conversation, channelUser, result.order_change, who);
       if (change.intent) intents.add(change.intent);
       if (change.invoice) invoiceOrderIds.push(change.invoice);
+      // the real new total from the system – the AI's own sums were wrong ("Rs 2,980, delivery free" while the order
+      // said Rs 3,995); amounts the AI wrote are left out and the saved order's total is added
+      if (change.totals && !replyOverride) replyOverride = changedOrderMessage(result.language, String(result.reply ?? ''), change.totals);
       if (change.hold) replyOverride = changeHoldMessage(result.language);
       if (change.unavailable) { replyOverride = unavailableMessage(result.language, change.unavailable); unavailableItem = change.unavailable; }
       if (change.handoff) {
@@ -1606,6 +1705,22 @@ export class SalesBotEngineService implements OnModuleInit {
     this.pusherService.trigger(`company-${companyId}`, 'bot_notification', { kind, priority, title, message, conversation_id: conversationId, order_id: orderId });
   }
 
+  /**
+   * The AI did not fill the shop's details form: the customer's own details message(s) of the last 3 hours (the ones
+   * with a phone number or several lines – "Name / Address / 0771234567 / Advance 1000 / 8XL") go into the order note
+   * as she wrote them, so nothing she said (delivery date, advance paid, sizes) is lost.
+   */
+  private async customerDetailsMessage(conversationId: number): Promise<string> {
+    const rows = (await Promise.resolve().then(() => this.messageRepository.query(
+      `SELECT content FROM bot_message WHERE conversation_id = $1 AND direction::text = 'inbound' AND message_type::text = 'text'
+          AND created_at > NOW() - INTERVAL '3 hours' AND COALESCE(content, '') <> '' ORDER BY id DESC LIMIT 12`, [conversationId])).catch(() => [])) as Array<{ content: string }>;
+    const picked = rows.map((row) => String(row.content).trim())
+      .filter((text) => /(?:\+?94|0)(?:[\s.-]?\d){9}/.test(text) || (text.split('\n').filter((line) => line.trim()).length >= 3 && text.length >= 25))
+      .slice(0, 2).reverse();
+    if (!picked.length) return '';
+    return ['📋 Customer details (as the customer sent them):', ...picked.map((text) => text.slice(0, 600))].join('\n');
+  }
+
   /** Adds a dated line to the order's note (admin_note), keeping what is already there. */
   private async appendOrderNote(orderId: number, line: string) {
     const order = await this.orderRepository.findOne({ where: { id: orderId } });
@@ -1691,7 +1806,8 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** Pending → the bot edits the order. Confirmed / Processing → request only. Shipped → request + a person. */
   private async handleOrderChange(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string; unavailable?: string }> {
+    change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string; unavailable?: string;
+      totals?: { id: number; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number } }> {
     const order = await this.findOpenOrder(companyId, channelUser.id, change.order_id);
     const request = String(change.request ?? '').trim() || 'wants to change the order';
     if (!order) return { intent: null };
@@ -1705,6 +1821,7 @@ export class SalesBotEngineService implements OnModuleInit {
     }
 
     // Pending: apply the change – prices and delivery fee are recalculated here, never taken from the AI
+    const before = orderFingerprint(order, order.items ?? []);
     let items = order.items ?? [];
     let weight = Number(order.total_weight_kg ?? 0);
     if (change.items?.length) {
@@ -1732,7 +1849,10 @@ export class SalesBotEngineService implements OnModuleInit {
     const zone = area ? findZone(zones, area) : null;
     const freeOver = (await this.contextService.getSettings(companyId)).free_delivery_over;
     const fee = zone ? orderDeliveryFee(zone, weight, subtotal, freeOver) : order.delivery_fee == null ? null : Number(order.delivery_fee);
-    const phone = String(change.customer_phone ?? '').replace(/[^\d+]/g, '');
+    // "0764264699 / 0769906256": the first number is the order phone, the others go into the note (never glued together)
+    const { phone: firstPhone, others: otherPhones } = splitOrderPhones(String(change.customer_phone ?? ''));
+    const phone = String(firstPhone ?? '').replace(/[^\d+]/g, '');
+    if (otherPhones.length) await this.appendOrderNote(order.id, `📞 Other phone: ${otherPhones.join(' / ')}`);
     await this.orderRepository.update(order.id, {
       total_amount: subtotal + (fee ?? 0), delivery_fee: fee, total_weight_kg: weight || null,
       delivery_area: zone?.area ?? order.delivery_area,
@@ -1747,7 +1867,13 @@ export class SalesBotEngineService implements OnModuleInit {
     await this.appendOrderNote(order.id, `✏️ Changed by the customer: ${request}`);
     await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${order.id} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
     await this.advanceLead(conversation.id, 'won', { order_value: subtotal + (fee ?? 0), order_id: order.id });
-    return { intent: 'order_changed', invoice: order.id };
+    // a new invoice only when the order really changed (items, prices, total, name, address, phone) – the AI often
+    // sends the same order again, and the customer got the same invoice 5 times
+    const after = await this.orderRepository.findOne({ where: { id: order.id } });
+    const changed = !after || orderFingerprint(after, items) !== before;
+    const totals = { id: order.id, fee, total: subtotal + (fee ?? 0),
+      items: items.map((item) => ({ quantity: Number(item.quantity), product_name: String(item.product_name), variant_text: item.variant_text ?? null, total_price: Number(item.total_price) })) };
+    return changed ? { intent: 'order_changed', invoice: order.id, totals } : { intent: 'order_changed', totals };
   }
 
   /** Pending → cancelled. Confirmed / Processing → request only (the team decides). Shipped → request + a person. */
@@ -1974,7 +2100,7 @@ export class SalesBotEngineService implements OnModuleInit {
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
       total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
-      admin_note: ['Created by the sales bot.', orderDetailsNote(pending.details),
+      admin_note: ['Created by the sales bot.', orderDetailsNote(pending.details) || await this.customerDetailsMessage(conversation.id),
         ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].filter(Boolean).join('\n'),
       created_by: 'bot', agent_id: await this.customerAgent(conversation),
     }));
