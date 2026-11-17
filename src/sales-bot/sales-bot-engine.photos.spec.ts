@@ -78,3 +78,18 @@ describe('answer sooner when the message looks finished', () => {
     expect(looksFinished('price')).toBe(false);
   });
 });
+
+import { asksAboutOptions, promisesPhotos } from './sales-bot-engine.service';
+describe('photos are sent when she asks, never a wrong "no photo"', () => {
+  it('knows a question about colours / designs', () => {
+    for (const t of ['colors monada thiyenne', 'anith paata thiyenawada', 'design monawada', 'මොන පාටද තියෙන්නේ']) expect(asksAboutOptions(t)).toBe(true);
+    for (const t of ['L size ekak', 'ok confirm', 'price kiyada']) expect(asksAboutOptions(t)).toBe(false);
+  });
+  it('knows a reply that says photos are coming', () => {
+    expect(promisesPhotos('හරි මිස්, Chérie T-Shirt එකේ සහ Full Kit එකේ photos මෙන්න.')).toBe(true);
+    expect(promisesPhotos('Size eka mokakda?')).toBe(false);
+  });
+  it('a product WITH photos (only not sent again) is never "no photo in the system"', () => {
+    expect(withoutPhotoPointer('photos මෙන්න. මිස් කැමති මොන colour එකද?', 'sinhala', false)).toBe('මිස් කැමති මොන colour එකද?');
+  });
+});

@@ -127,11 +127,11 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
   }
   const autoSet = new Set(auto);
   // an option the customer asked to see ("the blue one") goes first – only that option's photo is sent
-  // what the AI chose to show is shown, also again later in the chat (only not twice in the same burst)
-  // several chosen colours of one product ("brown 2, black 2") → a photo of each
-  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id && (p.variantId === undefined || p.variantId === v.variant_id))) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 2 });
-  for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 2 });
-  for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 24 * 60 });
+  // no "already sent" rule: a product talked about again gets its photos again (only not twice within 30 seconds –
+  // the same burst / a retried reply). Several chosen colours of one product ("brown 2, black 2") → a photo of each.
+  for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id && (p.variantId === undefined || p.variantId === v.variant_id))) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 0.5 });
+  for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 0.5 });
+  for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 0.5 });
   return picks;
 }
 
@@ -152,8 +152,19 @@ export function asksForPhotos(text: string): boolean {
 const PHOTO_WORD = /photo|pic|image|ෆොටෝ|ඡායාරූප|පින්තූර|படம்|போட்டோ/i;
 const SENT_WORD = /එවන්නම්|එව්වා|එවලා|එවුවා|යවන්නම්|ewannam|evannam|ewwa|ewala|sending|sent|send you|here (?:is|are)|මෙන්න|අනுப்பு|அனுப்பி/i;
 
-/** No photo went out: no "👇", and no sentence that says photos are sent / coming ("photos දැන් එවන්නම්"). */
-export function withoutPhotoPointer(text: string, language = ''): string {
+/** The reply says photos are sent / coming ("photos මෙන්න", "photos ewwa", "here are the photos"). */
+export function promisesPhotos(text: string): boolean {
+  return String(text ?? '').split(/\n|(?<=[.!?])\s+/).some((part) => PHOTO_WORD.test(part) && SENT_WORD.test(part)) || /[👇⬇️]/u.test(String(text ?? ''));
+}
+
+/** The customer asks what there is to see ("colors monada thiyenne", "design monawada", "anith paata"). */
+export function asksAboutOptions(text: string): boolean {
+  return /\b(colou?rs?|colors|paata|pata|designs?|anith|other|options?)\b|පාට|ඩිසයින්|நிற/i.test(String(text ?? ''));
+}
+
+/** No photo went out: no "👇", and no sentence that says photos are sent / coming ("photos දැන් එවන්නම්").
+ * sayNone = false when the product HAS photos (they were only not sent again) – then never "no photo in the system". */
+export function withoutPhotoPointer(text: string, language = '', sayNone = true): string {
   const plain = text.replace(/[ \t]*[👇⬇️👉]+/gu, '').replace(/[ \t]+\n/g, '\n').trim();
   let removed = false;
   const left = plain.split('\n').map((line) => line.split(/(?<=[.!?])\s+/).filter((part) => {
@@ -162,6 +173,7 @@ export function withoutPhotoPointer(text: string, language = ''): string {
     return !promise;
   }).join(' ')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
   if (!removed) return plain;
+  if (!sayNone) return left;
   const none = language === 'english' ? 'Sorry, there is no photo of it in our system right now.'
     : language === 'tamil' ? 'மன்னிக்கவும், இதன் படம் இப்போது எங்கள் system-ல் இல்லை.'
     : 'අනේ sorry, ඒකේ photo එකක් දැනට system එකේ නෑ.';
@@ -538,8 +550,13 @@ export class SalesBotEngineService implements OnModuleInit {
     // the order in progress BEFORE this answer: while an order is being taken the chat is not flooded with product photos
     const orderBefore = session.pending_order?.items?.length ? session.pending_order : null;
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
-    // the order was placed now → the photos of what she ordered go with the confirmation (one per order line)
-    const placedItems = outcome.invoiceOrderIds.length && orderBefore && !session.pending_order?.items?.length ? orderBefore.items : [];
+    // the order summary ("Order එක confirm කරන්නද?") is shown now – new, or with other items than the summary before →
+    // the photos of what she is ordering (one per order line, its colour) go WITH it, so she confirms what she sees.
+    // Not again on the "ok" that confirms it.
+    const lineKey = (order?: PendingOrder | null) => (order?.items ?? []).map((item) => `${item.product_id}:${item.variant_id ?? ''}`).sort().join('|');
+    const summaryNow = session.pending_order?.summary_shown && session.pending_order.items?.length
+      && !(orderBefore?.summary_shown && lineKey(orderBefore) === lineKey(session.pending_order));
+    const placedItems = summaryNow ? session.pending_order!.items : [];
     session.language = result.language;
     if (result.memory) session.memory = mergeMemory(session.memory, String(result.memory));
     if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
@@ -564,11 +581,15 @@ export class SalesBotEngineService implements OnModuleInit {
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
     const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true }));
     // while the order is being taken (items chosen, details, summary): no product photos – only when she asks to see one
-    const quietOrder = Boolean(orderBefore || session.pending_order?.items?.length) && !asksForPhotos(customerText);
+    // (she asks for photos / what colours or designs there are, or the reply says photos are coming → they are sent)
+    const promised = Boolean(text) && promisesPhotos(String(text));
+    const quietOrder = Boolean(orderBefore || session.pending_order?.items?.length) && !asksForPhotos(customerText)
+      && !asksAboutOptions(customerText) && !promised;
     const chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
     const picks = [...orderPicks, ...chatPicks.filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
-    const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
-      { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
+    const photoResult = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
+      { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText), promised });
+    const photosSent = photoResult.sent;
     // the customer asked about sizes → the size chart photo(s) the owner marked (never a "here it is" with nothing)
     const chartsSent = await this.sendSizeCharts(companyId, conversation, channelUser, channel, simulated, {
       aiIds: placedItems.length ? [] : result.size_chart_product_ids ?? [], customerText,
@@ -580,7 +601,7 @@ export class SalesBotEngineService implements OnModuleInit {
       return 0;
     });
     // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
-    if (text && !outcome.replyOverride && !photosSent && !chartsSent) text = withoutPhotoPointer(text, result.language);
+    if (text && !outcome.replyOverride && !photosSent && !chartsSent) text = withoutPhotoPointer(text, result.language, !photoResult.hadPhotos);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -874,14 +895,15 @@ export class SalesBotEngineService implements OnModuleInit {
    * A photo is not sent again if it went out recently in this chat (window per pick).
    */
   private async sendPhotos(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean } = {}): Promise<number> {
+    channel: WhatsappChannel | null, picks: PhotoPick[], simulated: boolean, ask: { customerText?: string; all?: boolean; promised?: boolean } = {}): Promise<{ sent: number; hadPhotos: boolean }> {
     // ONE product talked about → every photo of it; several products (a list) → one photo of each, no limit on how many
     // products; the customer asked for all photos / colours → all. A colour the customer named → that colour's photos.
     // SALES_BOT_MAX_PHOTOS (default 60) only stops a runaway reply.
     // one pick per product – or per option when the order has several colours of one product (Peach, Black, White)
     const key = (pick: PhotoPick) => `${pick.id}:${pick.variantId ?? pick.variant ?? ''}`;
     const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => key(p) === key(pick)) === index);
-    if (!unique.length) return 0;
+    if (!unique.length) return { sent: 0, hadPhotos: false };
+    let hadPhotos = false;
     const all = Boolean(ask.all) || new Set(unique.map((pick) => pick.id)).size === 1;
     const maxPhotos = Number(process.env.SALES_BOT_MAX_PHOTOS ?? 60) || 60;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
@@ -902,10 +924,14 @@ export class SalesBotEngineService implements OnModuleInit {
       const wanted = named.length ? named : variantPhotoOptions(product, pick.variantId, pick.variant);
       // asked again for all photos → send them even if some went out a few minutes ago
       // the customer ASKED for photos ("ewanna", "photo", "pennanna") → send again even if it went out a few minutes ago
-      const askedNow = asksForPhotos(ask.customerText ?? '');
-      const urls = choosePhotos(product, wanted, all && !pick.orderLine).map((photo) => photo.url)
-        // all photos of a product / the customer asked → every one of them, also the one sent with a list a minute ago
-        .filter((url) => !sentNow.has(url) && (all || askedNow || pick.orderLine || !sentWithin(url, pick.skipIfSentWithinMin)));
+      // she asked (photos, colours, designs) or the reply says "photos මෙන්න" → always sent, as often as she asks
+      const askedNow = asksForPhotos(ask.customerText ?? '') || asksAboutOptions(ask.customerText ?? '') || Boolean(ask.promised);
+      const candidates = choosePhotos(product, wanted, all && !pick.orderLine).map((photo) => photo.url).filter((url) => !sentNow.has(url));
+      if (candidates.length) hadPhotos = true;
+      // sent again whenever the product is talked about again – only not twice within 30 seconds (same burst / retry)
+      const urls = askedNow || pick.orderLine ? candidates
+        : all ? (candidates.every((url) => sentWithin(url, 0.5)) ? [] : candidates)
+        : candidates.filter((url) => !sentWithin(url, pick.skipIfSentWithinMin));
       let lastLabel = '';
       for (const url of urls) {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
@@ -933,7 +959,7 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
     if (sent) await this.touch(companyId, conversation.id);
-    return sent;
+    return { sent, hadPhotos };
   }
 
   /** One image to the customer on their channel (WhatsApp / Messenger / Instagram); the simulator sends nothing. */
