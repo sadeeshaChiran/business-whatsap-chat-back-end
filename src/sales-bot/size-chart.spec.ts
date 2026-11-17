@@ -1,4 +1,4 @@
-import { asksForSizeChart, sizeChartPicks } from './size-chart';
+import { asksForSizeChart, botAsksSize, sizeChartPicks } from './size-chart';
 
 describe('size charts', () => {
   it('knows when the customer asks for the size chart', () => {
@@ -23,5 +23,13 @@ describe('size charts', () => {
   it('one product with a chart in the shop → that one', () => {
     expect(sizeChartPicks({ aiIds: [], customerText: 'size chart?', inChat: [], withChart: new Set([4]) })).toEqual([4]);
     expect(sizeChartPicks({ aiIds: [], customerText: 'size chart?', inChat: [], withChart: new Set([4, 6]) })).toEqual([]);
+  });
+
+  it('the bot asks her size → the chart of the product in the chat goes with it', () => {
+    for (const reply of ['හරි මිස් 😊 Size එක මොකක්ද?', 'Miss, mona size ekada ona?', 'Which size would you like?', 'මිස්ට මොන size එකද ඕන?'])
+      expect(botAsksSize(reply)).toBe(true);
+    for (const reply of ['Size L add kala', 'Order eka confirm karannada?', 'Sizes M, L, XL thiyenawa.'])
+      expect(botAsksSize(reply)).toBe(false);
+    expect(sizeChartPicks({ aiIds: [], customerText: 'mata meka one', botAsks: true, inChat: [7], withChart: new Set([7]) })).toEqual([7]);
   });
 });
