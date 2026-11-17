@@ -609,6 +609,7 @@ export class SalesBotEngineService implements OnModuleInit {
       aiIds: placedItems.length ? [] : result.size_chart_product_ids ?? [], customerText,
       // the bot asks her size → the chart goes with the question
       botAsks: !placedItems.length && botAsksSize(String(text ?? '')),
+      reply: String(text ?? ''),
       inChat: [...picks.map((pick) => pick.id), ...photoIds, ...(session.pending_order?.items ?? []).map((item) => Number(item.product_id))],
     }).catch((error: unknown) => {
       this.logger.warn(`size chart not sent: ${error instanceof Error ? error.message : String(error)}`);
@@ -1009,7 +1010,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** The size chart photos of the products the customer asks about (not again within 10 minutes). Returns how many went out. */
   private async sendSizeCharts(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, simulated: boolean, ask: { aiIds: number[]; customerText: string; inChat: number[]; botAsks?: boolean }): Promise<number> {
+    channel: WhatsappChannel | null, simulated: boolean, ask: { aiIds: number[]; customerText: string; inChat: number[]; botAsks?: boolean; reply?: string }): Promise<number> {
     const withCharts = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false } as never }))
       .filter((product) => productSizeCharts(product).length > 0);
     if (!withCharts.length) return 0;
@@ -1018,8 +1019,16 @@ export class SalesBotEngineService implements OnModuleInit {
         WHERE conversation_id = $1 AND direction::text = 'outbound' AND message_type::text = 'image' ORDER BY id DESC LIMIT 20`, [conversation.id]).catch(() => []);
     // products whose photos went out earlier in this chat (newest first) also count as "in the chat"
     const shownBefore = recent.map((row) => Number(/#(\d+)\s*$/.exec(String(row.media_note ?? ''))?.[1] ?? 0)).filter((id) => id > 0);
+    // the product the reply / the customer is talking about wins over the AI's id ("Red Full Kit eke size?" → the Full
+    // Kit's T-shirt AND pant charts, not another T-shirt's chart the AI picked by mistake)
+    const talk = `${ask.reply ?? ''}\n${ask.customerText}`;
+    const shortName = (name: string) => String(name ?? '').replace(/\s*\([^)]*\)\s*/g, ' ').replace(/[\s\-–]*(t[\s-]?shirts?|shirts?|tees?|tops?|dress(es)?|frocks?|pants?)\s*$/i, '').trim().toLowerCase();
+    const said = (name: string) => { const short = shortName(name); return short.split(/\s+/).length >= 2 && talk.toLowerCase().includes(short) ? 1 : 0; };
+    const named = withCharts.map((product) => ({ id: Number(product.id), score: Math.max(nameMatch(product.name, talk), said(product.name)) }))
+      .filter((row) => row.score >= 0.6).sort((a, b) => b.score - a.score).map((row) => row.id);
+    const aiIds = named.length ? [...named, ...ask.aiIds.filter((id) => named.includes(id))] : ask.aiIds;
     const ids = sizeChartPicks({
-      aiIds: ask.aiIds, customerText: ask.customerText, botAsks: ask.botAsks, inChat: [...ask.inChat, ...shownBefore],
+      aiIds, customerText: ask.customerText, botAsks: ask.botAsks, inChat: [...named, ...ask.inChat, ...shownBefore],
       withChart: new Set(withCharts.map((product) => Number(product.id))),
     });
     const social = socialPlatformOf(channelUser.platform);
