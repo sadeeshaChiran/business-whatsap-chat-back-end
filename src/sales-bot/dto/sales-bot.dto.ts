@@ -16,7 +16,7 @@ import {
 } from 'class-validator';
 import { BOT_BOOKING_STATUSES, type BotBookingStatus } from '../entities/bot-booking.entity';
 
-export const SALES_BOT_LANGUAGES = ['auto', 'sinhala', 'sinhala_latin', 'tamil', 'english'] as const;
+export const SALES_BOT_LANGUAGES = ['auto', 'sinhala', 'sinhala_latin', 'tamil', 'english', 'sinhala_first'] as const;
 
 /* ───────── Services ───────── */
 
