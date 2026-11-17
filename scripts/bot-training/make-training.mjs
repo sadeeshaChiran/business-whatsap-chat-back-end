@@ -25,7 +25,7 @@ const bot = c.bot ?? {};
 need(bot.name, 'bot.name is required');
 need(String(bot.tone ?? '').length <= 255, 'bot.tone: max 255 characters');
 need(String(bot.opening_hours ?? '').length <= 255, 'bot.opening_hours: max 255 characters');
-need(['auto', 'sinhala', 'sinhala_latin', 'tamil', 'english'].includes(bot.default_language ?? 'auto'), 'bot.default_language: auto / sinhala / tamil / english');
+need(['auto', 'sinhala', 'sinhala_latin', 'tamil', 'english', 'sinhala_first'].includes(bot.default_language ?? 'auto'), 'bot.default_language: auto / sinhala / tamil / english / sinhala_first');
 need(['products', 'services', 'both'].includes(bot.sells ?? 'products'), 'bot.sells: products / services / both');
 need(bot.booking_capacity == null || (Number.isInteger(bot.booking_capacity) && bot.booking_capacity >= 1), 'bot.booking_capacity: whole number, 1 or more (bookings at the same time)');
 
