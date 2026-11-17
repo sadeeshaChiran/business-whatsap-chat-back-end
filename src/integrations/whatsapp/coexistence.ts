@@ -187,8 +187,8 @@ export class CoexistenceService {
       const rows = (await this.dataSource.query(
         `INSERT INTO bot_message (conversation_id, direction, message_type, platform, content, media_url, provider_message_id, source,
                                   delivery_status, whatsapp_channel_id, created_at)
-         SELECT $1, $2, $3, 'whatsapp', $4, $5, $6, $7, $8, $9, (to_timestamp($10) AT TIME ZONE 'UTC')
-          WHERE NOT EXISTS (SELECT 1 FROM bot_message WHERE platform = 'whatsapp' AND provider_message_id = $6)
+         SELECT $1, $2, $3, 'whatsapp', $4, $5, $6::varchar, $7, $8, $9, (to_timestamp($10) AT TIME ZONE 'UTC')
+          WHERE NOT EXISTS (SELECT 1 FROM bot_message WHERE platform = 'whatsapp' AND provider_message_id = $6::varchar)
          RETURNING id`,
         [conversationId, message.direction, message.type, message.content, message.mediaId ? `meta-media:${message.mediaId}` : null,
           message.id, echo ? PHONE_APP_SOURCE : message.direction === 'outbound' ? HISTORY_SOURCE : 'customer',
