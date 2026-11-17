@@ -108,7 +108,8 @@ const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 40;
 const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 9000;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
-type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean };
+type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean;
+  /** only found by its name in the reply (the AI did not choose it): one photo */ auto?: boolean };
 
 /** "📷 Cotton Romper Set (3 pcs) – Red – Rs 2,500": the label sent with a product photo. */
 /**
@@ -131,7 +132,7 @@ export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number
   // the same burst / a retried reply). Several chosen colours of one product ("brown 2, black 2") → a photo of each.
   for (const v of chosenVariants) if (!picks.some((p) => p.id === v.product_id && (p.variantId === undefined || p.variantId === v.variant_id))) picks.push({ id: v.product_id, variantId: v.variant_id, skipIfSentWithinMin: 0.5 });
   for (const id of chosen) if (!autoSet.has(id) && !picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 0.5 });
-  for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 0.5 });
+  for (const id of auto) if (!picks.some((p) => p.id === id)) picks.push({ id, skipIfSentWithinMin: 0.5, auto: true });
   return picks;
 }
 
@@ -155,6 +156,13 @@ const SENT_WORD = /එවන්නම්|එව්වා|එවලා|එවු�
 /** The reply says photos are sent / coming ("photos මෙන්න", "photos ewwa", "here are the photos"). */
 export function promisesPhotos(text: string): boolean {
   return String(text ?? '').split(/\n|(?<=[.!?])\s+/).some((part) => PHOTO_WORD.test(part) && SENT_WORD.test(part)) || /[👇⬇️]/u.test(String(text ?? ''));
+}
+
+/** "monada thiyenne", "mona mona badu thiyenawada", "what do you have", "price list" – what the shop has in general. */
+export function asksWhatYouHave(text: string): boolean {
+  const t = String(text ?? '').toLowerCase();
+  if (/colou?rs?|paata|pata\b|පාට|size|සයිස්|sizes|chart/.test(t)) return false;   // colours / sizes of a product, not the whole shop
+  return /\b(mo?a?n[ao]?d?a?|mona\s*mona|monawa?da?)\s*(badu\s*)?(thiyenne|tiyenne|thiyenawada|thiyenawa|thiyanne)\b|\bwhat\s+(do\s+you|you)\s+(have|sell)|\bprice\s*list|\bitems?\s*(mokakda|monawada)|මොනවද\s*තියෙන්නේ|මොනවා\s*තියෙනවද|என்ன\s*இருக்கு/.test(t);
 }
 
 /** The customer asks what there is to see ("colors monada thiyenne", "design monawada", "anith paata"). */
@@ -585,7 +593,13 @@ export class SalesBotEngineService implements OnModuleInit {
     const promised = Boolean(text) && promisesPhotos(String(text));
     const quietOrder = Boolean(orderBefore || session.pending_order?.items?.length) && !asksForPhotos(customerText)
       && !asksAboutOptions(customerText) && !promised;
-    const chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
+    // "monada thiyenne" (what do you have?) in a small shop → one photo of EVERY product, never all photos of one
+    let chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
+    if (!quietOrder && asksWhatYouHave(customerText)) {
+      const shown = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false, show_to_bot: true } as never, relations: ['variants'] }))
+        .filter((product) => product.is_available !== false && productImages(product).length > 0);
+      if (shown.length >= 2 && shown.length <= 12) chatPicks = shown.map((product) => ({ id: Number(product.id), skipIfSentWithinMin: 0.5, auto: true }));
+    }
     const picks = [...orderPicks, ...chatPicks.filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
     const photoResult = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText), promised });
@@ -904,7 +918,8 @@ export class SalesBotEngineService implements OnModuleInit {
     const unique = picks.filter((pick, index) => pick.id > 0 && picks.findIndex((p) => key(p) === key(pick)) === index);
     if (!unique.length) return { sent: 0, hadPhotos: false };
     let hadPhotos = false;
-    const all = Boolean(ask.all) || new Set(unique.map((pick) => pick.id)).size === 1;
+    // all photos: ONE product the AI chose to show (a product only named in a greeting / a list gets one photo)
+    const all = Boolean(ask.all) || (new Set(unique.map((pick) => pick.id)).size === 1 && !unique.every((pick) => pick.auto));
     const maxPhotos = Number(process.env.SALES_BOT_MAX_PHOTOS ?? 60) || 60;
     const products = await this.productRepository.find({ where: unique.map((pick) => ({ id: pick.id, company_id: companyId, is_deleted: false })), relations: ['variants'] });
     const sentNow = new Set<string>();   // never the same photo twice in one reply
@@ -1866,6 +1881,11 @@ export class SalesBotEngineService implements OnModuleInit {
     pending.notes = previous?.notes ?? [];
     const details = mergeOrderDetails(previous?.details, cleanOrderDetails(order.details));
     if (details.length) pending.details = details;
+    // every number in the shop's form ("Two phone numbers: 0717628364 / 0717687343") is shown in the summary too –
+    // also when the AI put only one of them in customer_phone
+    const formPhones = details.flatMap((detail) => { const found = splitOrderPhones(detail.value); return found.phone && found.phone.replace(/\D/g, '').length >= 9 ? [found.phone, ...found.others] : []; });
+    const morePhones = [...new Set([...(pending.other_phones ?? []), ...formPhones])].filter((number) => number !== pending.customer_phone).slice(0, 2);
+    if (morePhones.length) pending.other_phones = morePhones;
     // the shop's own form already holds every number; without a form the second number is kept as a note
     if (!details.length) {
       for (const other of otherPhones) {
