@@ -93,3 +93,13 @@ describe('photos are sent when she asks, never a wrong "no photo"', () => {
     expect(withoutPhotoPointer('photos මෙන්න. මිස් කැමති මොන colour එකද?', 'sinhala', false)).toBe('මිස් කැමති මොන colour එකද?');
   });
 });
+
+import { asksWhatYouHave } from './sales-bot-engine.service';
+describe('"what do you have?" gets one photo of every product', () => {
+  it('knows the question', () => {
+    for (const t of ['monada thiyenne', 'moanada thiyenne', 'mona mona badu thiyenawada?', 'price list ekak ewanna', 'ඔයාලගේ ලඟ මොනවද තියෙන්නේ?', 'what do you have'])
+      expect(asksWhatYouHave(t)).toBe(true);
+    for (const t of ['colors monada thiyenne', 'size monda thiyenne', 'L size ekak ona', 'Stacked Cats eke tikak pennanna'])
+      expect(asksWhatYouHave(t)).toBe(false);
+  });
+});
