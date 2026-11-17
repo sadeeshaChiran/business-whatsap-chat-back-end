@@ -512,8 +512,10 @@ export class SalesBotEngineService implements OnModuleInit {
     const session: BotSession = (sessionState.sales_bot as BotSession) ?? {};
 
     let result: SalesBotResult;
+    let fromCampaign = false;   // the customer came from an ad / boosted post that names products
     try {
       const context = await this.contextService.build(companyId, channelUser.id, botChannel(social), { conversationId: conversation.id, message });
+      fromCampaign = Boolean(context.campaign && ((context.campaign.product_ids ?? []).length || context.campaign.ad_headline || context.campaign.ad_body));
       if (photoMatches.length) context.photo_matches = photoMatches;
       result = await this.client.reply({
         company_id: companyId, customer_id: channelUser.id, message, history,
@@ -595,12 +597,20 @@ export class SalesBotEngineService implements OnModuleInit {
       && !asksAboutOptions(customerText) && !promised;
     // "monada thiyenne" (what do you have?) in a small shop → one photo of EVERY product, never all photos of one
     let chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
-    const wholeShop = !quietOrder && asksWhatYouHave(customerText);
-    if (wholeShop) {
-      const shown = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false, show_to_bot: true } as never, relations: ['variants'] }))
-        .filter((product) => product.is_available !== false && productImages(product).length > 0);
-      if (shown.length >= 2 && shown.length <= 12) chatPicks = shown.map((product) => ({ id: Number(product.id), skipIfSentWithinMin: 0.5, auto: true }));
-    }
+    // The first answer of a chat when she did not say which product (no ad, no photo, no product name: "Hi", "price",
+    // "details") is treated like "what do you have?" – one photo of each product, no size charts; the full set of a
+    // product only once she picks one.
+    const firstAnswer = !history.some((turn) => turn.role === 'bot' || turn.role === 'agent');
+    const shopProducts = !quietOrder && (asksWhatYouHave(customerText) || (firstAnswer && !photoRows.length && !fromCampaign))
+      // (photos are an extra: a failing lookup never stops the reply)
+      ? (await Promise.resolve().then(() => this.productRepository.find({ where: { company_id: companyId, is_deleted: false, show_to_bot: true } as never, relations: ['variants'] }))
+        .catch(() => [] as Product[])).filter((product) => product.is_available !== false && productImages(product).length > 0)
+      : [];
+    const productNamed = shopProducts.some((product) => nameMatch(product.name, customerText) >= 0.6
+      || (product.name.replace(/\s*\([^)]*\)\s*/g, ' ').trim().split(/\s+/).length >= 2
+        && customerText.toLowerCase().includes(product.name.replace(/\s*\([^)]*\)\s*/g, ' ').replace(/[\s\-–]*(t[\s-]?shirts?|shirts?|tees?|tops?|dress(es)?|frocks?|pants?)\s*$/i, '').trim().toLowerCase())));
+    const wholeShop = shopProducts.length >= 2 && shopProducts.length <= 12 && (asksWhatYouHave(customerText) || !productNamed);
+    if (wholeShop) chatPicks = shopProducts.map((product) => ({ id: Number(product.id), skipIfSentWithinMin: 0.5, auto: true }));
     const picks = [...orderPicks, ...chatPicks.filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
     const photoResult = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: !wholeShop && (Boolean(result.photo_all) || wantsAllPhotos(customerText)), promised, oneEach: wholeShop });
