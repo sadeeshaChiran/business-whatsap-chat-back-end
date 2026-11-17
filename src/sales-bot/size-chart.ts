@@ -10,10 +10,18 @@ export function asksForSizeChart(text: string): boolean {
   return /size\s*(chart|char|table|tabel|list|details?|wistharay?a?|ewanna|ewa|pennanna|balanna)|size\s*(eka\s*)?(kohomada|mokakda|monawada|thoranne|hariyanne|wenne|danne)|sizes?\s+(monada|monda|monawada|mokakda|mona)\s*(thiyenne|thiyenawa|tiyenne)?|size\s*[ea]ka\s*(kohomada|mokakda|thoranne|danne)|(chart|table)\s*[ea]ka|mona\s*size|sizes?\s*(mokakda|monawada|thiyenne)|measurements?|chest\s*size|සයිස්|ප්‍රමාණ|size\s*එක\s*(කොහොමද|තෝරන්නේ)|அளவு|size\s*chart/.test(t);
 }
 
+/** The bot's reply asks the customer for her size ("Size eka mokakda?", "මොන size එකද?", "Which size?"). */
+export function botAsksSize(reply: string): boolean {
+  const t = String(reply ?? '').toLowerCase();
+  return /(mona|mon[ao])\s*size|size\s*(eka|එක)?\s*(mokakda|monawada|kiyada|kiyannako|කීයද|මොකක්ද|මොනවද|කියන්න)|මොන\s*size|which\s+size|what\s+size|your\s+size|size\s*\?|சைஸ்|அளவு/.test(t);
+}
+
 /** Product ids whose size charts go out this turn (max 2). */
 export function sizeChartPicks(input: {
   aiIds: number[];
   customerText: string;
+  /** the bot asks her size in this reply */
+  botAsks?: boolean;
   /** products in this turn's photos / the open order / photos sent earlier in the chat (newest first) */
   inChat: number[];
   /** products that have a size chart */
@@ -21,7 +29,7 @@ export function sizeChartPicks(input: {
 }): number[] {
   const ai = input.aiIds.filter((id) => input.withChart.has(id));
   if (ai.length) return [...new Set(ai)].slice(0, 2);
-  if (!asksForSizeChart(input.customerText)) return [];
+  if (!asksForSizeChart(input.customerText) && !input.botAsks) return [];
   const inChat = [...new Set(input.inChat)].filter((id) => input.withChart.has(id));
   if (inChat.length) return inChat.slice(0, 2);
   // a shop with ONE product that has a chart: that one

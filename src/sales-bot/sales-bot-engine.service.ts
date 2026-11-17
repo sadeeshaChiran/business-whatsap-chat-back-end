@@ -41,7 +41,7 @@ import { PhotoMatchService, photoMatchNote, type PhotoMatch } from './photo-matc
 import { StockService } from '../reports/stock';
 import { DemandService } from '../reports/reports';
 import { SalesBotContextService, sriLankaNow, optionWeight, photoOption, productImages, productOptions, productSizeCharts, productWeight, variantLabel, variantPrice } from './sales-bot-context.service';
-import { asksForSizeChart, sizeChartPicks } from './size-chart';
+import { asksForSizeChart, botAsksSize, sizeChartPicks } from './size-chart';
 import { splitOrderPhones } from './order-phones';
 import { cleanOrderDetails, mergeOrderDetails, orderDetailsNote, type OrderDetail } from './order-details';
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
@@ -535,12 +535,11 @@ export class SalesBotEngineService implements OnModuleInit {
     this.redone.delete(conversationId);
 
     // Save first, so a blocked order never gets a "confirmed!" message
-    const orderLines = (order?: PendingOrder | null) => (order?.items ?? []).map((item) => `${item.product_id}:${item.variant_id ?? ''}:${item.quantity}`).join('|');
-    const linesBefore = orderLines(session.pending_order);
+    // the order in progress BEFORE this answer: while an order is being taken the chat is not flooded with product photos
+    const orderBefore = session.pending_order?.items?.length ? session.pending_order : null;
     const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
-    // the order's items were set / changed this turn → the photo of every chosen option + the size chart go with it,
-    // so the customer sees exactly what she is ordering
-    const orderNow = session.pending_order?.items?.length && orderLines(session.pending_order) !== linesBefore ? session.pending_order.items : [];
+    // the order was placed now → the photos of what she ordered go with the confirmation (one per order line)
+    const placedItems = outcome.invoiceOrderIds.length && orderBefore && !session.pending_order?.items?.length ? orderBefore.items : [];
     session.language = result.language;
     if (result.memory) session.memory = mergeMemory(session.memory, String(result.memory));
     if (outcome.intent && String(outcome.intent).includes('handoff')) session.handoff_at = Math.floor(Date.now() / 1000);
@@ -563,13 +562,18 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    const orderPicks: PhotoPick[] = orderNow.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true }));
-    const picks = [...orderPicks, ...photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []).filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
+    const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true }));
+    // while the order is being taken (items chosen, details, summary): no product photos – only when she asks to see one
+    const quietOrder = Boolean(orderBefore || session.pending_order?.items?.length) && !asksForPhotos(customerText);
+    const chatPicks = quietOrder ? photoPicks(photoMatches, [], [], []) : photoPicks(photoMatches, photoIds, autoIds, result.photo_variants ?? []);
+    const picks = [...orderPicks, ...chatPicks.filter((pick) => !orderPicks.some((o) => o.id === pick.id))];
     const photosSent = await this.sendPhotos(companyId, conversation, channelUser, channel, picks, simulated,
       { customerText, all: Boolean(result.photo_all) || wantsAllPhotos(customerText) });
     // the customer asked about sizes → the size chart photo(s) the owner marked (never a "here it is" with nothing)
     const chartsSent = await this.sendSizeCharts(companyId, conversation, channelUser, channel, simulated, {
-      aiIds: [...new Set([...(result.size_chart_product_ids ?? []), ...orderNow.map((item) => Number(item.product_id))])], customerText,
+      aiIds: placedItems.length ? [] : result.size_chart_product_ids ?? [], customerText,
+      // the bot asks her size → the chart goes with the question
+      botAsks: !placedItems.length && botAsksSize(String(text ?? '')),
       inChat: [...picks.map((pick) => pick.id), ...photoIds, ...(session.pending_order?.items ?? []).map((item) => Number(item.product_id))],
     }).catch((error: unknown) => {
       this.logger.warn(`size chart not sent: ${error instanceof Error ? error.message : String(error)}`);
@@ -964,7 +968,7 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** The size chart photos of the products the customer asks about (not again within 10 minutes). Returns how many went out. */
   private async sendSizeCharts(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    channel: WhatsappChannel | null, simulated: boolean, ask: { aiIds: number[]; customerText: string; inChat: number[] }): Promise<number> {
+    channel: WhatsappChannel | null, simulated: boolean, ask: { aiIds: number[]; customerText: string; inChat: number[]; botAsks?: boolean }): Promise<number> {
     const withCharts = (await this.productRepository.find({ where: { company_id: companyId, is_deleted: false } as never }))
       .filter((product) => productSizeCharts(product).length > 0);
     if (!withCharts.length) return 0;
@@ -974,13 +978,13 @@ export class SalesBotEngineService implements OnModuleInit {
     // products whose photos went out earlier in this chat (newest first) also count as "in the chat"
     const shownBefore = recent.map((row) => Number(/#(\d+)\s*$/.exec(String(row.media_note ?? ''))?.[1] ?? 0)).filter((id) => id > 0);
     const ids = sizeChartPicks({
-      aiIds: ask.aiIds, customerText: ask.customerText, inChat: [...ask.inChat, ...shownBefore],
+      aiIds: ask.aiIds, customerText: ask.customerText, botAsks: ask.botAsks, inChat: [...ask.inChat, ...shownBefore],
       withChart: new Set(withCharts.map((product) => Number(product.id))),
     });
     const social = socialPlatformOf(channelUser.platform);
     // the AI or the customer asked about sizes this turn → the chart goes with the answer every time
     // (only not twice within a minute – one burst of messages); otherwise not again within 10 minutes
-    const repeatAfterMin = asksForSizeChart(ask.customerText) || ask.aiIds.length ? 1 : 10;
+    const repeatAfterMin = asksForSizeChart(ask.customerText) || ask.aiIds.length || ask.botAsks ? 1 : 10;
     let sent = 0;
     for (const id of ids) {
       const product = withCharts.find((p) => Number(p.id) === id);
