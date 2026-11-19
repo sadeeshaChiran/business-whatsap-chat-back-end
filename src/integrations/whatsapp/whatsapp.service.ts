@@ -153,6 +153,8 @@ export class WhatsappService {
             const reason = errors
               .map((e) => String((e.error_data as Record<string, unknown> | undefined)?.details ?? e.title ?? e.message ?? e.code ?? ''))
               .filter(Boolean).join('; ').slice(0, 500);
+            const codes = errors.map((e) => String(e.code ?? '')).filter(Boolean).join(',');
+            this.logger.warn(`WhatsApp message ${messageId} failed: code ${codes || '-'} ${reason || 'no reason given'}`);
             await this.messageRepository.manager.query(
               `UPDATE marketing_broadcast_recipient SET error = COALESCE(NULLIF($2, ''), 'failed after sending'), updated_at = NOW() WHERE provider_message_id = $1`,
               [messageId, reason]).catch(() => undefined);
