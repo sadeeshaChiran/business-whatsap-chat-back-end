@@ -1,4 +1,4 @@
-import { SalesBotEngineService, changedOrderMessage, orderFingerprint } from './sales-bot-engine.service';
+import { SalesBotEngineService, alreadyPlacedMessage, changedOrderMessage, orderFingerprint } from './sales-bot-engine.service';
 
 const proto = SalesBotEngineService.prototype as any;
 
@@ -46,5 +46,15 @@ describe('sales bot quality fixes (Modlift chats)', () => {
     expect(text).not.toContain('2,980');
     expect(text).toContain('Delivery: Rs 425');
     expect(text).toContain('Total: Rs 3,405');
+  });
+
+  it('the same order confirmed again is not placed twice (#439 / #445)', async () => {
+    const rows = [{ id: 439, items: [{ product_id: 7188, variant: 'Maroon / 3XL', quantity: 1 }, { product_id: 7188, variant: 'Olive Green / 3XL', quantity: 1 }] }];
+    const self = { orderRepository: { query: jest.fn().mockResolvedValue(rows) } };
+    const items = [{ product_id: 7188, variant_name: 'Olive Green / 3XL', quantity: 1 }, { product_id: 7188, variant_name: 'Maroon / 3XL', quantity: 1 }];
+    expect(await proto.sameRecentOrder.call(self, 38, 3861, items)).toBe(439);
+    expect(await proto.sameRecentOrder.call(self, 38, 3861, [items[0]])).toBeNull();
+    expect(await proto.sameRecentOrder.call(self, 38, 3861, [{ ...items[0], quantity: 2 }, items[1]])).toBeNull();
+    expect(alreadyPlacedMessage('sinhala', 439)).toContain('#439');
   });
 });

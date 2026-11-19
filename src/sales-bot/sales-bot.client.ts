@@ -61,6 +61,8 @@ export type SalesBotResult = {
   interest?: 'none' | 'browsing' | 'interested' | 'ready' | null;
   /** what they want and what is missing – used for follow-ups */
   followup_note?: string | null;
+  /** a voice note: what the customer said in it (stored as the message's transcript) */
+  voice_text?: string | null;
   /** a safety check changed the answer (e.g. "confirm_asked_again", "stuck:repeat") */
   guard?: string | null;
   language: string;
@@ -139,6 +141,7 @@ export class SalesBotClient {
       memory: typeof result.memory === 'string' && result.memory.trim() ? result.memory.trim().slice(0, 600) : null,
       guard: typeof result.guard === 'string' ? result.guard : null,
       interest: ['none', 'browsing', 'interested', 'ready'].includes(String(result.interest)) ? result.interest : null,
+      voice_text: typeof result.voice_text === 'string' && result.voice_text.trim() ? result.voice_text.trim().slice(0, 400) : null,
       followup_note: typeof result.followup_note === 'string' && result.followup_note.trim() ? result.followup_note.trim().slice(0, 300) : null,
       usage: {
         model: String(result.usage?.model ?? ''),
