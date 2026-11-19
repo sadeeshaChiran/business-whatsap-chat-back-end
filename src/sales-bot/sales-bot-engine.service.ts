@@ -1868,8 +1868,10 @@ export class SalesBotEngineService implements OnModuleInit {
     const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
     const area = String(change.delivery_area ?? order.delivery_area ?? '').trim();
     const zone = area ? findZone(zones, area) : null;
-    const freeOver = (await this.contextService.getSettings(companyId)).free_delivery_over;
-    const fee = zone ? orderDeliveryFee(zone, weight, subtotal, freeOver) : order.delivery_fee == null ? null : Number(order.delivery_fee);
+    const shop = await this.contextService.getSettings(companyId);
+    const fee = zone ? orderDeliveryFee(zone, weight, subtotal, shop.free_delivery_over, shop.delivery_rules,
+      items.map((item) => ({ product_id: item.product_id, product_name: item.product_name, option: item.variant_text, quantity: Number(item.quantity) })))
+      : order.delivery_fee == null ? null : Number(order.delivery_fee);
     // "0764264699 / 0769906256": the first number is the order phone, the others go into the note (never glued together)
     const { phone: firstPhone, others: otherPhones } = splitOrderPhones(String(change.customer_phone ?? ''));
     const phone = String(firstPhone ?? '').replace(/[^\d+]/g, '');
@@ -2028,7 +2030,9 @@ export class SalesBotEngineService implements OnModuleInit {
       // older bot replies without delivery_area: accept only a flat zone with exactly that fee
       zone = zones.find((row) => !hasWeightRule(row) && Number(row.fee) === Number(order.delivery_fee)) ?? null;
     }
-    const fee = zone ? orderDeliveryFee(zone, totalWeight, subtotal, (await this.contextService.getSettings(companyId)).free_delivery_over) : null;
+    const shop = await this.contextService.getSettings(companyId);
+    const fee = zone ? orderDeliveryFee(zone, totalWeight, subtotal, shop.free_delivery_over, shop.delivery_rules,
+      items.map((item) => ({ product_id: item.product_id, product_name: item.product_name, option: item.variant_name, quantity: item.quantity }))) : null;
     const total = subtotal + (fee ?? 0);
     const address = String(order.address ?? '').trim();
     const name = String(order.customer_name ?? '').trim();

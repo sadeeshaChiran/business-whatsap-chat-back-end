@@ -47,6 +47,10 @@ export class SalesBotSettings {
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true, transformer: { to: (v: number | null) => v, from: (v: string | number | null) => (v == null ? null : Number(v)) } })
   free_delivery_over: number | null;
 
+  /** Delivery fee rules by item counts (see delivery-fee.ts). NULL = not used (the zone / free-over fee as before). */
+  @Column({ type: 'jsonb', nullable: true })
+  delivery_rules: import('../delivery-fee').DeliveryRules | null;
+
   /** Which bookings hold their time: 'requested' (requested + confirmed, default) or 'confirmed' (only confirmed) */
   @Column({ type: 'varchar', length: 20, default: 'requested' })
   booking_block_status: string;

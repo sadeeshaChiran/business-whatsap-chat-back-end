@@ -104,11 +104,12 @@ export class ManualOrdersService {
     const weight = Math.round(priced.items.reduce((sum, item) => sum + item.weight_kg * item.quantity, 0) * 1000) / 1000;
     const zones = await this.zoneRepository.find({ where: { company_id: companyId } });
     const zone = String(area ?? '').trim() ? findZone(zones, String(area)) : null;
-    const freeOver = (await this.contextService.getSettings(companyId)).free_delivery_over;
-    const fee = zone ? orderDeliveryFee(zone, weight, subtotal, freeOver) : null;
+    const shop = await this.contextService.getSettings(companyId);
+    const fee = zone ? orderDeliveryFee(zone, weight, subtotal, shop.free_delivery_over, shop.delivery_rules,
+      priced.items.map((item) => ({ product_id: item.product_id, product_name: item.product_name, option: item.variant_name, quantity: item.quantity }))) : null;
     return {
       items: priced.items, subtotal, weight_kg: weight, area: zone?.area ?? null,
-      delivery_fee: fee, free_delivery: fee === 0 && freeOver != null && subtotal >= Number(freeOver),
+      delivery_fee: fee, free_delivery: fee === 0 && zone != null,
       total: subtotal + (fee ?? 0),
       note: !String(area ?? '').trim() ? 'Add the area to calculate the delivery fee.' : zone ? null : 'No delivery fee for this area – set it in Delivery zones, or the team confirms it.',
     };
