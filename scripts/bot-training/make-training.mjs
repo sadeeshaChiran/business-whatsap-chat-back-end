@@ -84,6 +84,10 @@ BEGIN
       sells = EXCLUDED.sells, auto_send_invoice = EXCLUDED.auto_send_invoice, followup_enabled = EXCLUDED.followup_enabled,
       free_delivery_over = EXCLUDED.free_delivery_over, auto_enable_new_customers = EXCLUDED.auto_enable_new_customers,
       booking_capacity = EXCLUDED.booking_capacity, updated_at = NOW();
+${bot.delivery_rules !== undefined ? `
+  UPDATE bot_sales_settings SET delivery_rules = ${bot.delivery_rules ? `${q(JSON.stringify(bot.delivery_rules))}::jsonb` : 'NULL'} WHERE company_id = cid;` : ''}
+${bot.bot_off_on_handoff !== undefined ? `
+  UPDATE bot_sales_settings SET bot_off_on_handoff = ${bot.bot_off_on_handoff ? 'TRUE' : 'FALSE'} WHERE company_id = cid;` : ''}
 ${zones.length ? `
   DELETE FROM bot_delivery_zone WHERE company_id = cid;
   INSERT INTO bot_delivery_zone (company_id, area, fee, days, included_kg, per_extra_kg, weight_rounding) VALUES
