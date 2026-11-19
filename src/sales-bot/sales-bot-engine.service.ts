@@ -108,7 +108,7 @@ const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 40;
 const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 9000;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
-type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean;
+type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean; /** order line: its own option + price on the label */ linePrice?: number;
   /** only found by its name in the reply (the AI did not choose it): one photo */ auto?: boolean };
 
 /** "📷 Cotton Romper Set (3 pcs) – Red – Rs 2,500": the label sent with a product photo. */
@@ -193,6 +193,13 @@ export function photoLabel(product: Pick<Product, 'name' | 'price'>, variant: st
   return `📷 ${product.name}${variant ? ` – ${variant}` : ''}${Number.isFinite(price) && price > 0 ? ` – Rs ${price.toLocaleString('en-US')}` : ''}`;
 }
 const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
+
+/** The customer confirmed an order that is already placed: no second order, just say so. */
+export function alreadyPlacedMessage(language: string, orderId: number): string {
+  if (language === 'sinhala' || language === 'sinhala_latin') return `ඔයාගේ order එක (#${orderId}) දැනටමත් දාලා තියෙන්නේ 😊 අලුතින් වෙනසක් ඕනේ නම් කියන්න.`;
+  if (language === 'tamil') return `உங்கள் order (#${orderId}) ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது 😊 ஏதாவது மாற்ற வேண்டுமா என்று சொல்லுங்கள்.`;
+  return `Your order (#${orderId}) is already placed 😊 Tell us if you want to change anything.`;
+}
 
 /** After a change of a placed order: the AI's short line (without any amounts it worked out itself) + the saved order. */
 export function changedOrderMessage(language: string, lead: string,
@@ -578,6 +585,15 @@ export class SalesBotEngineService implements OnModuleInit {
       return;
     }
 
+    // a voice note: keep what the customer said (the AI heard it) – the history, the inbox and later turns read it
+    // instead of "[voice note]" (before this the bot forgot every earlier voice note)
+    const heard = String(result.voice_text ?? '').trim();
+    if (heard && mediaRow?.message_type === 'voice' && !mediaRow.transcript) {
+      mediaRow.transcript = heard.slice(0, 400);
+      await Promise.resolve().then(() => this.messageRepository.query(
+        `UPDATE bot_message SET transcript = $2 WHERE id = $1 AND COALESCE(transcript, '') = ''`, [mediaRow.id, mediaRow.transcript])).catch(() => undefined);
+    }
+
     // An agent may have taken over while the AI was thinking
     const fresh = await this.conversationRepository.findOne({ where: { id: conversationId } });
     const freshUser = await this.channelUserRepository.findOne({ where: { id: channelUser.id } });
@@ -631,7 +647,7 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true }));
+    const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true, linePrice: Number(item.unit_price) || undefined }));
     // while the order is being taken (items chosen, details, summary): no product photos – only when she asks to see one
     // (she asks for photos / what colours or designs there are, or the reply says photos are coming → they are sent)
     const promised = Boolean(text) && promisesPhotos(String(text));
@@ -783,7 +799,7 @@ export class SalesBotEngineService implements OnModuleInit {
       // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
       const content = row.message_type === 'image'
         ? `[photo${row.media_note && row.direction === 'inbound' ? `: ${row.media_note}` : ''}] ${caption}`.trim()
-        : row.message_type === 'voice' ? '[voice note]'
+        : row.message_type === 'voice' ? (row.transcript ? `[voice note: "${String(row.transcript).slice(0, 400)}"]` : '[voice note]')
         : row.media_note && row.direction === 'inbound' ? `${row.content}\n[the customer ${row.media_note}]` : row.content;
       if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content.slice(0, 900)) : content };
       const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
@@ -1060,7 +1076,8 @@ export class SalesBotEngineService implements OnModuleInit {
         // every photo says which option (colour) it shows – a reply to the blue photo must mean blue, not the first colour
         const shown = photoOption(product, url);
         const variant = shown?.label ?? null;
-        const label = photoLabel(product, variant, shown?.price);
+        // an ordered item: the label says what she ordered ("Maroon / 3XL – Rs 1,690"), not the photo option's price
+        const label = pick.orderLine && pick.variant ? photoLabel(product, pick.variant, pick.linePrice ?? shown?.price) : photoLabel(product, variant, shown?.price);
         if (sent >= maxPhotos) break;
         const file = simulated ? null : await this.photoFile(url);
         if (!simulated && !file && (!social || social === 'messenger')) {
@@ -1295,6 +1312,10 @@ export class SalesBotEngineService implements OnModuleInit {
         savedOrderId = Number(orderOutcome.slice(6));
         invoiceOrderIds.push(savedOrderId);
         intents.add('order');
+      }
+      if (orderOutcome.startsWith('duplicate:')) {
+        replyOverride = alreadyPlacedMessage(result.language, Number(orderOutcome.slice(10)));
+        intents.add('order_exists');
       }
       if (orderOutcome.startsWith('cart:') && session.pending_order) {
         // "order eke mokada thiyenne?" / "total eka?" before the address is in: the items so far + the total,
@@ -2096,6 +2117,14 @@ export class SalesBotEngineService implements OnModuleInit {
       return 'summary';
     }
 
+    // the same customer already has this exact order (same items) from the last 24 hours that is not cancelled: a second
+    // "ok" / the details sent again must not place it twice (#439 / #445, #433 / #434) – the customer is told it is placed
+    const same = await this.sameRecentOrder(companyId, channelUser.id, items);
+    if (same) {
+      session.pending_order = null;
+      return `duplicate:${same}`;
+    }
+
     const saved = await this.orderRepository.save(this.orderRepository.create({
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
@@ -2123,6 +2152,26 @@ export class SalesBotEngineService implements OnModuleInit {
       `${name} – ${items.length} item(s), total Rs ${total.toLocaleString('en-LK')}${(pending.notes ?? []).length ? ' – has special notes' : ''}`, conversation.id, saved.id);
     await this.advanceLead(conversation.id, 'won', { order_value: total, order_id: saved.id, name });
     return `saved:${saved.id}`;
+  }
+
+  /** A not-cancelled order of this customer from the last 24 hours with exactly these items (product, option, quantity). */
+  private async sameRecentOrder(companyId: number, channelUserId: number,
+    items: Array<{ product_id?: unknown; variant_name?: unknown; quantity?: unknown }>): Promise<number | null> {
+    const key = (rows: Array<{ product_id?: unknown; variant?: unknown; quantity?: unknown }>) =>
+      rows.map((row) => `${Number(row.product_id ?? 0)}|${String(row.variant ?? '').trim().toLowerCase()}|${Number(row.quantity ?? 0)}`).sort().join(';');
+    const wanted = key(items.map((item) => ({ product_id: item.product_id, variant: item.variant_name, quantity: item.quantity })));
+    const recent = (await Promise.resolve().then(() => this.orderRepository.query(
+      `SELECT o.id, COALESCE(json_agg(json_build_object('product_id', i.product_id, 'variant', i.variant_text, 'quantity', i.quantity))
+              FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+         FROM bot_order o LEFT JOIN bot_order_item i ON i.order_id = o.id
+        WHERE o.company_id = $1 AND o.bot_channel_user_id = $2 AND o.created_at > NOW() - INTERVAL '24 hours'
+          AND COALESCE(o.status, '') NOT IN ('Cancelled', 'Canceled', 'Rejected', 'Returned')
+        GROUP BY o.id ORDER BY o.id DESC LIMIT 5`, [companyId, channelUserId])).catch(() => [])) as Array<{ id: number; items: unknown }>;
+    for (const order of recent) {
+      const rows = (typeof order.items === 'string' ? JSON.parse(order.items) : order.items) as Array<{ product_id?: unknown; variant?: unknown; quantity?: unknown }>;
+      if (Array.isArray(rows) && rows.length && key(rows) === wanted) return Number(order.id);
+    }
+    return null;
   }
 
   /** Bot stops for this customer and a person takes over (online agent, or the unassigned queue). */
