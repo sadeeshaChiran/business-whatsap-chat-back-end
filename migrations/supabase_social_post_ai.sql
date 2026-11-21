@@ -12,3 +12,7 @@ CREATE TABLE IF NOT EXISTS social_post_ai (
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (company_id, post_id)
 );
+
+-- The owner can correct what the AI read and link the post to its products (post viewer).
+ALTER TABLE social_post_ai ADD COLUMN IF NOT EXISTS product_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE social_post_ai ADD COLUMN IF NOT EXISTS summary_edited BOOLEAN NOT NULL DEFAULT FALSE;

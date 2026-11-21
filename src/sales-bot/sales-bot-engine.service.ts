@@ -47,6 +47,7 @@ import { cleanOrderDetails, mergeOrderDetails, orderDetailsNote, type OrderDetai
 import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
+import { fillOrderNo, orderNo } from '../bot-admin/order-number';
 
 type PricedItem = {
   product_id: number; variant_id: number | null; product_name: string; variant_name: string;
@@ -203,10 +204,10 @@ export function alreadyPlacedMessage(language: string, orderId: number): string 
 
 /** After a change of a placed order: the AI's short line (without any amounts it worked out itself) + the saved order. */
 export function changedOrderMessage(language: string, lead: string,
-  order: { id: number; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number }): string {
+  order: { id: number; order_no?: number | null; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number }): string {
   const money = /(rs\.?|රු\.?|ரூ\.?|lkr)\s*[\d,]+|[\d,]{3,}\s*(\/-|රු)|total|එකතුව|மொத்தம்|delivery\s*free|free\s*delivery/i;
   const kept = lead.split('\n').map((line) => line.trim()).filter((line) => line && !money.test(line)).join('\n').slice(0, 300);
-  const title = language === 'sinhala' || language === 'sinhala_latin' ? `Order #${order.id} – අලුත් විස්තර:` : language === 'tamil' ? `Order #${order.id} – புதிய விவரம்:` : `Order #${order.id} – updated:`;
+  const title = language === 'sinhala' || language === 'sinhala_latin' ? `Order #${orderNo(order)} – අලුත් විස්තර:` : language === 'tamil' ? `Order #${orderNo(order)} – புதிய விவரம்:` : `Order #${orderNo(order)} – updated:`;
   const lines = order.items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_text ? ` (${item.variant_text})` : ''} – ${rs(item.total_price)}`);
   if (order.fee != null) lines.push(`Delivery: ${order.fee ? rs(order.fee) : 'FREE'}`);
   lines.push(`Total: ${rs(order.total)}`);
@@ -389,6 +390,51 @@ export class SalesBotEngineService implements OnModuleInit {
     this.logger.log(`Python sales bot active at ${SalesBotClient.baseUrl()}`);
     const tick = Number(process.env.SALES_BOT_FOLLOWUP_TICK_MS ?? 60_000) || 60_000;
     setInterval(() => void this.runDueFollowUps(), tick).unref();
+    setInterval(() => void this.runBotBackOn(), Math.max(tick, 5 * 60_000)).unref();
+  }
+
+  private botBackOnBusy = false;
+
+  /**
+   * Setting "switch the bot back on by itself" (bot_auto_on_hours): the bot was switched off in a chat and the
+   * customer's last message has waited that many hours with no reply from anyone -> the bot is on again for that
+   * customer. Under 24 hours it answers the waiting message now; from 24 hours WhatsApp / Messenger allow no
+   * normal reply, so it answers the customer's next message. Only chats that started waiting in the last day
+   * (no mass switch-on of very old chats when the setting is first turned on).
+   */
+  async runBotBackOn(now = new Date()) {
+    if (this.botBackOnBusy) return [];
+    this.botBackOnBusy = true;
+    try {
+      const rows: Array<{ conversation_id: number; channel_user_id: number; company_id: number; hours: number; last_in: Date }> =
+        await this.conversationRepository.query(`
+          SELECT c.id AS conversation_id, cu.id AS channel_user_id, cu.company_id, s.bot_auto_on_hours AS hours, li.last_in
+            FROM bot_sales_settings s
+            JOIN bot_channel_user cu ON cu.company_id = s.company_id AND cu.bot_enabled = FALSE AND COALESCE(cu.system_kind, '') <> 'system'
+            JOIN bot_conversation c ON c.bot_channel_user_id = cu.id AND c.status <> 'closed'
+            JOIN LATERAL (SELECT MAX(m.created_at) AS last_in FROM bot_message m
+                           WHERE m.conversation_id = c.id AND m.direction::text = 'inbound') li ON li.last_in IS NOT NULL
+           WHERE COALESCE(s.bot_auto_on_hours, 0) > 0
+             AND li.last_in <= $1::timestamptz - make_interval(hours => s.bot_auto_on_hours)
+             AND li.last_in >  $1::timestamptz - make_interval(hours => s.bot_auto_on_hours + 24)
+             AND NOT EXISTS (SELECT 1 FROM bot_message o WHERE o.conversation_id = c.id AND o.direction::text = 'outbound' AND o.created_at > li.last_in)
+           ORDER BY li.last_in
+           LIMIT 50`, [now.toISOString()]);
+      for (const row of rows) {
+        await this.channelUserRepository.update(Number(row.channel_user_id), { bot_enabled: true, manual_mode: false });
+        const waitedMs = now.getTime() - new Date(row.last_in).getTime();
+        // the 24-hour reply window is still open (with a few minutes to spare): answer the waiting message
+        const answerNow = waitedMs < 24 * 3600_000 - 10 * 60_000;
+        this.logger.log(`bot back on in conversation ${row.conversation_id}: no reply for ${row.hours} h${answerNow ? ', answering now' : ''}`);
+        if (answerNow && !this.running.has(Number(row.conversation_id))) this.schedule(Number(row.company_id), Number(row.conversation_id), 500, true);
+      }
+      return rows.map((row) => Number(row.conversation_id));
+    } catch (error) {
+      this.logger.warn(`bot back on: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    } finally {
+      this.botBackOnBusy = false;
+    }
   }
 
   static testMode(): boolean {
@@ -1753,7 +1799,9 @@ export class SalesBotEngineService implements OnModuleInit {
   /** The order the customer wants an invoice for: the one they named, else their newest non-cancelled order. */
   private async findInvoiceOrder(companyId: number, channelUserId: number, orderId?: number | null): Promise<BotOrder | null> {
     if (orderId) {
-      const named = await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId } });
+      // the bot names orders by the shop's number (#12); an older chat may still name the internal id
+      const named = await this.orderRepository.findOne({ where: { order_no: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId } })
+        ?? await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId } });
       if (named) return named;
     }
     return this.orderRepository
@@ -1767,7 +1815,9 @@ export class SalesBotEngineService implements OnModuleInit {
   /** The order the customer named, else their newest order that is not delivered or cancelled. */
   private async findOpenOrder(companyId: number, channelUserId: number, orderId?: number | null): Promise<BotOrder | null> {
     if (orderId) {
-      const named = await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'] });
+      // the bot names orders by the shop's number (#12); an older chat may still name the internal id
+      const named = await this.orderRepository.findOne({ where: { order_no: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'] })
+        ?? await this.orderRepository.findOne({ where: { id: Number(orderId), company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'] });
       if (named) return named;
     }
     return this.orderRepository
@@ -1808,7 +1858,7 @@ export class SalesBotEngineService implements OnModuleInit {
       const order = savedOrderId ? { id: savedOrderId } : await this.findOpenOrder(companyId, channelUser.id);
       if (order) {
         await this.appendOrderNote(order.id, `📝 Special note: ${note.text}`);
-        await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note on order #${order.id}`, `${who}: ${note.text}`, conversation.id, order.id);
+        await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note on order #${orderNo(order)}`, `${who}: ${note.text}`, conversation.id, order.id);
         return;
       }
       if (session.pending_order) {
@@ -1828,16 +1878,16 @@ export class SalesBotEngineService implements OnModuleInit {
   /** Pending → the bot edits the order. Confirmed / Processing → request only. Shipped → request + a person. */
   private async handleOrderChange(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     change: NonNullable<SalesBotResult['order_change']>, who: string): Promise<{ intent: string | null; invoice?: number; hold?: boolean; handoff?: string; unavailable?: string;
-      totals?: { id: number; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number } }> {
+      totals?: { id: number; order_no?: number | null; items: Array<{ quantity: number; product_name: string; variant_text: string | null; total_price: number }>; fee: number | null; total: number } }> {
     const order = await this.findOpenOrder(companyId, channelUser.id, change.order_id);
     const request = String(change.request ?? '').trim() || 'wants to change the order';
     if (!order) return { intent: null };
 
     if (order.status !== 'Pending') {
       await this.appendOrderNote(order.id, `🔔 Customer asked to change the order: ${request}`);
-      await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${order.id} (${order.status})`, `${who}: ${request}`, conversation.id, order.id);
+      await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${orderNo(order)} (${order.status})`, `${who}: ${request}`, conversation.id, order.id);
       return order.status === 'Shipped'
-        ? { intent: 'change_request', handoff: `Order #${order.id} already shipped – customer wants a change: ${request}` }
+        ? { intent: 'change_request', handoff: `Order #${orderNo(order)} already shipped – customer wants a change: ${request}` }
         : { intent: 'change_request' };
     }
 
@@ -1851,7 +1901,7 @@ export class SalesBotEngineService implements OnModuleInit {
       if (priced.problem.startsWith('unavailable:')) return { intent: null, unavailable: priced.problem.slice(12) };
       if (priced.problem || !priced.items.length) {
         await this.appendOrderNote(order.id, `🔔 Customer asked to change the order (not applied automatically: ${priced.problem || 'no items'}): ${request}`);
-        await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${order.id}`, `${who}: ${request}`, conversation.id, order.id);
+        await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${orderNo(order)}`, `${who}: ${request}`, conversation.id, order.id);
         return { intent: 'change_request', hold: true };
       }
       await this.orderItemRepository.delete({ order_id: order.id });
@@ -1888,13 +1938,13 @@ export class SalesBotEngineService implements OnModuleInit {
     }));
     await this.stock?.syncOrderSafe(order.id);
     await this.appendOrderNote(order.id, `✏️ Changed by the customer: ${request}`);
-    await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${order.id} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
+    await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${orderNo(order)} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
     await this.advanceLead(conversation.id, 'won', { order_value: subtotal + (fee ?? 0), order_id: order.id });
     // a new invoice only when the order really changed (items, prices, total, name, address, phone) – the AI often
     // sends the same order again, and the customer got the same invoice 5 times
     const after = await this.orderRepository.findOne({ where: { id: order.id } });
     const changed = !after || orderFingerprint(after, items) !== before;
-    const totals = { id: order.id, fee, total: subtotal + (fee ?? 0),
+    const totals = { id: order.id, order_no: order.order_no, fee, total: subtotal + (fee ?? 0),
       items: items.map((item) => ({ quantity: Number(item.quantity), product_name: String(item.product_name), variant_text: item.variant_text ?? null, total_price: Number(item.total_price) })) };
     return changed ? { intent: 'order_changed', invoice: order.id, totals } : { intent: 'order_changed', totals };
   }
@@ -1912,14 +1962,14 @@ export class SalesBotEngineService implements OnModuleInit {
       }));
       await this.stock?.syncOrderSafe(order.id);
       await this.appendOrderNote(order.id, `❌ Cancelled by the customer: ${reason}`);
-      await this.notifyTeam(companyId, 'order_cancelled', 'MEDIUM', `Order #${order.id} cancelled by the customer`, `${who}: ${reason}`, conversation.id, order.id);
+      await this.notifyTeam(companyId, 'order_cancelled', 'MEDIUM', `Order #${orderNo(order)} cancelled by the customer`, `${who}: ${reason}`, conversation.id, order.id);
       await this.advanceLead(conversation.id, 'lost', { lost_reason: reason });
       return { intent: 'cancelled' };
     }
     await this.appendOrderNote(order.id, `🔔 Customer requested cancellation: ${reason}`);
-    await this.notifyTeam(companyId, 'cancel_request', 'HIGH', `Cancellation request for order #${order.id} (${order.status})`, `${who}: ${reason}`, conversation.id, order.id);
+    await this.notifyTeam(companyId, 'cancel_request', 'HIGH', `Cancellation request for order #${orderNo(order)} (${order.status})`, `${who}: ${reason}`, conversation.id, order.id);
     return order.status === 'Shipped'
-      ? { intent: 'cancel_request', handoff: `Order #${order.id} already shipped – customer wants to cancel: ${reason}` }
+      ? { intent: 'cancel_request', handoff: `Order #${orderNo(order)} already shipped – customer wants to cancel: ${reason}` }
       : { intent: 'cancel_request' };
   }
 
@@ -2137,6 +2187,7 @@ export class SalesBotEngineService implements OnModuleInit {
         ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].filter(Boolean).join('\n'),
       created_by: 'bot', agent_id: await this.customerAgent(conversation),
     }));
+    await fillOrderNo(this.orderRepository, saved);
     for (const item of items) {
       await this.orderItemRepository.save(this.orderItemRepository.create({
         order_id: saved.id, product_id: item.product_id, product_name: item.product_name,
@@ -2152,7 +2203,7 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     session.pending_order = null;
     this.pusherService.trigger(`company-${companyId}`, 'conversation_updated', { conversation_id: conversation.id, order_created: saved.id });
-    await this.notifyTeam(companyId, 'new_order', 'LOW', `New order #${saved.id} from the sales bot`,
+    await this.notifyTeam(companyId, 'new_order', 'LOW', `New order #${orderNo(saved)} from the sales bot`,
       `${name} – ${items.length} item(s), total Rs ${total.toLocaleString('en-LK')}${(pending.notes ?? []).length ? ' – has special notes' : ''}`, conversation.id, saved.id);
     await this.advanceLead(conversation.id, 'won', { order_value: total, order_id: saved.id, name });
     return `saved:${saved.id}`;
@@ -2165,15 +2216,16 @@ export class SalesBotEngineService implements OnModuleInit {
       rows.map((row) => `${Number(row.product_id ?? 0)}|${String(row.variant ?? '').trim().toLowerCase()}|${Number(row.quantity ?? 0)}`).sort().join(';');
     const wanted = key(items.map((item) => ({ product_id: item.product_id, variant: item.variant_name, quantity: item.quantity })));
     const recent = (await Promise.resolve().then(() => this.orderRepository.query(
-      `SELECT o.id, COALESCE(json_agg(json_build_object('product_id', i.product_id, 'variant', i.variant_text, 'quantity', i.quantity))
+      `SELECT o.id, o.order_no, COALESCE(json_agg(json_build_object('product_id', i.product_id, 'variant', i.variant_text, 'quantity', i.quantity))
               FILTER (WHERE i.id IS NOT NULL), '[]') AS items
          FROM bot_order o LEFT JOIN bot_order_item i ON i.order_id = o.id
         WHERE o.company_id = $1 AND o.bot_channel_user_id = $2 AND o.created_at > NOW() - INTERVAL '24 hours'
           AND COALESCE(o.status, '') NOT IN ('Cancelled', 'Canceled', 'Rejected', 'Returned')
-        GROUP BY o.id ORDER BY o.id DESC LIMIT 5`, [companyId, channelUserId])).catch(() => [])) as Array<{ id: number; items: unknown }>;
+        GROUP BY o.id ORDER BY o.id DESC LIMIT 5`, [companyId, channelUserId])).catch(() => [])) as Array<{ id: number; order_no: number | null; items: unknown }>;
     for (const order of recent) {
       const rows = (typeof order.items === 'string' ? JSON.parse(order.items) : order.items) as Array<{ product_id?: unknown; variant?: unknown; quantity?: unknown }>;
-      if (Array.isArray(rows) && rows.length && key(rows) === wanted) return Number(order.id);
+      // the number the customer sees (#12 of this shop)
+      if (Array.isArray(rows) && rows.length && key(rows) === wanted) return orderNo(order);
     }
     return null;
   }

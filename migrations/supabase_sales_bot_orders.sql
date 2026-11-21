@@ -29,3 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_notification_company ON bot_notification (com
 -- false (default) = the bot keeps replying when a person is needed, the team gets a note + notification.
 -- true = the bot switches itself off for that customer (old behaviour).
 ALTER TABLE bot_sales_settings ADD COLUMN IF NOT EXISTS bot_off_on_handoff BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- A chat where the bot was switched off gets the bot back by itself when a customer message waits this many hours
+-- without an answer from a person. NULL or 0 = never (default).
+ALTER TABLE bot_sales_settings ADD COLUMN IF NOT EXISTS bot_auto_on_hours INTEGER NULL;

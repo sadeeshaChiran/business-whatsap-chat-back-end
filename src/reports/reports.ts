@@ -315,7 +315,7 @@ export class CustomerReportService {
         FROM bot_channel_user WHERE id = $1 AND company_id = $2`, [customerId, companyId]);
     if (!cu) throw new NotFoundException('Customer not found');
     const orders: Array<Record<string, any>> = await this.dataSource.query(`
-      SELECT o.id, o.status::text AS status, o.total_amount::float AS total, o.delivery_fee::float AS delivery_fee, o.created_at, o.created_by,
+      SELECT o.id, o.order_no, o.status::text AS status, o.total_amount::float AS total, o.delivery_fee::float AS delivery_fee, o.created_at, o.created_by,
              COALESCE((SELECT JSON_AGG(JSON_BUILD_OBJECT('product_id', i.product_id, 'name', i.product_name, 'option', i.variant_text,
                        'quantity', i.quantity, 'unit_price', i.unit_price::float, 'total', i.total_price::float) ORDER BY i.id)
                         FROM bot_order_item i WHERE i.order_id = o.id), '[]') AS items

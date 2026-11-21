@@ -43,6 +43,10 @@ export class SalesBotSettings {
   @Column({ type: 'boolean', default: false })
   bot_off_on_handoff: boolean;
 
+  /** Bot switched off in a chat → on again when a customer message waits this many hours with no answer from a person. NULL / 0 = never. */
+  @Column({ type: 'int', nullable: true })
+  bot_auto_on_hours: number | null;
+
   /** Free delivery when the order subtotal is at least this (Rs). NULL = never free. */
   @Column({ type: 'numeric', precision: 12, scale: 2, nullable: true, transformer: { to: (v: number | null) => v, from: (v: string | number | null) => (v == null ? null : Number(v)) } })
   free_delivery_over: number | null;

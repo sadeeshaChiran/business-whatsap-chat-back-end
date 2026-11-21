@@ -28,6 +28,10 @@ export class BotOrder {
   @Column({ type: 'int' })
   company_id: number;
 
+  /** The shop's own order number (1, 2, 3 per company) - set by the database on insert, shown to people as "#12". */
+  @Column({ type: 'int', nullable: true, default: null, insert: false, update: false })
+  order_no: number | null;
+
   @Column({ type: 'int' })
   bot_channel_user_id: number;
 
