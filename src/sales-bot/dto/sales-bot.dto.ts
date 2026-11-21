@@ -245,6 +245,14 @@ export class UpdateSalesBotSettingsDto {
   @IsBoolean()
   bot_off_on_handoff?: boolean;
 
+  /** 0 = never; otherwise hours a customer message may wait unanswered before the bot is switched on again */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(168)
+  bot_auto_on_hours?: number;
+
   /** free delivery when the order subtotal is at least this (Rs); null = never free */
   @IsOptional()
   @Type(() => Number)

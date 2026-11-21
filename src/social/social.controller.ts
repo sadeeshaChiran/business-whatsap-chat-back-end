@@ -26,8 +26,12 @@ class PostAiQueryDto {
   @IsOptional() @IsIn(['true', 'false']) again?: string;
 }
 class PostAiDto {
-  @IsBoolean() auto_reply: boolean;
+  @IsOptional() @IsBoolean() auto_reply?: boolean;
   @IsOptional() @IsIn(['facebook', 'instagram']) platform?: string;
+  /** the owner's corrected card text ('' clears it) */
+  @IsOptional() @IsString() @MaxLength(1000) summary?: string;
+  /** the products shown in the post */
+  @IsOptional() @IsArray() @ArrayMaxSize(10) @Type(() => Number) @IsInt({ each: true }) product_ids?: number[];
 }
 class MessageDto {
   @IsString() @MinLength(1) @MaxLength(2000) message: string;
@@ -121,7 +125,7 @@ export class SocialController {
     return this.social.postAiInfo(user, postId, query.platform ?? 'facebook', query.again === 'true');
   }
   @Patch('posts/:postId/ai') setPostAi(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Body() dto: PostAiDto) {
-    return this.social.setPostAutoReply(user, postId, dto.platform ?? 'facebook', dto.auto_reply);
+    return this.social.setPostAi(user, postId, dto.platform ?? 'facebook', { auto_reply: dto.auto_reply, summary: dto.summary, product_ids: dto.product_ids });
   }
   @Post('posts') create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreatePostDto) { return this.social.createPost(user, dto); }
   @Patch('posts/:postId') edit(@CurrentUser() user: AuthenticatedUser, @Param('postId') postId: string, @Body() dto: MessageDto) { return this.social.editPost(user, postId, dto.message); }

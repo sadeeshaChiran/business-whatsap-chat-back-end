@@ -17,6 +17,7 @@ import { BotService } from './entities/bot-service.entity';
 import { SalesBotContextService } from './sales-bot-context.service';
 import { SalesBotEngineService } from './sales-bot-engine.service';
 import { StockService } from '../reports/stock';
+import { fillOrderNo, orderNo } from '../bot-admin/order-number';
 
 export type ManualItem = { product_id: number; variant_id?: number | null; quantity: number };
 
@@ -139,6 +140,7 @@ export class ManualOrdersService {
       admin_note: [`Added in the chat by ${author} (${isAdmin ? 'admin' : 'agent'}).`, (dto.note ?? '').trim() ? `📝 ${dto.note!.trim()}` : ''].filter(Boolean).join('\n'),
       ...this.who(user, isAdmin, conversation),
     }));
+    await fillOrderNo(this.orderRepository, order);
     for (const item of quote.items) {
       await this.orderItemRepository.save(this.orderItemRepository.create({
         order_id: order.id, product_id: item.product_id, product_name: item.product_name, variant_text: item.variant_name || null,
@@ -151,7 +153,7 @@ export class ManualOrdersService {
     await this.stock?.syncOrderSafe(order.id);
     const invoice = dto.send_invoice === false ? null
       : await this.botAdminService.sendInvoiceForCompany(companyId, order.id).catch((error: unknown) => ({ sent: false, message: error instanceof Error ? error.message : 'Invoice failed.' }));
-    return { order_id: order.id, total: quote.total, delivery_fee: quote.delivery_fee, invoice_sent: Boolean(invoice?.sent), invoice_message: invoice?.message ?? null };
+    return { order_id: order.id, order_no: orderNo(order), total: quote.total, delivery_fee: quote.delivery_fee, invoice_sent: Boolean(invoice?.sent), invoice_message: invoice?.message ?? null };
   }
 
   async createBooking(user: AuthenticatedUser, conversationId: number, dto: {

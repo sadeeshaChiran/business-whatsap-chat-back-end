@@ -111,11 +111,13 @@ export class BotAdminController {
     @CurrentUser() user: AuthenticatedUser,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('search') search?: string,
   ) {
     const rows = await this.botAdminService.getConversations(
       user,
       page == null ? undefined : Number(page),
       limit == null ? undefined : Number(limit),
+      search?.trim() || undefined,
     );
     return maskRows(rows, await this.privacy.get(Number(user.company_id)));
   }
@@ -378,8 +380,8 @@ export class BotAdminController {
 
   /** The agent's inbox (same rows as the admin inbox, only the agent's own chats) */
   @Get('agent/inbox')
-  getAgentInbox(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string, @Query('limit') limit?: string) {
-    return this.botAdminService.getAgentInbox(user, page ? Number(page) : 1, limit ? Number(limit) : 80)
+  getAgentInbox(@CurrentUser() user: AuthenticatedUser, @Query('page') page?: string, @Query('limit') limit?: string, @Query('search') search?: string) {
+    return this.botAdminService.getAgentInbox(user, page ? Number(page) : 1, limit ? Number(limit) : 80, search?.trim() || undefined)
       .then(async (rows) => maskRows(rows, await this.privacy.get(Number(user.company_id))));
   }
 

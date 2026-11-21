@@ -77,7 +77,7 @@ export class StockService {
   /** Makes the stock match what the order needs now (also after a change, cancel or delete). */
   async syncOrder(orderId: number): Promise<void> {
     const alerts = await this.dataSource.transaction(async (m) => {
-      const [order] = await m.query(`SELECT id, company_id, status::text AS status FROM bot_order WHERE id = $1`, [orderId]);
+      const [order] = await m.query(`SELECT id, order_no, company_id, status::text AS status FROM bot_order WHERE id = $1`, [orderId]);
       const lines: Array<{ product_id: number; variant_text: string | null; quantity: number }> = order && order.status !== 'Cancelled'
         ? await m.query(`SELECT product_id, variant_text, quantity FROM bot_order_item WHERE order_id = $1 AND product_id IS NOT NULL`, [orderId])
         : [];
@@ -114,7 +114,7 @@ export class StockService {
         const label = rest.join('|') || null;
         const reason = change.desired === 0 ? (order ? 'order_cancelled' : 'order_deleted') : change.held === 0 ? 'order' : 'order_changed';
         const alert = await this.applyChange(m, product, variants.get(product.id) ?? null, label, change.change, {
-          reason, orderId, userId: null, note: order ? `Order #${orderId}` : `Order #${orderId} (deleted)`,
+          reason, orderId, userId: null, note: order ? `Order #${order.order_no ?? orderId}` : `Order #${orderId} (deleted)`,
         });
         if (alert) out.push(alert);
       }
@@ -252,6 +252,57 @@ export class StockService {
     return this.product(user, productId);
   }
 
+  /**
+   * Shop API: the shop's own system sends the stock it has ("set" = exactly this, "add" = received / removed).
+   * Counting is switched on by itself; at 0 the product / option becomes Unavailable (the bot stops selling it) and
+   * back to Available when stock comes again – same rules as the Stock screen. Fast (no list reload): for bulk syncs.
+   */
+  async apiStock(user: AuthenticatedUser, productId: number, option: string | undefined, mode: 'set' | 'add', quantity: number, note?: string) {
+    const companyId = Number(user.company_id);
+    const out = await this.dataSource.transaction(async (m) => {
+      const { products, variants } = await this.lockProducts(m, companyId, [productId]);
+      const product = products.get(productId);
+      if (!product) throw new NotFoundException('Product not found');
+      if (!product.track_stock) {
+        await m.query(`UPDATE product SET track_stock = TRUE, updated_at = NOW() WHERE id = $1`, [productId]);
+        product.track_stock = true;
+      }
+      const options = product.has_variants ? variants.get(productId)?.variants ?? [] : [];
+      let label: string | null = null;
+      if (options.length) {
+        const index = findOption(options, option);
+        if (index < 0) throw new BadRequestException(option ? `No option "${option}" on this product.` : 'This product has options: send the option SKU or variant_value.');
+        label = optionLabel(options[index]);
+      }
+      const current = label ? num(options.find((o) => optionLabel(o) === label)?.quantity) : num(product.quantity);
+      const target = mode === 'set' ? quantity : current + quantity;
+      let alert: Alert | null = null;
+      if (target !== current) {
+        alert = await this.applyChange(m, product, variants.get(productId) ?? null, label, target - current,
+          { reason: mode === 'set' ? 'count' : quantity > 0 ? 'received' : 'removed', orderId: null, userId: Number(user.id), note: note?.trim() || 'Shop API', setTo: target });
+      } else if (label) {
+        // the same count, but the switch does not match it yet (e.g. counting just switched on at 0): 0 = Unavailable
+        const row = variants.get(productId);
+        const opt = row?.variants.find((o) => optionLabel(o) === label);
+        if (row && opt && target <= 0 && opt.available !== false) { opt.available = false; opt.auto_off = true; }
+        else if (row && opt && target > 0 && opt.auto_off) { delete opt.available; delete opt.auto_off; }
+        if (row) await m.query(`UPDATE product_variant SET variants = $1::jsonb WHERE id = $2`, [JSON.stringify(row.variants), row.id]);
+      } else if ((target <= 0 && product.is_available) || (target > 0 && product.stock_auto_off)) {
+        const on = target > 0;
+        await m.query(`UPDATE product SET is_available = $1, stock_auto_off = $2, updated_at = NOW() WHERE id = $3`, [on, !on, productId]);
+        Object.assign(product, { is_available: on, stock_auto_off: !on });
+      }
+      const opt = label ? (variants.get(productId)?.variants ?? []).find((o) => optionLabel(o) === label) : null;
+      return {
+        alert,
+        result: { product_id: productId, option: label, stock: label ? num(opt?.quantity) : num(product.quantity),
+          available: label ? opt?.available !== false : Boolean(product.is_available), changed: target !== current },
+      };
+    });
+    if (out.alert) await this.sendAlerts([out.alert]);
+    return out.result;
+  }
+
   // ---------------------------------------------------------------- lists
 
   /** Every product with its stock, selling speed and days left. */
@@ -301,10 +352,11 @@ export class StockService {
 
   async movements(user: AuthenticatedUser, query: StockMovementsDto) {
     const rows: Array<Record<string, any>> = await this.dataSource.query(`
-      SELECT m.id, m.product_id, p.name AS product_name, m.option_label, m.order_id, m.change, m.stock_after, m.reason, m.note,
+      SELECT m.id, m.product_id, p.name AS product_name, m.option_label, m.order_id, bo.order_no, m.change, m.stock_after, m.reason, m.note,
              m.created_at, u.name AS by_name
         FROM product_stock_movement m
         JOIN product p ON p.id = m.product_id
+        LEFT JOIN bot_order bo ON bo.id = m.order_id
         LEFT JOIN app_user u ON u.id = m.created_by_user_id
        WHERE m.company_id = $1 AND ($2::int IS NULL OR m.product_id = $2)
        ORDER BY m.id DESC LIMIT $3`, [Number(user.company_id), query.product_id ?? null, query.limit ?? 100]);

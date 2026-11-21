@@ -232,7 +232,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
     const conversations = await this.dataSource.query(
       `SELECT id, status, lead_stage, lead_details, last_message_at, created_at FROM bot_conversation WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 10`, [id]);
     const orders = await this.dataSource.query(
-      `SELECT id, status, total_amount, created_at FROM bot_order WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 20`, [id]);
+      `SELECT id, order_no, status, total_amount, created_at FROM bot_order WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 20`, [id]);
     const bookings = await this.dataSource.query(
       `SELECT id, service_name, date, time, status, created_at FROM bot_booking WHERE bot_channel_user_id = $1 ORDER BY id DESC LIMIT 20`, [id]).catch(() => []);
     const notes = await this.dataSource.query(
@@ -245,7 +245,7 @@ export class CrmService implements OnModuleInit, OnModuleDestroy {
         FROM bot_message m JOIN bot_conversation c ON c.id = m.conversation_id WHERE c.bot_channel_user_id = $1`, [id]);
     const timeline = [
       { type: 'contact', at: profile.created_at, text: `First message on ${profile.channel}` },
-      ...orders.map((o: Record<string, unknown>) => ({ type: 'order', at: o.created_at, text: `Order #${o.id} – Rs ${num(o.total_amount).toLocaleString()} (${o.status})` })),
+      ...orders.map((o: Record<string, unknown>) => ({ type: 'order', at: o.created_at, text: `Order #${o.order_no ?? o.id} – Rs ${num(o.total_amount).toLocaleString()} (${o.status})` })),
       ...bookings.map((b: Record<string, unknown>) => ({ type: 'booking', at: b.created_at, text: `Booking: ${b.service_name} ${b.date} ${b.time} (${b.status})` })),
       ...notes.map((n: Record<string, unknown>) => ({ type: 'note', at: n.created_at, text: String(n.content).slice(0, 160), by: n.created_by_name })),
       ...tasks.map((t: Record<string, unknown>) => ({ type: 'task', at: t.done_at ?? t.created_at, text: `${t.status === 'done' ? 'Done' : 'Task'}: ${t.title}` })),

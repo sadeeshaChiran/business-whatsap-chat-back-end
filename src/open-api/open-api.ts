@@ -3,10 +3,15 @@
  *
  *  IN  (the shop calls us, header "Authorization: Bearer am_live_…" or "X-API-Key: am_live_…"):
  *    POST   /open/products                       add / update products by SKU (max 500 a call)
+ *    GET    /open/products?sku=&search=&since=&page=&limit=   products with price, availability and stock
  *    PATCH  /open/products/:sku/availability     { available, variant_value? }  (a variant SKU works too)
+ *    PUT    /open/products/:sku/stock            { quantity, mode?: set|add, variant_value?, note? }  stock count
+ *    POST   /open/stock                          { items: [{ sku, quantity, mode?, variant_value? }] }  up to 500 a call
  *    DELETE /open/products/:sku                  remove a product
  *    GET    /open/orders?status=&since=&limit=   orders (newest first)      GET /open/orders/:id
- *    PATCH  /open/orders/:id/status              { status }  – same as the dashboard: history + the customer's message
+ *    GET    /open/orders/number/:no              by the shop's order number (#12)
+ *    PATCH  /open/orders/:id/status              { status, notify_customer? }  – same as the dashboard: history + the customer's message
+ *    PATCH  /open/orders/number/:no/status       the same, by the shop's order number
  *    GET    /open/bookings?status=&since=        bookings                   PATCH /open/bookings/:id/status { status }
  *
  *  OUT (we call the shop – webhook): order.created, order.status_changed, booking.created, booking.status_changed, ping.
@@ -28,7 +33,7 @@ import { Throttle } from '@nestjs/throttler';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsNumber, IsOptional, IsString, IsUrl, MaxLength, Min, ValidateNested,
+  ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUrl, Max, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { createHash, createHmac, randomBytes } from 'crypto';
 import { DataSource } from 'typeorm';
@@ -44,6 +49,7 @@ import { ProductsService } from '../products/products.service';
 import { SalesBotModule } from '../sales-bot/sales-bot.module';
 import { SalesBotAdminService } from '../sales-bot/sales-bot-admin.service';
 import { BOT_BOOKING_STATUSES } from '../sales-bot/entities/bot-booking.entity';
+import { StockService } from '../reports/stock';
 
 export const ORDER_STATUSES = ['Pending', 'Confirmed', 'Processing', 'Shipped', 'Delivered', 'Cancelled'] as const;
 export const WEBHOOK_EVENTS = ['order.created', 'order.status_changed', 'booking.created', 'booking.status_changed'] as const;
@@ -63,6 +69,8 @@ class ApiVariantDto {
   @IsOptional() @IsBoolean() available?: boolean;
   @IsOptional() @IsNumber() @Min(0) weight?: number;
   @IsOptional() @IsString() @MaxLength(1000) image_url?: string;
+  /** stock of this option (counting switches on by itself; 0 = Unavailable) */
+  @IsOptional() @IsInt() @Min(0) @Max(1000000) quantity?: number;
 }
 
 class ApiProductDto {
@@ -78,6 +86,8 @@ class ApiProductDto {
   @IsOptional() @IsString() @MaxLength(1000) selling_points?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) image_urls?: string[];
   @IsOptional() @IsArray() @ArrayMaxSize(200) @ValidateNested({ each: true }) @Type(() => ApiVariantDto) variants?: ApiVariantDto[];
+  /** stock of a product without options (counting switches on by itself; 0 = Unavailable) */
+  @IsOptional() @IsInt() @Min(0) @Max(1000000) quantity?: number;
 }
 
 export class ApiProductsDto {
@@ -91,6 +101,33 @@ export class ApiAvailabilityDto {
 
 export class ApiOrderStatusDto {
   @IsIn(ORDER_STATUSES as unknown as string[]) status!: (typeof ORDER_STATUSES)[number];
+  /** false = no status message to the customer (default true) */
+  @IsOptional() @IsBoolean() notify_customer?: boolean;
+}
+
+export class ApiStockDto {
+  @Type(() => Number) @IsInt() @Min(-1000000) @Max(1000000) quantity!: number;
+  /** set (default) = the stock is now exactly this · add = received (+) or removed (-) */
+  @IsOptional() @IsIn(['set', 'add']) mode?: 'set' | 'add';
+  @IsOptional() @IsString() @MaxLength(120) variant_value?: string;
+  @IsOptional() @IsString() @MaxLength(200) note?: string;
+}
+
+class ApiStockItemDto extends ApiStockDto {
+  @IsString() @MaxLength(80) sku!: string;
+}
+
+export class ApiStockBulkDto {
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(500) @ValidateNested({ each: true }) @Type(() => ApiStockItemDto) items!: ApiStockItemDto[];
+}
+
+export class ApiProductsQueryDto {
+  @IsOptional() @IsString() @MaxLength(80) sku?: string;
+  @IsOptional() @IsString() @MaxLength(100) search?: string;
+  /** ISO date-time: only products changed after it */
+  @IsOptional() @IsString() @MaxLength(40) since?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
 }
 
 export class ApiBookingStatusDto {
@@ -198,7 +235,7 @@ export class OpenApiViews {
   async orders(companyId: number, ids: number[]) {
     if (!ids.length) return [];
     const rows = await this.db.query(`
-      SELECT o.id, o.status, o.customer_name, o.customer_phone, o.address, o.delivery_area, o.payment_method, o.delivery_fee,
+      SELECT o.id, o.order_no, o.status, o.customer_name, o.customer_phone, o.address, o.delivery_area, o.payment_method, o.delivery_fee,
              o.total_amount, o.total_weight_kg, o.admin_note, o.invoice_url, o.created_by, o.created_at, o.updated_at,
              u.platform AS channel, u.external_user_id
         FROM bot_order o JOIN bot_channel_user u ON u.id = o.bot_channel_user_id
@@ -214,7 +251,7 @@ export class OpenApiViews {
       byOrder.set(Number(i.order_id), list);
     }
     const view = new Map<number, unknown>(rows.map((o: Record<string, unknown>) => [Number(o.id), {
-      id: Number(o.id), status: o.status, channel: o.channel, created_by: o.created_by ?? 'bot',
+      id: Number(o.id), order_no: o.order_no == null ? null : Number(o.order_no), status: o.status, channel: o.channel, created_by: o.created_by ?? 'bot',
       customer: { name: o.customer_name || null, phone: o.customer_phone || o.external_user_id || null, address: o.address || null, area: o.delivery_area || null },
       payment_method: o.payment_method || null, delivery_fee: money(o.delivery_fee), total: money(o.total_amount),
       weight_kg: money(o.total_weight_kg), note: o.admin_note || null, invoice_url: o.invoice_url || null,
@@ -398,6 +435,7 @@ export class OpenApiController {
     private readonly botAdmin: BotAdminService,
     private readonly salesBotAdmin: SalesBotAdminService,
     private readonly views: OpenApiViews,
+    private readonly stock: StockService,
   ) {}
 
   @Get('me')
@@ -408,8 +446,87 @@ export class OpenApiController {
   }
 
   @Post('products')
-  upsertProducts(@CurrentRequest() req: ApiRequest, @Body() dto: ApiProductsDto) {
-    return this.products.upsertFromApi(dto.products, actorOf(req).user);
+  async upsertProducts(@CurrentRequest() req: ApiRequest, @Body() dto: ApiProductsDto) {
+    const actor = actorOf(req);
+    const saved = await this.products.upsertFromApi(dto.products, actor.user);
+    // stock sent with the products: after they are saved (a new product needs its id first)
+    for (const [index, item] of dto.products.entries()) {
+      const row = saved.results[index];
+      if (!row?.id || row.action === 'error') continue;
+      const counts: Array<{ option?: string; quantity: number }> = [];
+      if (item.quantity != null && !(item.variants ?? []).length) counts.push({ quantity: item.quantity });
+      for (const v of item.variants ?? []) if (v.quantity != null) counts.push({ option: v.value, quantity: v.quantity });
+      for (const c of counts) {
+        try {
+          const done = await this.stock.apiStock(actor.user, row.id, c.option, 'set', c.quantity);
+          (row as Record<string, unknown>).stock = c.option ? { ...((row as Record<string, unknown>).stock as object ?? {}), [c.option]: done.stock } : done.stock;
+        } catch (error) {
+          (row as Record<string, unknown>).stock_error = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
+    return saved;
+  }
+
+  /** The shop's products with price, availability and stock (to check what Agent Metra has). */
+  @Get('products')
+  async listProducts(@CurrentRequest() req: ApiRequest, @Query() query: ApiProductsQueryDto) {
+    const companyId = actorOf(req).companyId;
+    const limit = Math.min(Number(query.limit ?? 100), 500);
+    const page = Math.max(1, Number(query.page ?? 1));
+    const params: unknown[] = [companyId];
+    let where = 'p.company_id = $1 AND p.is_deleted = FALSE';
+    if (query.sku) { params.push(query.sku.trim()); where += ` AND (p.sku = $${params.length} OR EXISTS (SELECT 1 FROM product_variant pv, jsonb_array_elements(COALESCE(pv.variants::jsonb, '[]'::jsonb)) v
+        WHERE pv.product_id = p.id AND LOWER(v->>'sku') = LOWER($${params.length})))`; }
+    if (query.search?.trim()) { params.push(`%${query.search.trim()}%`); where += ` AND (p.name ILIKE $${params.length} OR p.sku ILIKE $${params.length})`; }
+    if (query.since) {
+      const since = new Date(query.since);
+      if (Number.isNaN(since.getTime())) throw new BadRequestException('since must be a date-time, e.g. 2026-11-06T10:00:00Z');
+      params.push(since); where += ` AND p.updated_at > $${params.length}`;
+    }
+    const [{ total }] = await this.db.query(`SELECT COUNT(*)::int AS total FROM product p WHERE ${where}`, params);
+    params.push(limit, (page - 1) * limit);
+    const rows: Array<Record<string, any>> = await this.db.query(`
+      SELECT p.id, p.sku, p.name, p.price, p.is_available, p.track_stock, p.quantity, p.weight, p.image_url, p.updated_at,
+             (SELECT pv.variants FROM product_variant pv WHERE pv.product_id = p.id ORDER BY pv.id LIMIT 1) AS options
+        FROM product p WHERE ${where} ORDER BY p.id LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
+    return {
+      total, page, limit,
+      products: rows.map((r) => ({
+        id: Number(r.id), sku: r.sku || null, name: r.name, price: money(r.price), available: Boolean(r.is_available),
+        stock: r.track_stock ? Number(r.quantity ?? 0) : null, weight: money(r.weight), image_url: r.image_url || null, updated_at: r.updated_at,
+        variants: (Array.isArray(r.options) ? r.options : []).map((v: Record<string, unknown>) => ({
+          name: v.variant_name ?? null, value: v.variant_value ?? null, sku: v.sku || null, price: money(v.price),
+          available: v.available !== false, stock: r.track_stock ? Number(v.quantity ?? 0) : null,
+        })),
+      })),
+    };
+  }
+
+  /** Stock of one product / option. A variant SKU changes only that option. */
+  @Put('products/:sku/stock')
+  async setStock(@CurrentRequest() req: ApiRequest, @Param('sku') sku: string, @Body() dto: ApiStockDto) {
+    const actor = actorOf(req);
+    const found = await this.products.findBySkuForApi(actor.companyId, sku);
+    if (!found) throw new NotFoundException(`No product with SKU ${sku}.`);
+    return { sku, ...(await this.stock.apiStock(actor.user, found.product.id, dto.variant_value ?? found.variantValue, dto.mode ?? 'set', dto.quantity, dto.note)) };
+  }
+
+  /** Many stock counts at once (a POS / ERP sync). One bad line never stops the others. */
+  @Post('stock')
+  async setStockBulk(@CurrentRequest() req: ApiRequest, @Body() dto: ApiStockBulkDto) {
+    const actor = actorOf(req);
+    const results: Array<Record<string, unknown>> = [];
+    for (const item of dto.items) {
+      try {
+        const found = await this.products.findBySkuForApi(actor.companyId, item.sku);
+        if (!found) throw new NotFoundException(`No product with SKU ${item.sku}.`);
+        results.push({ sku: item.sku, ok: true, ...(await this.stock.apiStock(actor.user, found.product.id, item.variant_value ?? found.variantValue, item.mode ?? 'set', item.quantity, item.note)) });
+      } catch (error) {
+        results.push({ sku: item.sku, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { updated: results.filter((r) => r.ok).length, errors: results.filter((r) => !r.ok).length, results };
   }
 
   @Patch('products/:sku/availability')
@@ -450,6 +567,14 @@ export class OpenApiController {
     return this.list('order', actorOf(req).companyId, query);
   }
 
+  @Get('orders/number/:no')
+  async orderByNumber(@CurrentRequest() req: ApiRequest, @Param('no', ParseIntPipe) no: number) {
+    const companyId = actorOf(req).companyId;
+    const [order] = await this.views.orders(companyId, [await this.idOfNumber(companyId, no)]);
+    if (!order) throw new NotFoundException('Order not found.');
+    return order;
+  }
+
   @Get('orders/:id')
   async order(@CurrentRequest() req: ApiRequest, @Param('id', ParseIntPipe) id: number) {
     const [order] = await this.views.orders(actorOf(req).companyId, [id]);
@@ -457,14 +582,32 @@ export class OpenApiController {
     return order;
   }
 
+  @Patch('orders/number/:no/status')
+  async orderStatusByNumber(@CurrentRequest() req: ApiRequest, @Param('no', ParseIntPipe) no: number, @Body() dto: ApiOrderStatusDto) {
+    return this.changeOrderStatus(actorOf(req), await this.idOfNumber(actorOf(req).companyId, no), dto);
+  }
+
   @Patch('orders/:id/status')
   async orderStatus(@CurrentRequest() req: ApiRequest, @Param('id', ParseIntPipe) id: number, @Body() dto: ApiOrderStatusDto) {
-    const actor = actorOf(req);
-    const result = await this.botAdmin.updateOrderStatus(actor.user, id, { status: dto.status });
+    return this.changeOrderStatus(actorOf(req), id, dto);
+  }
+
+  private async idOfNumber(companyId: number, no: number): Promise<number> {
+    const [row] = await this.db.query(`SELECT id FROM bot_order WHERE company_id = $1 AND order_no = $2`, [companyId, no]);
+    if (!row) throw new NotFoundException(`No order #${no}.`);
+    return Number(row.id);
+  }
+
+  private async changeOrderStatus(actor: ApiActor, id: number, dto: ApiOrderStatusDto) {
+    const [current] = await this.views.orders(actor.companyId, [id]) as Array<{ status: string }>;
+    if (!current) throw new NotFoundException('Order not found.');
+    // the same status again (a sync that runs twice): nothing changes, no second message to the customer
+    if (current.status === dto.status) return { order: current, changed: false, customer_message: null };
+    const result = await this.botAdmin.updateOrderStatus(actor.user, id, { status: dto.status, notify_customer: dto.notify_customer });
     // the shop made this change – it does not need a webhook about it
     await this.markSent(actor.companyId, 'order', id, dto.status);
     const [order] = await this.views.orders(actor.companyId, [id]);
-    return { order, customer_message: (result as { message?: string }).message ?? null };
+    return { order, changed: true, customer_message: (result as { message?: string | null }).message ?? null };
   }
 
   @Get('bookings')

@@ -13,6 +13,7 @@ import { BotDeliveryZone } from './entities/bot-delivery-zone.entity';
 import { blockingStatuses, busyRanges, DEFAULT_BOOKING_MINUTES, formatMinutes, openingWindow, type BusyRange } from './booking-slots';
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
+import { orderNo } from '../bot-admin/order-number';
 
 export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; available?: boolean; image_url: string | null; weight_kg: number | null };
 export type ContextProduct = {
@@ -406,7 +407,8 @@ export class SalesBotContextService {
       avoid: avoid.slice(0, 100),
       last_order: lastOrder
         ? {
-            order_id: lastOrder.id,
+            // the shop's own number (#12): what the customer sees and says; the engine maps it back to the order
+            order_id: orderNo(lastOrder),
             status: lastOrder.status,
             total: toNumber(lastOrder.total_amount),
             delivery_fee: lastOrder.delivery_fee == null ? null : toNumber(lastOrder.delivery_fee),
@@ -418,7 +420,7 @@ export class SalesBotContextService {
           }
         : null,
       open_orders: openOrders.map((order) => ({
-        order_id: order.id,
+        order_id: orderNo(order),
         status: order.status,
         date: order.created_at ? new Date(order.created_at).toISOString().slice(0, 10) : null,
         total: toNumber(order.total_amount),

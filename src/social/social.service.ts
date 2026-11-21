@@ -13,7 +13,9 @@ import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
 
 export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean; format?: string };
 type Platform = 'facebook' | 'instagram';
-type PostAi = { post_id: string; auto_reply: boolean; kind: string | null; summary: string | null; read_at: string | null };
+type PostAi = { post_id: string; auto_reply: boolean; kind: string | null; summary: string | null; read_at: string | null;
+  product_ids?: number[]; summary_edited?: boolean; products?: PostProduct[] };
+type PostProduct = { id: number; name: string; sku: string | null; price: number; image_url: string | null };
 type Page = { page_id: string; page_name: string | null; page_access_token: string; instagram_business_account_id: string | null };
 /** What is published: a feed post (photos, one video or text), a reel (one video) or a story (one photo or video, 24 h). */
 export type PostFormat = 'post' | 'reel' | 'story';
@@ -629,8 +631,10 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         { platform: c.platform ?? 'facebook', post_text: text, image_b64: image, mime_type: mime }, companyId);
       const [saved] = await this.dataSource.query(`
         INSERT INTO social_post_ai (company_id, post_id, platform, kind, summary, read_at) VALUES ($1, $2, $3, $4, $5, NOW())
-        ON CONFLICT (company_id, post_id) DO UPDATE SET kind = EXCLUDED.kind, summary = EXCLUDED.summary, read_at = NOW(), updated_at = NOW()
-        RETURNING *`, [companyId, postId, c.platform ?? 'facebook', String(read.kind ?? '').slice(0, 16), String(read.summary ?? '').slice(0, 1000)]);
+        ON CONFLICT (company_id, post_id) DO UPDATE SET kind = EXCLUDED.kind, read_at = NOW(), updated_at = NOW(),
+          summary = CASE WHEN social_post_ai.summary_edited AND NOT $6 THEN social_post_ai.summary ELSE EXCLUDED.summary END,
+          summary_edited = social_post_ai.summary_edited AND NOT $6
+        RETURNING *`, [companyId, postId, c.platform ?? 'facebook', String(read.kind ?? '').slice(0, 16), String(read.summary ?? '').slice(0, 1000), force]);
       return saved;
     })();
     this.postReads.set(key, run);
@@ -647,7 +651,57 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
   /** The post's AI card for the post viewer: what the AI understood + the switch (reads the post when not read yet). */
   async postAiInfo(user: AuthenticatedUser, postId: string, platform: string, again = false) {
     const companyId = await this.adminCompany(user);
-    return this.postAi(companyId, { post_id: postId, platform, post_text: '' }, again);
+    return this.withProducts(companyId, await this.postAi(companyId, { post_id: postId, platform, post_text: '' }, again));
+  }
+
+  /** The products the owner linked to the post (name, SKU, price, photo) for the card. */
+  private async withProducts(companyId: number, post: PostAi): Promise<PostAi> {
+    return { ...post, products: await this.postProducts(companyId, post.product_ids) };
+  }
+
+  private async postProducts(companyId: number, ids: unknown): Promise<PostProduct[]> {
+    const list = (Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10);
+    if (!list.length) return [];
+    const rows = await this.dataSource.query(
+      `SELECT id, name, sku, price, image_url FROM product WHERE company_id = $1 AND id = ANY($2::int[]) AND NOT COALESCE(is_deleted, FALSE)`,
+      [companyId, list]).catch(() => []);
+    const byId = new Map<number, any>(rows.map((r: any) => [Number(r.id), r]));
+    return list.filter((id) => byId.has(id)).map((id) => {
+      const r = byId.get(id);
+      return { id, name: String(r.name ?? ''), sku: r.sku ?? null, price: Number(r.price ?? 0), image_url: r.image_url ?? null };
+    });
+  }
+
+  /** What the comment AI is told about the post: the linked products first (exact name + price), then the card text. */
+  static postSummaryForAi(products: PostProduct[], summary: string | null | undefined): string {
+    const lines = products.map((p) => `"${p.name}"${p.sku ? ` (SKU ${p.sku})` : ''} - Rs ${Math.round(p.price).toLocaleString('en-US')}`);
+    const head = !lines.length ? '' : lines.length === 1 ? `PRODUCT: ${lines[0]}.`
+      : `PRODUCTS (${lines.length} in this post): ${lines.join(', ')}. Price question -> all of them, one per line.`;
+    return [head, String(summary ?? '').trim()].filter(Boolean).join(' ').slice(0, 600);
+  }
+
+  /** The owner corrects the card: the text the AI read and / or the products of the post. */
+  async setPostAi(user: AuthenticatedUser, postId: string, platform: string,
+    patch: { auto_reply?: boolean; summary?: string | null; product_ids?: number[] }) {
+    const companyId = await this.adminCompany(user);
+    const ids = patch.product_ids === undefined ? null
+      : (await this.postProducts(companyId, patch.product_ids)).map((p) => p.id);
+    const summary = patch.summary === undefined ? null : String(patch.summary ?? '').trim().slice(0, 1000);
+    const [row] = await this.dataSource.query(`
+      INSERT INTO social_post_ai (company_id, post_id, platform, auto_reply, summary, summary_edited, product_ids, kind, read_at)
+      VALUES ($1, $2, $3, COALESCE($4, TRUE), $5::text, $5::text IS NOT NULL, COALESCE($6::jsonb, '[]'::jsonb),
+              CASE WHEN $5 IS NOT NULL OR $6::jsonb IS NOT NULL THEN 'product' END, CASE WHEN $5 IS NOT NULL THEN NOW() END)
+      ON CONFLICT (company_id, post_id) DO UPDATE SET
+        auto_reply = COALESCE($4, social_post_ai.auto_reply),
+        summary = COALESCE($5, social_post_ai.summary),
+        summary_edited = social_post_ai.summary_edited OR $5 IS NOT NULL,
+        product_ids = COALESCE($6::jsonb, social_post_ai.product_ids),
+        kind = CASE WHEN COALESCE(jsonb_array_length($6::jsonb), 0) > 0 THEN 'product' ELSE social_post_ai.kind END,
+        read_at = CASE WHEN $5 IS NOT NULL THEN COALESCE(social_post_ai.read_at, NOW()) ELSE social_post_ai.read_at END,
+        updated_at = NOW()
+      RETURNING *`,
+      [companyId, postId, platform, patch.auto_reply ?? null, summary, ids === null ? null : JSON.stringify(ids)]);
+    return this.withProducts(companyId, row);
   }
 
   async setPostAutoReply(user: AuthenticatedUser, postId: string, platform: string, on: boolean) {
@@ -667,7 +721,8 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       platform: c.platform, post_text: c.post_text, comment: c.message, author: c.author_name,
       // private messages on: price / details go to the customer's inbox as a normal chat message, the public reply stays short
       dm_enabled: settings.auto_dm !== false,
-      post_kind: post.kind ?? '', post_summary: post.summary ?? '',
+      post_kind: post.kind ?? '',
+      post_summary: SocialService.postSummaryForAi(await this.postProducts(companyId, post.product_ids), post.summary),
     }, companyId);
     await this.dataSource.query(`UPDATE social_comment SET ai_reply = $2, ai_dm = $3, ai_intent = $4, updated_at = NOW() WHERE id = $1`,
       [id, ai.reply ?? '', ai.dm ?? '', String(ai.intent ?? '').slice(0, 20)]);

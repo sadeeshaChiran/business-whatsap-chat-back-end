@@ -70,6 +70,7 @@ import { Inject, Optional } from '@nestjs/common';
 import { SendSafetyService } from './send-safety';
 import { ActivityLogService } from '../activity-log/activity-log';
 import { StockService } from '../reports/stock';
+import { fillOrderNo, orderNo } from './order-number';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -138,6 +139,19 @@ export function followUpView(conversation: BotConversation) {
     followup_count: Number(conversation.followup_count ?? 0),
     followup_last_at: conversation.followup_last_at ?? null,
   };
+}
+
+/**
+ * Chat search: the text for ILIKE ("%nim%"), and for numbers the digits without a leading 0 / 94
+ * so "077 123 4567", "0771234567" and "94771234567" find the same chat.
+ */
+export function chatSearch(search?: string | null): { text: string; digits: string | null } | null {
+  const term = String(search ?? '').trim().slice(0, 60);
+  if (term.length < 2) return null;
+  const like = (value: string) => `%${value.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const raw = term.replace(/\D/g, '');
+  const digits = raw.length >= 6 && raw.length >= term.replace(/[\s+()-]/g, '').length ? raw.replace(/^(94|0)/, '') : '';
+  return { text: like(term), digits: digits.length >= 6 ? `%${digits}%` : null };
 }
 
 @Injectable()
@@ -1702,10 +1716,10 @@ export class BotAdminService {
     };
   }
 
-  async getConversations(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
+  async getConversations(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number, search?: string) {
     await this.assertManagerAccess(user);
-    if (requestedPage != null || requestedLimit != null) {
-      return this.buildCompanyConversationRows(user.company_id, requestedPage, requestedLimit);
+    if (requestedPage != null || requestedLimit != null || search) {
+      return this.buildCompanyConversationRows(user.company_id, requestedPage, requestedLimit, undefined, search);
     }
     return this.buildCompanyContactRows(user.company_id);
   }
@@ -1848,12 +1862,12 @@ export class BotAdminService {
    * The agent's inbox: the same rows as the admin inbox, only the agent's own chats (waiting to accept, accepted and
    * finished). Unread = customer messages the AGENT has not read (the admin reading the chat does not change it).
    */
-  async getAgentInbox(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number) {
+  async getAgentInbox(user: AuthenticatedUser, requestedPage?: number, requestedLimit?: number, search?: string) {
     const companyId = this.requireUserCompanyId(user);
     const company = await this.getCompanyForUser(user);
     if (!company || Number(company.id) !== companyId) throw new ForbiddenException('Company not found.');
-    if (this.managesAll(user, company)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit);
-    return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, Number(user.id));
+    if (this.managesAll(user, company)) return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, undefined, search);
+    return this.buildCompanyConversationRows(companyId, requestedPage, requestedLimit, Number(user.id), search);
   }
 
   private async buildCompanyConversationRows(
@@ -1861,7 +1875,9 @@ export class BotAdminService {
     requestedPage?: number,
     requestedLimit?: number,
     agentId?: number,
+    search?: string,
   ): Promise<CompanyContactRow[]> {
+    const find = chatSearch(search);
     const page = Number.isInteger(requestedPage) && Number(requestedPage) > 0 ? Number(requestedPage) : 1;
     const limit = Number.isInteger(requestedLimit) && Number(requestedLimit) > 0 ? Math.min(Number(requestedLimit), 100) : 60;
     const offset = (page - 1) * limit;
@@ -1872,6 +1888,12 @@ export class BotAdminService {
       .where('CAST(channelUser.company_id AS BIGINT) = CAST(:companyId AS BIGINT)', { companyId })
       .andWhere("COALESCE(channelUser.system_kind, '') <> 'system'") // OTP / service senders: Inbox → System messages
       .andWhere(agentId ? 'CAST(conversation.assigned_agent_id AS BIGINT) = CAST(:agentId AS BIGINT)' : '1=1', { agentId })
+      // search every chat of the shop (not only the loaded page): name, number, or the name / number on its orders
+      .andWhere(find ? `(channelUser.display_name ILIKE :findText OR channelUser.external_user_id ILIKE :findText
+          ${find.digits ? 'OR channelUser.external_user_id LIKE :findDigits' : ''}
+          OR EXISTS (SELECT 1 FROM bot_order o WHERE o.bot_channel_user_id = channelUser.id
+                      AND (o.customer_name ILIKE :findText ${find.digits ? "OR regexp_replace(COALESCE(o.customer_phone, ''), '[^0-9]', '', 'g') LIKE :findDigits" : ''})))` : '1=1',
+        find ? { findText: find.text, findDigits: find.digits } : {})
       .orderBy('conversation.last_message_at', 'DESC', 'NULLS LAST')
       .addOrderBy('conversation.id', 'DESC')
       // many-to-one join: plain OFFSET/LIMIT is safe and avoids TypeORM's extra DISTINCT query
@@ -3948,6 +3970,7 @@ export class BotAdminService {
     });
 
     const savedOrder = await this.orderRepository.save(order);
+    await fillOrderNo(this.orderRepository, savedOrder);
 
     // Create order items and calculate total
     let totalAmount = 0;
@@ -4000,7 +4023,7 @@ export class BotAdminService {
     const saved = await this.orderRepository.save(order);
     if (before !== saved.status) await this.stock?.syncOrderSafe(saved.id);
     await this.activity?.log(user, { action: 'order_status', entity: 'order', entity_id: saved.id,
-      summary: `Order #${saved.id}: status ${before} → ${saved.status}`, details: { from: before, to: saved.status } });
+      summary: `Order #${orderNo(saved)}: status ${before} → ${saved.status}`, details: { from: before, to: saved.status } });
     const message = await this.renderOrderStatusMessage(user.company_id, saved);
     await this.orderStatusHistoryRepository.save(
       this.orderStatusHistoryRepository.create({
@@ -4009,8 +4032,8 @@ export class BotAdminService {
         message,
       }),
     );
-    await this.sendCustomerMessage(user.company_id, saved.channelUser, message);
-    return { order: saved, message };
+    if (payload.notify_customer !== false) await this.sendCustomerMessage(user.company_id, saved.channelUser, message);
+    return { order: saved, message: payload.notify_customer === false ? null : message };
   }
 
   async getStatusTemplates(user: AuthenticatedUser) {
@@ -4050,7 +4073,7 @@ export class BotAdminService {
     });
     const raw = template?.template ?? this.defaultStatusTemplates[order.status];
     return raw
-      .replace(/\{orderId\}/g, String(order.id))
+      .replace(/\{orderId\}/g, String(orderNo(order)))
       .replace(/\{status\}/g, order.status)
       .replace(/\{total\}/g, String(order.total_amount))
       .replace(/\{customerName\}/g, order.customer_name || 'customer')
@@ -4188,7 +4211,7 @@ export class BotAdminService {
     order.invoice_url = invoice.url;
     const saved = await this.orderRepository.save(order);
 
-    const caption = `Invoice for order #${saved.id}\nTotal: ${this.formatMoney(saved.total_amount)}`;
+    const caption = `Invoice for order #${orderNo(saved)}\nTotal: ${this.formatMoney(saved.total_amount)}`;
     const sent = await this.sendCustomerFile(companyId, saved.channelUser, {
       buffer: invoice.buffer, mimetype: 'application/pdf', fileName: invoice.fileName, url: invoice.url, caption,
     });
@@ -4200,7 +4223,7 @@ export class BotAdminService {
         message: sent ? 'Invoice PDF sent to customer.' : 'Invoice generated, but sending it failed.',
       }),
     );
-    if (sent && saved.channelUser) await this.logInvoiceMessage(saved.channelUser.id, saved.channelUser.platform, `📄 Invoice for order #${saved.id} (PDF)`);
+    if (sent && saved.channelUser) await this.logInvoiceMessage(saved.channelUser.id, saved.channelUser.platform, `📄 Invoice for order #${orderNo(saved)} (PDF)`);
 
     return {
       order: saved,
@@ -4394,7 +4417,7 @@ export class BotAdminService {
     const fee = order.delivery_fee == null ? null : Number(order.delivery_fee);
     return {
       title: 'INVOICE',
-      number: `#${order.id}`,
+      number: `#${orderNo(order)}`,
       date: this.shortDate(order.created_at),
       status: String(order.status || '').trim() || undefined,
       shop: { name: company?.name?.trim() || 'Invoice', lines: this.shopLines(company) },
@@ -4446,7 +4469,7 @@ export class BotAdminService {
       companyName,
       ...companyDetails,
       '============================================================',
-      `INVOICE #${order.id}`,
+      `INVOICE #${orderNo(order)}`,
       `Date: ${this.formatDate(order.created_at)}`,
       `Status: ${order.status}`,
       '',
@@ -4560,7 +4583,7 @@ export class BotAdminService {
     const order = await this.findOrderForActor(user, orderId);
     order.admin_note = adminNote.trim() || null;
     await this.orderRepository.save(order);
-    await this.activity?.log(user, { action: 'order_note', entity: 'order', entity_id: order.id, summary: `Order #${order.id}: note changed` });
+    await this.activity?.log(user, { action: 'order_note', entity: 'order', entity_id: order.id, summary: `Order #${orderNo(order)}: note changed` });
     return { order };
   }
 
@@ -4601,7 +4624,7 @@ export class BotAdminService {
       .map(([key, value]) => [key, { from: value, to: (saved as unknown as Record<string, unknown>)[key] }]));
     if (Object.keys(changes).length) {
       await this.activity?.log(user, { action: 'order_edit', entity: 'order', entity_id: saved.id,
-        summary: `Order #${saved.id} edited: ${Object.keys(changes).join(', ').replace(/_/g, ' ')}`, details: changes });
+        summary: `Order #${orderNo(saved)} edited: ${Object.keys(changes).join(', ').replace(/_/g, ' ')}`, details: changes });
     }
     return { order: saved };
   }
@@ -4612,14 +4635,14 @@ export class BotAdminService {
       customer_name: order.customer_name, customer_phone: order.customer_phone, address: order.address, status: order.status,
       total: order.total_amount ?? null,
       items: (order.items ?? []).map((item) => ({ name: item.product_name, quantity: item.quantity, price: item.unit_price })),
-      created_at: order.created_at,
+      created_at: order.created_at, order_no: orderNo(order),
     };
     await this.orderItemRepository.delete({ order_id: orderId });
     await this.orderStatusHistoryRepository.delete({ order_id: orderId });
     await this.orderRepository.remove(order);
     await this.stock?.syncOrderSafe(orderId);
     await this.activity?.log(user, { action: 'order_delete', entity: 'order', entity_id: orderId,
-      summary: `Order #${orderId} deleted (${snapshot.customer_name || 'customer'}${snapshot.total != null ? `, Rs ${snapshot.total}` : ''})`, details: snapshot });
+      summary: `Order #${snapshot.order_no} deleted (${snapshot.customer_name || 'customer'}${snapshot.total != null ? `, Rs ${snapshot.total}` : ''})`, details: snapshot });
     return { id: orderId, removed: true };
   }
 
@@ -4651,7 +4674,7 @@ export class BotAdminService {
         const note = order.admin_note?.trim();
         const noteLine = note ? `\nNote: ${note}` : '';
         return [
-          `Order #${order.id} (${order.status}) — ${this.formatDate(order.created_at)}`,
+          `Order #${orderNo(order)} (${order.status}) — ${this.formatDate(order.created_at)}`,
           lines.join('\n') || '- (no items)',
           `Total: ${this.formatMoney(Number(order.total_amount || 0))}${noteLine}`,
         ].join('\n');
