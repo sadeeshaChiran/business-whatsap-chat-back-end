@@ -162,7 +162,7 @@ export class OpenApiKeysService {
   constructor(@InjectDataSource() private readonly db: DataSource) {}
 
   async ownerCompany(user: AuthenticatedUser) {
-    const [company] = await this.db.query(`SELECT id, admin_user_id FROM company WHERE id = $1`, [Number(user.company_id)]);
+    const [company] = await this.db.query(`SELECT id, admin_user_id FROM companies WHERE id = $1`, [Number(user.company_id)]);
     if (!company || Number(company.admin_user_id) !== Number(user.id)) throw new ForbiddenException('Only the company owner can manage the API.');
     return Number(company.id);
   }
@@ -194,7 +194,7 @@ export class OpenApiKeysService {
     if (!/^am_live_[A-Za-z0-9_-]{20,}$/.test(key)) throw new UnauthorizedException('Invalid API key.');
     const [row] = await this.db.query(
       `SELECT k.id, k.company_id, c.admin_user_id, u.name, u.email
-         FROM company_api_key k JOIN company c ON c.id = k.company_id LEFT JOIN app_user u ON u.id = c.admin_user_id
+         FROM company_api_key k JOIN companies c ON c.id = k.company_id LEFT JOIN app_user u ON u.id = c.admin_user_id
         WHERE k.key_hash = $1 AND k.revoked_at IS NULL`, [hashKey(key)]);
     if (!row || !row.admin_user_id) throw new UnauthorizedException('Invalid API key.');
     void this.db.query(`UPDATE company_api_key SET last_used_at = NOW() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < NOW() - interval '1 minute')`, [row.id]).catch(() => undefined);
@@ -441,7 +441,7 @@ export class OpenApiController {
   @Get('me')
   async me(@CurrentRequest() req: ApiRequest) {
     const actor = actorOf(req);
-    const [company] = await this.db.query(`SELECT id, name FROM company WHERE id = $1`, [actor.companyId]);
+    const [company] = await this.db.query(`SELECT id, name FROM companies WHERE id = $1`, [actor.companyId]);
     return { company: { id: Number(company.id), name: company.name } };
   }
 
