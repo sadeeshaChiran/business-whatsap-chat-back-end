@@ -71,6 +71,7 @@ import { SendSafetyService } from './send-safety';
 import { ActivityLogService } from '../activity-log/activity-log';
 import { StockService } from '../reports/stock';
 import { fillOrderNo, orderNo } from './order-number';
+import { cleanTrainingFiles, saveTrainingFile } from './training-files';
 
 type CompanyContactChannelUser = {
   id: number;
@@ -3775,8 +3776,15 @@ export class BotAdminService {
       category: payload.category?.trim() ?? '',
       language: payload.language?.trim() ?? 'English',
       is_active: true,
+      files: cleanTrainingFiles(Number(user.company_id), payload.files),
     });
     return this.trainingRepository.save(item);
+  }
+
+  /** A photo / MP4 video / PDF for an AI knowledge entry → { url, kind, name, mime, size } (saved with the entry). */
+  uploadTrainingAttachment(user: AuthenticatedUser, file: { buffer: Buffer; originalname?: string } | undefined) {
+    if (!file?.buffer) throw new BadRequestException('Choose a file.');
+    return saveTrainingFile(Number(user.company_id), file);
   }
 
   /**
@@ -3832,6 +3840,7 @@ export class BotAdminService {
     item.answer = payload.answer.trim();
     item.category = payload.category?.trim() ?? item.category;
     item.language = payload.language?.trim() ?? item.language;
+    if (payload.files !== undefined) item.files = cleanTrainingFiles(Number(user.company_id), payload.files);
     return this.trainingRepository.save(item);
   }
   async deleteTraining(user: AuthenticatedUser, id: number) {

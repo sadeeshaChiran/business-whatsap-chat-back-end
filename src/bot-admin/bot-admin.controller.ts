@@ -435,6 +435,16 @@ export class BotAdminController {
     return this.botAdminService.uploadTrainingFile(user, file, category, content);
   }
 
+  /** A photo / MP4 video / PDF for an AI knowledge entry (the bot can send it to customers). */
+  @AdminOnly()
+  @Post('train/files')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 16 * 1024 * 1024 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } })
+  uploadTrainingAttachment(@CurrentUser() user: AuthenticatedUser, @UploadedFile() file: any) {
+    return this.botAdminService.uploadTrainingAttachment(user, file);
+  }
+
   @AdminOnly()
   @Get('train/history')
   getTrainingHistory(@CurrentUser() user: AuthenticatedUser) {
