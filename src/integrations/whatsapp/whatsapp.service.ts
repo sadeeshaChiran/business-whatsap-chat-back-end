@@ -187,6 +187,10 @@ export class WhatsappService {
       if (raw) {
         const rich = contentFromMetaMessage(raw);
         if ('skip' in rich) return rich;
+        // keep what Meta sent for a message we cannot show, so the next case can be handled
+        if (!('skip' in rich) && rich.content.startsWith('[unsupported]')) {
+          this.logger.warn(`WhatsApp unsupported message: ${JSON.stringify(raw).slice(0, 1500)}`);
+        }
         return {
           // voice notes: keep the adapter's text only if it is a real transcript,
           // not a placeholder like "[voice note]" (those show as a voice player anyway)
