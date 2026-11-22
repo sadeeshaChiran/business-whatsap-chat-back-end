@@ -51,7 +51,7 @@ type MetaMessage = {
   button?: { text?: string; payload?: string };
   reaction?: { emoji?: string; message_id?: string };
   order?: { product_items?: Array<{ product_retailer_id?: string; quantity?: number; item_price?: number; currency?: string }>; text?: string };
-  referral?: { headline?: string; body?: string; source_url?: string };
+  referral?: { headline?: string; body?: string; source_url?: string; source_id?: string; source_type?: string; media_type?: string };
   system?: { body?: string };
   errors?: Array<{ title?: string; message?: string }>;
 };
@@ -153,11 +153,23 @@ export function contentFromMetaMessage(message: MetaMessage): InboundResult {
       return { content: message.system?.body?.trim() || 'System update', message_type: 'system', media_url: null };
 
     default: {
+      // A click on an ad / a boosted post: WhatsApp often hides the text the customer sent ("Hello! Can I get more
+      // info on this?") but still says which ad it was – keep it as an ad question, so the bot answers about that ad.
+      const ad = adLine(message.referral);
+      if (ad) return { content: `Hello! Can I get more info on this?\n${ad}`, message_type: 'text', media_url: null };
       // "unsupported" (polls, events, view-once…) or unknown types
       const reason = message.errors?.[0]?.title || message.errors?.[0]?.message;
       return { content: reason ? `[unsupported]\n${reason}` : '[unsupported]', message_type: 'text', media_url: null };
     }
   }
+}
+
+/** "[from the ad: <headline> – <text>]" when the message came from an ad or a post, else null. */
+export function adLine(referral: MetaMessage['referral'] | undefined | null): string | null {
+  if (!referral || !(referral.source_id || referral.source_url || referral.headline || referral.body)) return null;
+  const text = [referral.headline, referral.body].map((v) => String(v ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' – ').slice(0, 300);
+  const kind = referral.source_type === 'post' ? 'post' : 'ad';
+  return `[from the ${kind}${text ? `: ${text}` : ''}${referral.source_url ? ` ${referral.source_url}` : ''}]`;
 }
 
 function formatContact(contact: NonNullable<MetaMessage['contacts']>[number]): string {
