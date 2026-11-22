@@ -10,6 +10,7 @@ import { FlowHook } from '../common/flow-hook';
 import { GraphError, graphRequest, graphVersion, tokenScopes } from '../marketing/graph';
 import { TokenQuotaService } from '../platform/token-quota.service';
 import { SalesBotContextService } from '../sales-bot/sales-bot-context.service';
+import { takeFileCodes } from '../bot-admin/training-files';
 
 export type PostInput = { platforms: string[]; message?: string; link?: string; media_urls?: string[]; scheduled_at?: string | null; draft?: boolean; format?: string };
 type Platform = 'facebook' | 'instagram';
@@ -724,6 +725,9 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       post_kind: post.kind ?? '',
       post_summary: SocialService.postSummaryForAi(await this.postProducts(companyId, post.product_ids), post.summary),
     }, companyId);
+    // knowledge file codes are for chats only – never in a public comment or its private reply
+    if (takeFileCodes(ai.reply).codes.length) ai.reply = takeFileCodes(ai.reply).text;
+    if (takeFileCodes(ai.dm).codes.length) ai.dm = takeFileCodes(ai.dm).text;
     await this.dataSource.query(`UPDATE social_comment SET ai_reply = $2, ai_dm = $3, ai_intent = $4, updated_at = NOW() WHERE id = $1`,
       [id, ai.reply ?? '', ai.dm ?? '', String(ai.intent ?? '').slice(0, 20)]);
     return { ...ai, comment: await this.comment(companyId, id) };

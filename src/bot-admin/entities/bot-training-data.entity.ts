@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { Company } from '../../company/entities/company.entity';
+import type { TrainingFile } from '../training-files';
 
 @Entity('bot_training_data')
 export class BotTrainingData {
@@ -31,6 +32,10 @@ export class BotTrainingData {
 
   @Column({ type: 'boolean', default: true })
   is_active: boolean;
+
+  /** photos / MP4 videos / PDFs the bot can send with this knowledge (see training-files.ts) */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  files: TrainingFile[];
 
   @Column({ type: 'bytea', nullable: true, select: false })
   vector_embedding: Buffer | null;
