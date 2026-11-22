@@ -23,6 +23,7 @@ import { SalesBotModule } from '../sales-bot/sales-bot.module';
 import { SalesBotContextService, type ContextProduct, type SalesBotContext } from '../sales-bot/sales-bot-context.service';
 import { SalesBotClient, type SalesBotResult, type SalesBotTurn } from '../sales-bot/sales-bot.client';
 import { findZone, orderDeliveryFee } from '../sales-bot/delivery-fee';
+import { takeFileCodes } from '../bot-admin/training-files';
 
 type Ad = { headline: string; body: string; product?: string; service?: string; cta: string };
 type DemoBusiness = { key: string; industry: string; ad: Ad; starters: string[] };
@@ -175,7 +176,7 @@ export class PublicDemoController {
   /** The reply as the customer sees it + what the bot decided (nothing saved). */
   private present(result: SalesBotResult, context: SalesBotContext, tokensPerCredit: number) {
     const byId = new Map<number, ContextProduct>(context.products.map((p) => [p.id, p]));
-    const messages = String(result.reply ?? '').split(/\n\s*\n/).map((m) => m.trim()).filter(Boolean).slice(0, 3);
+    const messages = String(takeFileCodes(result.reply).text ?? '').split(/\n\s*\n/).map((m) => m.trim()).filter(Boolean).slice(0, 3);
     const photos = [...new Set(result.photo_product_ids ?? [])].map((id) => byId.get(id)).filter(Boolean).slice(0, 3)
       .map((p) => ({ id: p!.id, name: p!.name, price: p!.price, image_url: p!.image_urls[0] ?? null }));
 

@@ -36,6 +36,7 @@ type UploadedFile = { buffer: Buffer; mimetype: string; originalname: string; si
 
 export { effectiveSellsOf as effectiveSells } from './sales-bot-context.service';
 import { effectiveSellsOf as effectiveSells } from './sales-bot-context.service';
+import { takeFileCodes } from '../bot-admin/training-files';
 
 const num = (value: unknown) => {
   const n = Number(value);
@@ -399,6 +400,11 @@ export class SalesBotAdminService {
       company_id: Number(company.id), customer_id: null, message: dto.message,
       history: (dto.history ?? []).slice(-20), session: dto.session ?? {}, media: null, context,
     });
+    // knowledge file codes: the test chat shows which file the bot would send instead of the code
+    const sentFiles = takeFileCodes(result.reply);
+    if (sentFiles.codes.length) {
+      result.reply = `${sentFiles.text}\n\n${sentFiles.codes.map((c) => `📎 [sends file ${c.n} of knowledge entry #${c.trainingId}]`).join('\n')}`.trim();
+    }
     await this.usageRepository.save(this.usageRepository.create({
       company_id: Number(company.id), conversation_id: null, model: result.usage.model,
       input_tokens: result.usage.input_tokens, cached_tokens: result.usage.cached_tokens, output_tokens: result.usage.output_tokens,

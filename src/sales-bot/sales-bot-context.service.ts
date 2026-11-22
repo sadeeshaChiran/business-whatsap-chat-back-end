@@ -14,6 +14,7 @@ import { blockingStatuses, busyRanges, DEFAULT_BOOKING_MINUTES, formatMinutes, o
 import { BotService } from './entities/bot-service.entity';
 import { SalesBotSettings } from './entities/sales-bot-settings.entity';
 import { orderNo } from '../bot-admin/order-number';
+import { fileLinesForBot } from '../bot-admin/training-files';
 
 export type ContextVariant = { variant_id: number; name: string; price: number; stock: number | null; available?: boolean; image_url: string | null; weight_kg: number | null };
 export type ContextProduct = {
@@ -360,7 +361,8 @@ export class SalesBotContextService {
     const faqs: SalesBotContext['faqs'] = [];
     const avoid: SalesBotContext['faqs'] = [];
     for (const row of knowledge) {
-      const entry = { question: String(row.question ?? '').trim(), answer: String(row.answer ?? '').trim().slice(0, 1500) };
+      // files on the entry (a colour chart, a PDF, a video): the bot sees what they are and the code that sends them
+      const entry = { question: String(row.question ?? '').trim(), answer: String(row.answer ?? '').trim().slice(0, 1500) + fileLinesForBot(row.id, row.files) };
       if (!entry.answer) continue;
       const category = String(row.category ?? '').trim().toLowerCase();
       if (category === 'policy' || category === 'policies') policies.push(entry);

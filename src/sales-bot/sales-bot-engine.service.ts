@@ -48,6 +48,7 @@ import { findZone, hasWeightRule, orderDeliveryFee } from './delivery-fee';
 import { askedPhotoOptions, choosePhotos, variantPhotoOptions, wantsAllPhotos } from './photo-choice';
 import { FOLLOWUP_WINDOW_HOURS, isDaytime, planFollowUp } from './follow-up';
 import { fillOrderNo, orderNo } from '../bot-admin/order-number';
+import { readTrainingFile, takeFileCodes, type TrainingFile } from '../bot-admin/training-files';
 
 type PricedItem = {
   product_id: number; variant_id: number | null; product_name: string; variant_name: string;
@@ -631,6 +632,12 @@ export class SalesBotEngineService implements OnModuleInit {
       return;
     }
 
+    // file codes from the shop's knowledge ([[file:12-1]]): taken out at once, so no code ever reaches the customer
+    // (order summaries, follow-ups, hand-offs all use the clean reply); the files are sent after the photos
+    const files = takeFileCodes(result.reply);
+    const fileCodes = files.codes;
+    if (fileCodes.length) result.reply = files.text;
+
     // a voice note: keep what the customer said (the AI heard it) – the history, the inbox and later turns read it
     // instead of "[voice note]" (before this the bot forgot every earlier voice note)
     const heard = String(result.voice_text ?? '').trim();
@@ -730,8 +737,14 @@ export class SalesBotEngineService implements OnModuleInit {
       this.logger.warn(`size chart not sent: ${error instanceof Error ? error.message : String(error)}`);
       return 0;
     });
+    const filesSent = fileCodes.length
+      ? await this.sendKnowledgeFiles(companyId, conversation, channelUser, channel, simulated, fileCodes).catch((error: unknown) => {
+        this.logger.warn(`knowledge files not sent: ${error instanceof Error ? error.message : String(error)}`);
+        return 0;
+      })
+      : 0;
     // never point at photos that did not come ("ewa me thiyenne 👇" with nothing above it)
-    if (text && !outcome.replyOverride && !photosSent && !chartsSent) text = withoutPhotoPointer(text, result.language, !photoResult.hadPhotos);
+    if (text && !outcome.replyOverride && !photosSent && !chartsSent && !filesSent) text = withoutPhotoPointer(text, result.language, !photoResult.hadPhotos);
     if (text) {
       // short WhatsApp-style replies: the bot separates parts with an empty line → one message each
       const parts = outcome.replyOverride ? [text] : splitReply(text);
@@ -1146,6 +1159,63 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     if (sent) await this.touch(companyId, conversation.id);
     return { sent, hadPhotos };
+  }
+
+  /**
+   * Files from the shop's AI knowledge (a colour chart, a size guide, a price list PDF, a video) that the bot asked to
+   * send with [[file:ENTRY-N]]. Only files of THIS shop's active entries; the same file is not sent to the same chat
+   * again within 3 hours. Photos go like product photos; videos and PDFs as files (Instagram / TikTok get the link).
+   */
+  async sendKnowledgeFiles(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
+    channel: WhatsappChannel | null, simulated: boolean, codes: Array<{ trainingId: number; n: number }>): Promise<number> {
+    const ids = [...new Set(codes.map((c) => c.trainingId))].filter((id) => Number.isInteger(id) && id > 0).slice(0, 5);
+    if (!ids.length) return 0;
+    const rows: Array<{ id: number; question: string; files: TrainingFile[] | null }> = await this.messageRepository.query(
+      `SELECT id, question, files FROM bot_training_data WHERE company_id = $1 AND is_active = TRUE AND id = ANY($2::int[])`, [companyId, ids]);
+    const social = socialPlatformOf(channelUser.platform);
+    let sent = 0;
+    for (const code of codes.slice(0, 5)) {
+      const file = rows.find((r) => Number(r.id) === code.trainingId)?.files?.[code.n - 1];
+      if (!file?.url) continue;
+      const [recent] = await this.messageRepository.query(
+        `SELECT 1 FROM bot_message WHERE conversation_id = $1 AND direction::text = 'outbound' AND media_url = $2
+           AND created_at > NOW() - INTERVAL '3 hours' LIMIT 1`, [conversation.id, file.url]).catch(() => []);
+      if (recent) continue;
+      const stored = simulated ? null : readTrainingFile(file.url);
+      if (!simulated && !stored) { this.logger.warn(`knowledge file missing on disk: ${file.url}`); continue; }
+      const label = file.kind === 'image' ? file.name : `${file.kind === 'video' ? '🎬' : '📄'} ${file.name}`;
+      let messageId: string | null = null;
+      if (file.kind === 'image') {
+        const done = await this.deliverImage(companyId, conversation, channelUser, channel, social, simulated,
+          { url: file.url, file: stored, fileName: file.name, what: `knowledge file ${code.trainingId}-${code.n}` });
+        if (done.failed) continue;
+        messageId = done.messageId;
+      } else if (!simulated) {
+        const fileName = `${file.name}.${file.kind === 'video' ? 'mp4' : 'pdf'}`;
+        try {
+          if (social) {
+            messageId = await this.socialSender.sendFile(companyId, social, channelUser.source_account_id, channelUser.external_user_id,
+              { buffer: stored!.buffer, mimetype: stored!.mimetype, fileName, url: file.url });
+          } else if (channel) {
+            messageId = (await this.providerFactory.getAdapterForChannel(channel).sendMedia(channel, channelUser.external_user_id, {
+              buffer: stored!.buffer, mimetype: stored!.mimetype, fileName, mediaType: file.kind,
+            })).messageId;
+          }
+        } catch (error) {
+          this.logger.warn(`sending knowledge file ${code.trainingId}-${code.n} failed: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+      }
+      await this.messageRepository.save(this.messageRepository.create({
+        conversation_id: conversation.id, direction: 'outbound', message_type: file.kind === 'image' ? 'image' : 'text',
+        platform: social ?? (channelUser.platform || 'whatsapp'), provider_message_id: messageId, delivery_status: messageId ? 'sent' : null,
+        content: file.kind === 'image' ? label : `${label}\n${file.url}`, media_url: file.url, source: BOT_SOURCE,
+        media_note: `bot sent the shop's file "${file.name}" (${file.kind})`,
+      }));
+      sent += 1;
+    }
+    if (sent) await this.touch(companyId, conversation.id);
+    return sent;
   }
 
   /** One image to the customer on their channel (WhatsApp / Messenger / Instagram); the simulator sends nothing. */
@@ -1740,6 +1810,7 @@ export class SalesBotEngineService implements OnModuleInit {
       calls: result.usage.calls ?? 1, cost_usd: result.usage.cost_usd, latency_ms: result.usage.latency_ms, is_test: false,
       thinking_tokens: result.usage.thinking_tokens ?? 0, tools_used: usageTools(result.tools_used),
     }));
+    if (result.reply && takeFileCodes(result.reply).codes.length) result.reply = takeFileCodes(result.reply).text;
     if (!result.reply) return end(null);
     // last check right before sending: the customer wrote, or the team stopped it, while the AI was thinking
     const newest = await this.messageRepository.findOne({ where: { conversation_id: conversationId }, order: { id: 'DESC' } });

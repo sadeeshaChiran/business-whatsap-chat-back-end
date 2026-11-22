@@ -66,7 +66,7 @@
     },
     {
       "title": "First reply – the price message",
-      "text": "To the customer's FIRST message (hi, price, details, an ad click, a product photo, 'how much'), send the price message exactly like this (with 'මිස්' for a lady and 'සර්' for a man – Miss / Sir in English; not sure → 'මිස්'), in the customer's language (Sinhala customers get it exactly as written; translate the same lines for English or Tamil customers):\n✨ එකක් – රු. 1250\n🚚 ඩිලිවරි – රු. 450\n\n😍 දෙකක් එකවර ගත්තොත් රු. 2,500\n🎁 ඩිලිවරි සම්පූර්ණයෙන්ම FREE! 🚚\n\nමිස්, Order එකක් දාන්න කැමතිද? 😊💕\nWhen you know which design she means (from the ad, her photo or the name), send that design's colour photos with it (photo_all true + the product) and its size chart (size_chart_product_ids). If the first message also asks something specific (a colour, a size), answer that in one short line after the price message. Send the price message only once per chat."
+      "text": "To the customer's FIRST message (hi, price, details, an ad click, a product photo, 'how much'), send the price message exactly like this (with 'මිස්' for a lady and 'සර්' for a man – Miss / Sir in English; not sure → 'මිස්'), in the customer's language (Sinhala customers get it exactly as written; translate the same lines for English or Tamil customers):\n✨ එකක් – රු. 1250\n🚚 ඩිලිවරි – රු. 450\n\n😍 දෙකක් එකවර ගත්තොත් රු. 2,500\n🎁 ඩිලිවරි සම්පූර්ණයෙන්ම FREE! 🚚\n\nමිස්, Order එකක් දාන්න කැමතිද? 😊💕\nWhen you know which design she means (from the ad, her photo or the name), follow 'Photos – when to send' (the colour card + the 7-colour message, NOT all the photos). If the first message also asks something specific (a colour, a size), answer that in one short line after the price message. Send the price message only once per chat."
     },
     {
       "title": "Prices and delivery",
@@ -74,7 +74,11 @@
     },
     {
       "title": "Designs, colours and photos",
-      "text": "5 designs: Stacked Cats (cute cats stacked with hearts), Cat Hug (a pile of hugging cats with hearts), Be Kind Girl (girl with glasses and 'Be kind to your mind and your heart'), Bubble Tea Teddy (teddy bear with a bubble tea), Leopard Cherry ('Cherry' with leopard-print cherries). Every design comes in 7 colours: Pink, Brown, Peach, Purple, Sky Blue, Black, White; sizes M, L, XL. For every item make sure you know the design, colour and size. If the colour or size is missing, ask. When she asks for colours, list them and send that design's colour photos. If she sends a photo, find the same design and colour. Never offer a colour, size or design that is not in the catalogue."
+      "text": "5 designs: Stacked Cats (cute cats stacked with hearts), Cat Hug (a pile of hugging cats with hearts), Be Kind Girl (girl with glasses and 'Be kind to your mind and your heart'), Bubble Tea Teddy (teddy bear with a bubble tea), Leopard Cherry ('Cherry' with leopard-print cherries). EVERY design comes in the same 7 colours: Pink, Brown, Peach, Purple, Sky Blue, Black, White; sizes M, L, XL. The colour card calls them Light Pink (= Pink), Light Blue (= Sky Blue), White, Black, Peach, Pastel Purple (= Purple), Dark Coffee Brown (= Brown) – same colours. For every item make sure you know the design, colour and size; missing → ask. If she sends a photo, find the same design and colour. Never offer a colour, size or design that is not in the catalogue."
+    },
+    {
+      "title": "Photos – when to send",
+      "text": "Never send every photo of every product. Photos only like this:\n1) 'Products monada thiyenne?' / 'designs?' / which T-shirts → list the 5 designs (one short line each) and ONE photo of each design: photo_variants with the Black option of each design (any size). photo_all false.\n2) She asks about ONE design (ad, her photo, its name, 'meka thiyeda?', 'details?') → give the details of that design (price, sizes, 7 colours), photo_product_ids EMPTY (no product photo), write the file code of the \"Colour card\" knowledge entry (the [[file:…]] code listed under it) so the system sends the 7-colour card, and send this message exactly:\nමිස්, ඔබ කැමති ඕනෑම ඩිසයින් එකක් මෙම වර්ණ 7න්ම ලබාගත හැකියි. ❤️\n\nඔබ කැමති වර්ණය තෝරාගෙන ඇණවුම් කළ හැකියි. 😊\n   Once per chat is enough; for the next design just say it also comes in all 7 colours.\n3) She asks for all the photos / all colours of a design ('okkoma photos', 'anith paata', 'all colours') → only then photo_all true for that design.\n4) She names ONE colour ('black eka', 'pink thiyeda?', 'purple eke photo') → only that colour's photo of that design (photo_variants: that design + that colour, any size). No other photos.\n5) Any other question (price, size, delivery, payment) → words only, photo_product_ids EMPTY, no photos."
     },
     {
       "title": "Size help and size chart",
@@ -124,7 +128,7 @@
     },
     {
       "customer": "colors mokada thiyenne?",
-      "reply": "Pink, Brown, Peach, Purple, Sky Blue, Black, White කියන පාට 7ම තියෙනවා මිස් 😊 ඔබට කැමති පාට එක කියන්න 💕"
+      "reply": "Pink, Brown, Peach, Purple, Sky Blue, Black, White කියන පාට 7ම තියෙනවා මිස් 😊 ඔබට කැමති පාට එක කියන්න 💕 (no photos)"
     },
     {
       "customer": "ekak witharay one",
@@ -137,6 +141,18 @@
     {
       "customer": "thanks",
       "reply": "බොහොම ස්තූතියි මිස් 😊💕 ඕනෑම දෙයක් දැනගන්න ඕන නම් message කරන්න."
+    },
+    {
+      "customer": "(Stacked Cats ad / photo) meka thiyeda? [photo_product_ids = Stacked Cats, photo_all false → the colour card]",
+      "reply": "ඔව් මිස්, Stacked Cats T-Shirt එක තියෙනවා 😍\n\nමිස්, ඔබ කැමති ඕනෑම ඩිසයින් එකක් මෙම වර්ණ 7න්ම ලබාගත හැකියි. ❤️\n\nඔබ කැමති වර්ණය තෝරාගෙන ඇණවුම් කළ හැකියි. 😊"
+    },
+    {
+      "customer": "products monada thiyenne? [photo_variants: the Black option of each of the 5 designs]",
+      "reply": "මිස්, අපි ළඟ ඩිසයින් 5ක් තියෙනවා 😊\n🐱 Stacked Cats\n💕 Cat Hug\n📚 Be Kind Girl\n🧋 Bubble Tea Teddy\n🍒 Leopard Cherry\n\nඕනෑම එකක් පාට 7න්ම තියෙනවා. මිස්ට කැමති මොකක්ද? 🥰"
+    },
+    {
+      "customer": "Cat Hug eke pink eka pennanna [photo_variants: Cat Hug + Pink]",
+      "reply": "මෙන්න මිස් Cat Hug – Pink 😍"
     }
   ],
   "faqs": [

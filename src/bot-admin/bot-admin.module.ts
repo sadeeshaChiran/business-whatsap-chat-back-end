@@ -29,6 +29,7 @@ import { MetaPageConnection } from '../meta/entities/meta-page-connection.entity
 import { EvolutionModule } from '../integrations/evolution/evolution.module';
 import { AgentRoutingModule } from '../agent-routing/agent-routing.module';
 import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.module';
+import { TrainingFilesPublicController } from './training-files';
 
 @Module({
   imports: [
@@ -58,7 +59,7 @@ import { WhatsappIntegrationModule } from '../integrations/whatsapp/whatsapp.mod
     EvolutionModule,
   ],
   // ChatMediaPublicController serves the signed public links (invoice PDFs, Instagram media)
-  controllers: [BotAdminController, ChatMediaPublicController],
+  controllers: [BotAdminController, ChatMediaPublicController, TrainingFilesPublicController],
   providers: [BotAdminService, PusherService, MetaSocialSenderService, MessagePrivacyService, SendSafetyService],
   // the sales bot reuses order messages and invoices
   exports: [BotAdminService, MessagePrivacyService],
