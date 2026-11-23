@@ -35,6 +35,17 @@ type PaypalSetting = { rate_mode: 'auto' | 'fixed'; fixed_rate: number | null; m
  * Packages monthly / yearly and token packs, paid by PayHere (card, optional auto-renew), PayPal (US dollars at the
  * rate of the day, optional auto-renew) or bank transfer (slip upload → super admin approval). A paid payment activates the package / tokens and gets an invoice PDF.
  */
+/**
+ * true when another PAID package payment of this company falls in the current package time (from its start, 1 day grace),
+ * i.e. the time the company has now was paid for – a new payment for the same package then extends it.
+ */
+export async function paidSubscriptionSince(db: { query: (sql: string, params?: unknown[]) => Promise<unknown> }, companyId: number, paymentId: number, periodStart: Date): Promise<boolean> {
+  const rows = await db.query(
+    `SELECT 1 FROM platform_payment WHERE company_id = $1 AND kind = 'subscription' AND status = 'paid' AND id <> $2
+        AND paid_at >= $3::timestamptz - INTERVAL '1 day' LIMIT 1`, [companyId, paymentId, periodStart]);
+  return Array.isArray(rows) && rows.length > 0;
+}
+
 @Injectable()
 export class BillingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BillingService.name);
@@ -329,11 +340,17 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         const now = new Date();
         const months = payment.billing_cycle === 'yearly' ? 12 : 1;
         const samePackageStillValid = sub.package_id === pkg.id && sub.status === 'active' && sub.period_end && new Date(sub.period_end) > now;
-        const start = samePackageStillValid ? new Date(sub.period_end as Date) : now;
-        if (!samePackageStillValid) {
+        // Only time that was itself PAID is extended (an early renewal). A free trial or a package the super admin gave
+        // for free ends now: the paid package starts at once, with a fresh credit month.
+        const currentTimePaid = samePackageStillValid && !sub.is_trial && sub.period_start
+          ? await paidSubscriptionSince(this.dataSource, companyId, Number(payment.id), new Date(sub.period_start))
+          : false;
+        const extend = samePackageStillValid && currentTimePaid;
+        const start = extend ? new Date(sub.period_end as Date) : now;
+        if (!extend) {
           sub.period_start = now;
-          if (sub.package_id !== pkg.id) {
-            // new package → fresh token month with the new quota
+          if (sub.package_id !== pkg.id || samePackageStillValid || sub.is_trial) {
+            // new package, or paid time replacing free time → fresh credit month with the paid quota
             sub.token_period_start = now;
             sub.token_period_end = addMonths(now, 1);
             sub.warned_80_at = null;
@@ -341,7 +358,7 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           }
         }
         if (sub.is_trial) {
-          // paying during a free trial: the trial becomes a normal package (same package → paid time starts after the trial)
+          // paying during a free trial: the trial ends now and the paid package starts at once
           await this.dataSource.query(`UPDATE company_trial SET converted = TRUE, ended_at = COALESCE(ended_at, NOW()) WHERE company_id = $1 AND ended_at IS NULL`, [companyId]);
           sub.is_trial = false;
           sub.fallback_package_id = null;
