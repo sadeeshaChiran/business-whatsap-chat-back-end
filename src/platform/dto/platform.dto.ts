@@ -138,6 +138,14 @@ export class CreditSettingsDto {
   /** true = one AI reply uses at most 1 credit */
   @IsOptional() @IsBoolean()
   cap_per_reply?: boolean;
+
+  /** true = credits are charged by the real AI cost of each reply (weighted tokens), the same for every company */
+  @IsOptional() @IsBoolean()
+  charge_by_cost?: boolean;
+
+  /** charge by cost: 1 credit = this many weighted tokens (cost US$ × 2,000,000) */
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1000) @Max(200_000)
+  weighted_tokens_per_credit?: number;
 }
 
 export class GrantTrialDto {

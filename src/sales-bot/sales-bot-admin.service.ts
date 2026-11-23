@@ -413,8 +413,7 @@ export class SalesBotAdminService {
     this.tokenQuota.forget(Number(company.id));
     // companies see tokens, never the AI cost (super admin only)
     const tpc = await this.planService.tokensPerCredit();
-    const tokens = result.usage.input_tokens + result.usage.output_tokens;
-    const charged = (await this.planService.capPerReply()) ? Math.min(tokens, tpc) : tokens;
+    const charged = await this.planService.chargedTokens(result.usage);
     return { ...result, usage: { ...result.usage, cost_usd: undefined, credits: Math.round((charged / tpc) * 1000) / 1000 } };
   }
 

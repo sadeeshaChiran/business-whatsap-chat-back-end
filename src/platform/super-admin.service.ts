@@ -325,16 +325,23 @@ export class SuperAdminService {
   /* ───────────── Credits ───────────── */
 
   async creditSettings() {
-    return { tokens_per_credit: await this.planService.tokensPerCredit(), tokens_per_reply: await this.planService.savedTokensPerReply(), cap_per_reply: await this.planService.capPerReply() };
+    const byCost = await this.planService.costCharging();
+    return {
+      tokens_per_credit: await this.planService.tokensPerCredit(), tokens_per_reply: await this.planService.savedTokensPerReply(), cap_per_reply: await this.planService.capPerReply(),
+      charge_by_cost: byCost.on, weighted_tokens_per_credit: byCost.weightedPerCredit,
+    };
   }
 
-  async setCreditSettings(tokensPerCredit: number, tokensPerReply?: number, capPerReply?: boolean) {
+  async setCreditSettings(tokensPerCredit: number, tokensPerReply?: number, capPerReply?: boolean, chargeByCost?: boolean, weightedPerCredit?: number) {
     if (!Number.isInteger(tokensPerCredit) || tokensPerCredit < 1000) throw new BadRequestException('tokens_per_credit must be at least 1,000.');
     const perReply = tokensPerReply ?? (await this.planService.savedTokensPerReply());
     const cap = capPerReply ?? (await this.planService.capPerReply());
+    const current = await this.planService.costCharging();
+    const byCost = chargeByCost ?? current.on;
+    const weighted = weightedPerCredit ?? current.weightedPerCredit;
     await this.dataSource.query(
       `INSERT INTO platform_setting (key, value) VALUES ('credits', $1::jsonb)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit, tokens_per_reply: perReply, cap_per_reply: cap })]);
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`, [JSON.stringify({ tokens_per_credit: tokensPerCredit, tokens_per_reply: perReply, cap_per_reply: cap, charge_by_cost: byCost, weighted_tokens_per_credit: weighted })]);
     this.planService.forget();
     return this.creditSettings();
   }

@@ -14,6 +14,13 @@ export const DEFAULT_TOKENS_PER_CREDIT = 100_000;
  * Package rules in one place (replaces the old hard-coded "Free only / max 3 agents").
  * companies.plan holds the package code.
  */
+
+/** Charge by AI cost: weighted tokens = cost in US$ × this ($0.50 = 1M input tokens of the main model, so 1 input token = 1). */
+export const WEIGHTED_TOKENS_PER_USD = 2_000_000;
+/** Default: 1 credit = 8,800 weighted tokens ≈ US$ 0.0044 ≈ Rs 1.46 of AI cost (the average credit before charging by cost). */
+export const DEFAULT_WEIGHTED_TOKENS_PER_CREDIT = 8_800;
+export const weightedTokens = (costUsd: number | string | null | undefined) => Math.max(0, Number(costUsd) || 0) * WEIGHTED_TOKENS_PER_USD;
+
 @Injectable()
 export class PlanService {
   private cache: { at: number; packages: PlatformPackage[] } | null = null;
@@ -34,18 +41,21 @@ export class PlanService {
     this.creditHolders.clear();
   }
 
-  private creditCache: { at: number; value: number; perReply: number; cap: boolean } | null = null;
+  private creditCache: { at: number; value: number; perReply: number; cap: boolean; byCost: boolean; weighted: number } | null = null;
 
-  private async creditSetting(): Promise<{ value: number; perReply: number; cap: boolean }> {
+  private async creditSetting(): Promise<{ value: number; perReply: number; cap: boolean; byCost: boolean; weighted: number }> {
     if (this.creditCache && Date.now() - this.creditCache.at < 30_000) return this.creditCache;
-    const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number; cap_per_reply?: boolean } }> = await this.packageRepository.manager
+    const rows: Array<{ value: { tokens_per_credit?: number; tokens_per_reply?: number; cap_per_reply?: boolean; charge_by_cost?: boolean; weighted_tokens_per_credit?: number } }> = await this.packageRepository.manager
       .query(`SELECT value FROM platform_setting WHERE key = 'credits'`).catch(() => []);
     const perReply = Math.max(1, Number(rows[0]?.value?.tokens_per_reply) || DEFAULT_TOKENS_PER_REPLY);
     // default: 1 credit = 1 average customer chat (easy to explain to shops)
     const value = Math.max(1, Number(rows[0]?.value?.tokens_per_credit) || DEFAULT_TOKENS_PER_CREDIT);
     // default ON: one AI reply never uses more than 1 credit (a short one uses less)
     const cap = rows[0]?.value?.cap_per_reply !== false;
-    this.creditCache = { at: Date.now(), value, perReply, cap };
+    // charge by AI cost: every reply is weighted by what it really costs (cached input 0.1, input 1, output 6, bigger model ×3)
+    const byCost = rows[0]?.value?.charge_by_cost === true;
+    const weighted = Math.max(100, Number(rows[0]?.value?.weighted_tokens_per_credit) || DEFAULT_WEIGHTED_TOKENS_PER_CREDIT);
+    this.creditCache = { at: Date.now(), value, perReply, cap, byCost, weighted };
     return this.creditCache;
   }
 
@@ -58,7 +68,7 @@ export class PlanService {
   async tokensPerReply(): Promise<number> {
     const setting = await this.creditSetting();
     // with the 1-credit cap every reply uses at most 1 credit, so N credits = at least N replies
-    return setting.cap ? setting.value : setting.perReply;
+    return setting.cap || setting.byCost ? setting.value : setting.perReply;
   }
 
   /** The saved "1 AI reply ≈ tokens" value (super admin form), whatever the cap. */
@@ -71,10 +81,29 @@ export class PlanService {
     return (await this.creditSetting()).cap;
   }
 
+  /** Charge-by-cost settings (super admin): on/off and how many weighted tokens make 1 credit. */
+  async costCharging(): Promise<{ on: boolean; weightedPerCredit: number }> {
+    const setting = await this.creditSetting();
+    return { on: setting.byCost, weightedPerCredit: setting.weighted };
+  }
+
+  /** The tokens (credit units) one reply is charged – the same rule as chargedTokensSql, for one reply in code. */
+  async chargedTokens(usage: { input_tokens: number; output_tokens: number; cost_usd?: number | null }): Promise<number> {
+    const setting = await this.creditSetting();
+    if (setting.byCost) return Math.round(weightedTokens(usage.cost_usd) / setting.weighted * setting.value);
+    const raw = Number(usage.input_tokens || 0) + Number(usage.output_tokens || 0);
+    return setting.cap ? Math.min(raw, setting.value) : raw;
+  }
+
   /** SQL for the tokens a company is charged for one usage row (capped at 1 credit when the cap is on). */
   async chargedTokensSql(alias = ''): Promise<string> {
     const setting = await this.creditSetting();
     const a = alias ? `${alias}.` : '';
+    if (setting.byCost) {
+      // weighted tokens = cost_usd × 2,000,000 (1 fresh input token of the main model = 1); 1 credit = setting.weighted of them
+      const factor = (WEIGHTED_TOKENS_PER_USD * setting.value) / setting.weighted;
+      return `ROUND(COALESCE(${a}cost_usd, 0) * ${factor})`;
+    }
     const raw = `(${a}input_tokens + ${a}output_tokens)`;
     return setting.cap ? `LEAST(${raw}, ${Math.floor(setting.value)})` : raw;
   }
