@@ -91,6 +91,7 @@ const MIGRATION_FILES = [
   'supabase_product_size_charts.sql',
   'supabase_order_numbers.sql',
   'supabase_training_files.sql',
+  'supabase_comment_ref.sql',
 ] as const;
 
 function migrationDir(): string | null {

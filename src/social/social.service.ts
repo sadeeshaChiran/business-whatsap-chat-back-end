@@ -423,7 +423,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
       if (sent?.recipient_id) {
         const post = await this.withPost(companyId, c).catch(() => c);
         await this.saveToInbox(companyId, c.platform === 'instagram' ? 'instagram' : 'messenger', sender, String(sent.recipient_id),
-          c.author_name ?? '', text, sent.message_id ?? null, { comment: String(c.message ?? ''), post_text: String(post.post_text ?? ''), post_link: post.post_link ?? null }).catch((error: unknown) =>
+          c.author_name ?? '', text, sent.message_id ?? null, { comment: String(c.message ?? ''), post_text: String(post.post_text ?? ''), post_link: post.post_link ?? null, comment_id: String(c.comment_id ?? '') }).catch((error: unknown) =>
           this.logger.warn(`private reply ${id} → inbox: ${error instanceof Error ? error.message : String(error)}`));
       }
     } catch (error) {
@@ -493,7 +493,7 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
 
   /** Shows a private reply in the chat inbox (same contact + conversation the customer's Messenger / Instagram answers will use). */
   private async saveToInbox(companyId: number, platform: 'messenger' | 'instagram', accountId: string, customerId: string, name: string, text: string, mid: string | null,
-    origin?: { comment: string; post_text: string; post_link: string | null }) {
+    origin?: { comment: string; post_text: string; post_link: string | null; comment_id?: string }) {
     let [user] = await this.dataSource.query(
       `SELECT id FROM bot_channel_user WHERE company_id = $1 AND platform = $2 AND source_account_id = $3 AND external_user_id = $4 LIMIT 1`,
       [companyId, platform, accountId, customerId]);
@@ -510,6 +510,11 @@ export class SocialService implements OnModuleInit, OnModuleDestroy {
         INSERT INTO bot_conversation (bot_channel_user_id, status, assignment_mode, last_message_at) VALUES ($1, 'open', 'unassigned', NOW()) RETURNING id`, [user.id]);
     } else {
       await this.dataSource.query(`UPDATE bot_conversation SET last_message_at = NOW() WHERE id = $1`, [conversation.id]);
+    }
+    if (origin?.comment_id) {
+      // the sales bot reads the post (summary + products) when the customer answers here
+      await this.dataSource.query(`UPDATE bot_conversation SET comment_ref = $2, comment_ref_at = NOW() WHERE id = $1`,
+        [conversation.id, origin.comment_id.slice(0, 120)]).catch(() => undefined);
     }
     if (origin) {
       // the same card as when Meta sends it ("💬 Reply to their comment …"): the inbox shows the comment + post, the bot reads it

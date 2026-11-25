@@ -2,6 +2,7 @@ import { absoluteProductImage } from '../products/product-images';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { commentCampaign } from './comment-campaign';
 import { type BotCampaign, applyPendingRefs, attributeBroadcastReply, attributeText, campaignForBot } from '../marketing/attribution';
 import { BotOrder } from '../bot-admin/entities/bot-order.entity';
 import { BotTrainingData } from '../bot-admin/entities/bot-training-data.entity';
@@ -20,6 +21,8 @@ export type ContextVariant = { variant_id: number; name: string; price: number; 
 export type ContextProduct = {
   id: number;
   name: string;
+  /** the shop's product code – customers sometimes ask by it */
+  sku?: string;
   category: string;
   price: number;
   stock: number | null;
@@ -224,7 +227,9 @@ export class SalesBotContextService {
       let linked = await applyPendingRefs(this.dataSource, conversationId);
       if (!linked && message) linked = await attributeText(this.dataSource, conversationId, Number(row.company_id), message);
       if (!linked) await attributeBroadcastReply(this.dataSource, conversationId);
-      return await campaignForBot(this.dataSource, conversationId);
+      // an ad / link / broadcast first; otherwise the post the customer commented on
+      return (await campaignForBot(this.dataSource, conversationId))
+        ?? await commentCampaign(this.dataSource, conversationId, Number(row.company_id));
     } catch (error) {
       this.logger.warn(`campaign for conversation ${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
@@ -453,6 +458,7 @@ export class SalesBotContextService {
     return {
       id: product.id,
       name: product.name,
+      ...(String(product.sku ?? '').trim() ? { sku: String(product.sku).trim().slice(0, 60) } : {}),
       category: product.category?.name ?? '',
       price: toNumber(product.price),
       stock: productStock(product),
