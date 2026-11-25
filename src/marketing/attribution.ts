@@ -115,8 +115,11 @@ export async function attributeBroadcastReply(ds: DataSource, conversationId: nu
   return true;
 }
 
+/** A chat that started from the customer's comment on our post (private reply) – see comment-campaign.ts */
+export const COMMENT_SOURCE = 'their comment on our Facebook / Instagram post';
+
 export type BotCampaign = {
-  source: Source;
+  source: Source | typeof COMMENT_SOURCE;
   name: string;
   ad_headline: string;
   ad_body: string;

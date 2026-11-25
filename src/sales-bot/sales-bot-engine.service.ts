@@ -59,6 +59,8 @@ type PricedItem = {
 type PendingOrder = {
   /** special notes said before the order was saved – written into the order note when it is saved */
   notes?: string[];
+  /** the customer was asked "order #N again or a new one?" for this placed order – asked once, then their answer counts */
+  same_as_asked?: number;
   items: PricedItem[]; subtotal: number; delivery_area: string | null; total_weight_kg: number;
   delivery_fee: number | null; total: number;
   customer_name: string; customer_phone: string; address: string; payment_method: string; summary_shown: boolean;
@@ -122,10 +124,12 @@ type PhotoPick = { id: number; variant?: string | null; variantId?: number; skip
 export function photoPicks(matches: PhotoMatch[], chosen: number[], auto: number[], chosenVariants: Array<{ product_id: number; variant_id: number }> = []): PhotoPick[] {
   const picks: PhotoPick[] = [];
   for (const match of matches) {
-    if ((match.status === 'exact' || match.status === 'likely') && match.products[0]) {
-      picks.push({ id: match.products[0].product_id, variant: match.products[0].variant, skipIfSentWithinMin: 10 });
+    // the customer sent OUR photo of a product (exact): they already have it – no photo back. A likely / unsure match
+    // gets our photo once (to confirm which one), not again every time they send photos (3 hours)
+    if (match.status === 'likely' && match.products[0]) {
+      picks.push({ id: match.products[0].product_id, variant: match.products[0].variant, skipIfSentWithinMin: 180 });
     } else if (match.status === 'unsure') {
-      for (const product of match.products.slice(0, 3)) picks.push({ id: product.product_id, variant: product.variant, skipIfSentWithinMin: 10 });
+      for (const product of match.products.slice(0, 3)) picks.push({ id: product.product_id, variant: product.variant, skipIfSentWithinMin: 180 });
     }
   }
   const autoSet = new Set(auto);
@@ -271,6 +275,14 @@ export function nameMatch(a: string, b: string): number {
 
 /** The AI's text says "here is the order summary" (any language): the real summary must come with it. */
 export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்/i;
+
+/** The customer already has this order (placed today): the same again, or a new one? */
+export function sameOrderMessage(language: string, no: string, items: string): string {
+  if (language === 'sinhala') return `ඔයාගේ order #${no} එක (${items}) දැනටමත් දාලා තියෙන්නේ 😊 මේ ඒ order එකමද, නැත්නම් වෙනම අලුත් order එකක්ද?`;
+  if (language === 'tamil') return `உங்கள் ஆர்டர் #${no} (${items}) ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது 😊 இது அதே ஆர்டரா, அல்லது தனி புதிய ஆர்டரா?`;
+  if (language === 'sinhala_latin') return `Oyage order #${no} eka (${items}) dan dala thiyenne 😊 Me e order ekama da, nathnam wenama aluth order ekak da?`;
+  return `Your order #${no} (${items}) is already placed 😊 Is this the same order, or a new separate one?`;
+}
 
 /** Asks for the details an order still needs (instead of switching the bot off). */
 function askMissingMessage(language: string, missing: string[]): string {
@@ -700,7 +712,8 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the customer's own words (without quoted earlier messages): "white abc eka" → the white photo; "all photos" → every photo
     const customerText = pending.map((row) => String(row.content ?? '')).join('\n');
-    const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 2, orderLine: true, linePrice: Number(item.unit_price) || undefined }));
+    // a product put in the order gets its photo once – not again at every order change / summary (3 hours)
+    const orderPicks: PhotoPick[] = placedItems.map((item) => ({ id: Number(item.product_id), variantId: item.variant_id ?? undefined, variant: item.variant_name || null, skipIfSentWithinMin: 180, orderLine: true, linePrice: Number(item.unit_price) || undefined }));
     // while the order is being taken (items chosen, details, summary): no product photos – only when she asks to see one
     // (she asks for photos / what colours or designs there are, or the reply says photos are coming → they are sent)
     const promised = Boolean(text) && promisesPhotos(String(text));
@@ -1055,7 +1068,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!ids.size) {
       // products the reply names (searched in the database over ALL products, not only the first 500), longest name first
       const rows: Array<{ id: number }> = await this.productRepository.query(
-        `SELECT id FROM product WHERE company_id = $1 AND is_deleted = false AND length(trim(name)) >= 4
+        `SELECT id FROM product WHERE company_id = $1 AND is_deleted = false AND is_available IS NOT FALSE AND length(trim(name)) >= 4
            AND strpos(lower($2), lower(trim(name))) > 0 ORDER BY length(name) DESC LIMIT 10`, [companyId, reply]);
       const named = rows.length
         ? (await this.productRepository.find({ where: { id: In(rows.map((row) => Number(row.id))), company_id: companyId }, relations: ['variants'] }))
@@ -1114,6 +1127,10 @@ export class SalesBotEngineService implements OnModuleInit {
     for (const pick of unique) {
       const product = products.find((p) => Number(p.id) === pick.id);
       if (!product) continue;
+      // sold out (not available): never a photo of it – the reply may still name it to say it is over
+      if (product.is_available === false) continue;
+      const pickedOption = pick.variantId ? productOptions(product)[pick.variantId - 1] as { available?: boolean } | undefined : undefined;
+      if (pickedOption?.available === false) continue;
       // the colour the customer named wins ("white abc eka"); else the option the AI / the photo check chose
       // (an order line always shows ITS option – "Peach 2, Black 2, White 3" gives one photo per line)
       const named = pick.orderLine ? [] : askedPhotoOptions(product, ask.customerText ?? '');
@@ -1461,6 +1478,10 @@ export class SalesBotEngineService implements OnModuleInit {
         // nothing changed: only when the customer asked to see the summary again ("summary eka ewanna") it comes again
         const lead = String(result.reply ?? '').trim();
         if (!lead || (lead.length <= 90 && SUMMARY_WORDS.test(lead))) replyOverride = summaryMessage(result.language, session.pending_order);
+      }
+      if (orderOutcome.startsWith('duplicate:')) {
+        const [no, list] = orderOutcome.slice(10).split('|');
+        replyOverride = sameOrderMessage(result.language, no, list ?? '');
       }
       if (orderOutcome.startsWith('unavailable:')) {
         replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
@@ -2111,6 +2132,26 @@ export class SalesBotEngineService implements OnModuleInit {
     return { items: priced, problem: '' };
   }
 
+  /** A Pending order of this customer from the last 24 hours that already has every one of these products (null = none, or already asked). */
+  private async sameAsRecentOrder(channelUserId: number, items: PricedItem[], alreadyAsked?: number): Promise<{ id: number; no: number; items: string } | null> {
+    try {   // a failing check never stops an order
+      const rows: Array<{ id: number; order_no: number | null }> = await this.messageRepository.query(
+        `SELECT id, order_no FROM bot_order WHERE bot_channel_user_id = $1 AND status = 'Pending' AND created_at > NOW() - INTERVAL '24 hours'
+          ORDER BY id DESC LIMIT 3`, [channelUserId]);
+      for (const row of rows ?? []) {
+        if (Number(row.id) === Number(alreadyAsked)) return null;
+        const placed = await this.orderItemRepository.find({ where: { order_id: Number(row.id) } });
+        const ids = new Set(placed.map((item) => Number(item.product_id)));
+        if (placed.length && items.every((item) => ids.has(Number(item.product_id)))) {
+          return { id: Number(row.id), no: orderNo(row), items: placed.map((item) => `${item.quantity} x ${item.product_name}`).join(', ').slice(0, 200) };
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
   private async handleOrder(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
     order: SalesBotOrder, session: BotSession, wantSummary = false): Promise<string> {
     // "ok" after the summary: the AI (often the small model) may send the order without the items / name / address it
@@ -2188,6 +2229,16 @@ export class SalesBotEngineService implements OnModuleInit {
         if (!pending.notes.includes(line)) pending.notes = [...pending.notes, line].slice(-10);
       }
     }
+    // the same products as an order this customer placed in the last 24 hours (Pending): never a second order by
+    // mistake ("ok thanks, order eka danna" after it was placed, or the photos sent again) – ask once which they mean
+    if (!problem && items.length && (order.confirm_order || order.summary_shown === true || wantSummary)) {
+      const same = await this.sameAsRecentOrder(channelUser.id, items, previous?.same_as_asked);
+      if (same) {
+        session.pending_order = { ...pending, summary_shown: false, same_as_asked: same.id };
+        return `duplicate:${same.no}|${same.items}`;
+      }
+    }
+    if (previous?.same_as_asked) pending.same_as_asked = previous.same_as_asked;
     if (!order.confirm_order) {
       session.pending_order = pending;
       if (summaryShown) await this.advanceLead(conversation.id, 'proposal', { order_value: total });
