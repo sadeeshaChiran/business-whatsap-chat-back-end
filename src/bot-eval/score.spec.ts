@@ -65,3 +65,34 @@ describe('bot-eval scoring', () => {
     expect(cmp.newly_passing).toEqual(['b']);
   });
 });
+
+describe('bot-eval scoring – fair checks', () => {
+  it('a sold-out product named only to say it is sold out is not "offered"', () => {
+    const c = testCase({ forbid_products: [2] });
+    const said = result({ reply: 'Baby Diaper Pack eka iwarai 🙏 Oil control pot eka thiyenawa.' });
+    expect(scoreCase(c, said, context, []).checks.forbid_products).toBe(true);
+    const offered = result({ reply: 'Baby Diaper Pack eka Rs 1200, order karannada?' });
+    expect(scoreCase(c, offered, context, []).checks.forbid_products).toBe(false);
+  });
+
+  it("the shop's own long price list in the reply is allowed", () => {
+    const list = ['👕 T-Shirt: XS / S / M – Rs 1,590', '3XL – Rs 1,690', '4XL – Rs 1,790', '5XL / 6XL – Rs 2,090', '👖 Pant – Rs 1,490']
+      .map((l) => `${l} ${'.'.repeat(40)}`).join('\n');
+    const ctx = { ...context, styles: [{ question: 'price', answer: list }] };
+    const c = testCase({ max_chars: 100 });
+    expect(scoreCase(c, result({ reply: `Ow miss 😍\n${list}` }), ctx, []).checks.short).toBe(true);
+    expect(scoreCase(c, result({ reply: 'x'.repeat(400) }), ctx, []).checks.short).toBe(false);
+  });
+
+  it('a handoff for a bank slip or an upset customer is right', () => {
+    const c = testCase({ no_handoff: true });
+    expect(scoreCase(c, result({ reply: 'ok', handoff: { needed: true, reason: 'Customer paid by bank transfer, verify receipt' } }), context, []).checks.no_handoff).toBe(true);
+    expect(scoreCase(c, result({ reply: 'ok', handoff: { needed: true, reason: 'Customer asks the size' } }), context, []).checks.no_handoff).toBe(false);
+  });
+
+  it('a photo of a switched-off product is dropped by the backend, a sold-out order item is not', () => {
+    const ctx = { ...context, products: [...context.products, { id: 4, name: 'Old Mat', price: 500, stock: 3, available: false, variants: [] }] };
+    expect(scoreCase(testCase({}), result({ reply: 'ok', photo_product_ids: [4] }), ctx, []).checks.no_sold_out).toBe(true);
+    expect(scoreCase(testCase({}), result({ reply: 'ok', order: { items: [{ product_id: 4, quantity: 1 }] } }), ctx, []).checks.no_sold_out).toBe(false);
+  });
+});

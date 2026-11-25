@@ -42,8 +42,19 @@ export type CaseScore = {
 const words = (text: string) =>
   String(text ?? '').toLowerCase().normalize('NFC').split(/[^\p{L}\p{N}\p{M}]+/u).filter((w) => w.length >= 3);
 
-/** Products the reply is about: photos sent, size charts, order items, and products named in the text. */
-export function productsShown(result: SalesBotResult, context: SalesBotContext): Set<number> {
+/** "… eka iwarai", "out of stock", "stock නැහැ": the reply says this product is NOT available (not offering it). */
+const SOLD_OUT_WORDS = /iwar|ivar|ඉවර|out\s+of\s+stock|sold\s*out|not\s+available|no\s+stock|stock\s*(?:eka\s*)?(?:na|naha|nehe|nathi)|stock\s*(?:නැ|නෑ|නැහැ)|තොගයේ\s*නැ|stock\s*ඉවර/i;
+
+/** The sentence / line of the reply where this text is. */
+function sentenceOf(reply: string, at: number): string {
+  const start = Math.max(reply.lastIndexOf('\n', at), reply.lastIndexOf('.', at), reply.lastIndexOf('!', at), reply.lastIndexOf('?', at)) + 1;
+  const ends = ['\n', '.', '!', '?'].map((c) => reply.indexOf(c, at)).filter((i) => i >= 0);
+  return reply.slice(start, ends.length ? Math.min(...ends) : reply.length);
+}
+
+/** Products the reply is about: photos sent, size charts, order items, and products named in the text.
+ * offeredOnly: a product named only to say it is sold out ("X eka iwarai, mewa thiyenawa") does not count. */
+export function productsShown(result: SalesBotResult, context: SalesBotContext, offeredOnly = false): Set<number> {
   const ids = new Set<number>();
   for (const id of result.photo_product_ids ?? []) ids.add(Number(id));
   for (const v of result.photo_variants ?? []) ids.add(Number(v.product_id));
@@ -54,11 +65,17 @@ export function productsShown(result: SalesBotResult, context: SalesBotContext):
   for (const product of context.products ?? []) {
     const name = String(product.name ?? '').toLowerCase().trim();
     if (!name) continue;
-    if (name.length >= 6 && reply.includes(name)) { ids.add(product.id); continue; }
+    if (name.length >= 6 && reply.includes(name)) {
+      if (!(offeredOnly && SOLD_OUT_WORDS.test(sentenceOf(reply, reply.indexOf(name))))) ids.add(product.id);
+      continue;
+    }
     const sku = String(product.sku ?? '').toLowerCase();
     if (sku.length >= 4 && replyWords.has(sku)) { ids.add(product.id); continue; }
     const nameWords = [...new Set(words(name))];
-    if (nameWords.length >= 2 && nameWords.filter((w) => replyWords.has(w)).length / nameWords.length >= 0.75) ids.add(product.id);
+    if (nameWords.length >= 2 && nameWords.filter((w) => replyWords.has(w)).length / nameWords.length >= 0.75) {
+      const at = reply.indexOf(nameWords.find((w) => reply.includes(w)) ?? '');
+      if (!(offeredOnly && at >= 0 && SOLD_OUT_WORDS.test(sentenceOf(reply, at)))) ids.add(product.id);
+    }
   }
   return ids;
 }
@@ -104,6 +121,24 @@ export function knownPrice(value: number, context: SalesBotContext, otherText: s
   return false;
 }
 
+/** The shop's own long answer (price list, size chart text) copied into the reply is the owner's style, not a long
+ * reply: the limit grows by that answer's length when most of its lines are in the reply. */
+export function lengthLimit(base: number, reply: string, context: SalesBotContext): number {
+  let limit = base;
+  const texts = [
+    ...(context.policies ?? []), ...(context.faqs ?? []), ...(context.styles ?? []),
+  ].map((p) => String(p.answer ?? '')).concat(String(context.company?.greeting ?? ''));
+  for (const text of texts) {
+    if (text.length < 200) continue;
+    const lines = text.split(/\n+/).map((l) => l.trim()).filter((l) => l.length >= 8);
+    if (lines.length && lines.filter((l) => reply.includes(l)).length / lines.length >= 0.6) limit = Math.max(limit, text.length + base);
+  }
+  return limit;
+}
+
+/** A handoff that is right: payment slip to check, an upset / complaining customer, a damaged or missing order. */
+const RIGHT_HANDOFF = /bank|transfer|receipt|slip|verify|payment\s+proof|upset|angry|complain|refund|return|damag|broken|missing|not\s+received|wrong\s+item|problem/i;
+
 /** Score one bot answer. orderItems: order id -> product ids (for no_duplicate_order_of). */
 export function scoreCase(
   testCase: EvalCase,
@@ -118,6 +153,7 @@ export function scoreCase(
   const reply = String(result.reply ?? '');
   const lower = reply.toLowerCase();
   const shown = productsShown(result, context);
+  const offered = productsShown(result, context, true);
   const set = (name: string, ok: boolean, why: string) => {
     checks[name] = ok;
     if (!ok) fails.push(`${name}: ${why}`);
@@ -128,7 +164,7 @@ export function scoreCase(
       `wanted #${c.expect_products_any.join('/#')}, got ${shown.size ? [...shown].slice(0, 6).map((id) => `#${id}`).join(' ') : 'none'}`);
   }
   if (c.forbid_products?.length) {
-    const bad = c.forbid_products.filter((id) => shown.has(id));
+    const bad = c.forbid_products.filter((id) => offered.has(id));
     set('forbid_products', bad.length === 0, `showed #${bad.join(' #')}`);
   }
   if (c.expect_text_any?.length) {
@@ -138,8 +174,14 @@ export function scoreCase(
     const bad = c.forbid_text.filter((t) => lower.includes(t.toLowerCase()));
     set('forbid_text', bad.length === 0, `said: ${bad.join(', ')}`);
   }
-  if (c.max_chars) set('short', reply.length <= c.max_chars, `${reply.length} chars`);
-  if (c.no_handoff) set('no_handoff', !result.handoff?.needed, `handoff: ${String(result.handoff?.reason ?? '').slice(0, 80)}`);
+  if (c.max_chars) {
+    const limit = lengthLimit(c.max_chars, reply, context);
+    set('short', reply.length <= limit, `${reply.length} chars (limit ${limit})`);
+  }
+  if (c.no_handoff) {
+    const reason = String(result.handoff?.reason ?? '');
+    set('no_handoff', !result.handoff?.needed || RIGHT_HANDOFF.test(reason), `handoff: ${reason.slice(0, 80)}`);
+  }
   if (c.sinhala_script) set('sinhala', /[඀-෿]/.test(reply), 'no Sinhala letters');
   if (c.prices_known) {
     const other = [
@@ -161,13 +203,14 @@ export function scoreCase(
   if (c.campaign_from_comment) {
     set('comment_post', context.campaign?.source === COMMENT_SOURCE, 'the chat did not get its post');
   }
-  // every case: never offer a sold-out product
+  // every case: never offer a sold-out product. Photos of a switched-off product are dropped by the backend
+  // (sales-bot-engine sendPhotos), so only the photos customers would really get count – and every order item.
   const byId = new Map((context.products ?? []).map((p) => [p.id, p]));
-  const offered = [...(result.photo_product_ids ?? []), ...(result.order?.items ?? []).map((i) => Number(i.product_id))];
-  const soldOut = [...new Set(offered)].filter((id) => {
-    const p = byId.get(Number(id));
-    return p && (p.available === false || (p.stock !== null && p.stock !== undefined && p.stock <= 0 && !(p.variants ?? []).some((v) => (v.stock ?? 1) > 0)));
-  });
+  const isSoldOut = (p: (typeof context.products)[number] | undefined) =>
+    Boolean(p && (p.available === false || (p.stock !== null && p.stock !== undefined && p.stock <= 0 && !(p.variants ?? []).some((v) => (v.stock ?? 1) > 0))));
+  const sentPhotos = (result.photo_product_ids ?? []).filter((id) => byId.get(Number(id))?.available !== false);
+  const ordered = (result.order?.items ?? []).map((i) => Number(i.product_id));
+  const soldOut = [...new Set([...sentPhotos, ...ordered])].filter((id) => isSoldOut(byId.get(Number(id))));
   set('no_sold_out', soldOut.length === 0, `sold out #${soldOut.join(' #')}`);
   if (!reply.trim() && !result.handoff?.needed) set('replied', false, 'empty reply');
 
