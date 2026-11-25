@@ -72,6 +72,40 @@ type PendingOrder = {
 /** memory = short notes the bot keeps about this customer (older parts of the chat). handoff_at = last hand-over (unix s). */
 type BotSession = { language?: string; pending_order?: PendingOrder | null; memory?: string; handoff_at?: number };
 /** Splits a bot reply into at most 3 WhatsApp messages at empty lines (extra parts join the last one). */
+/** The chat before message beforeId, as the bot sees it (also used by the bot-eval test runner). */
+export async function chatHistory(messageRepository: Repository<BotMessage>, conversationId: number, beforeId: number): Promise<SalesBotTurn[]> {
+  const rows = await messageRepository
+    .createQueryBuilder('m')
+    .where('m.conversation_id = :conversationId', { conversationId })
+    .andWhere('m.id < :beforeId', { beforeId })
+    .orderBy('m.id', 'DESC')
+    // up to the last 40 messages, cut to a text budget below (bots often answer in several bubbles, so 20 rows was
+    // only a few customer turns and the bot "forgot" what was said a minute ago); older facts live in CHAT MEMORY,
+    // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
+    .limit(HISTORY_ROWS)
+    .getMany();
+  // newest first: keep messages until the text budget is used, then put them back in order
+  let budget = HISTORY_CHARS;
+  const kept: typeof rows = [];
+  for (const row of rows) {
+    const size = Math.min(String(row.content ?? '').length, 900) + 20;
+    if (kept.length >= 8 && budget - size < 0) break;
+    budget -= size;
+    kept.push(row);
+  }
+  return kept.reverse().map((row) => {
+    const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
+    // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
+    const content = row.message_type === 'image'
+      ? `[photo${row.media_note && row.direction === 'inbound' ? `: ${row.media_note}` : ''}] ${caption}`.trim()
+      : row.message_type === 'voice' ? (row.transcript ? `[voice note: "${String(row.transcript).slice(0, 400)}"]` : '[voice note]')
+      : row.media_note && row.direction === 'inbound' ? `${row.content}\n[the customer ${row.media_note}]` : row.content;
+    if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content.slice(0, 900)) : content };
+    const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
+    return { role: isBot ? ('bot' as const) : ('agent' as const), text: content.length > 900 ? `${content.slice(0, 900)}…` : content };
+  }).filter((turn) => turn.text);
+}
+
 export function splitReply(text: string, maxParts = 3): string[] {
   const parts = String(text ?? '').split(/\n[ \t]*\n+/).map((part) => part.trim()).filter(Boolean);
   if (parts.length <= maxParts) return parts.length ? parts : [];
@@ -846,37 +880,8 @@ export class SalesBotEngineService implements OnModuleInit {
     }
   }
 
-  private async history(conversationId: number, beforeId: number): Promise<SalesBotTurn[]> {
-    const rows = await this.messageRepository
-      .createQueryBuilder('m')
-      .where('m.conversation_id = :conversationId', { conversationId })
-      .andWhere('m.id < :beforeId', { beforeId })
-      .orderBy('m.id', 'DESC')
-      // up to the last 40 messages, cut to a text budget below (bots often answer in several bubbles, so 20 rows was
-      // only a few customer turns and the bot "forgot" what was said a minute ago); older facts live in CHAT MEMORY,
-      // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
-      .limit(HISTORY_ROWS)
-      .getMany();
-    // newest first: keep messages until the text budget is used, then put them back in order
-    let budget = HISTORY_CHARS;
-    const kept: typeof rows = [];
-    for (const row of rows) {
-      const size = Math.min(String(row.content ?? '').length, 900) + 20;
-      if (kept.length >= 8 && budget - size < 0) break;
-      budget -= size;
-      kept.push(row);
-    }
-    return kept.reverse().map((row) => {
-      const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
-      // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
-      const content = row.message_type === 'image'
-        ? `[photo${row.media_note && row.direction === 'inbound' ? `: ${row.media_note}` : ''}] ${caption}`.trim()
-        : row.message_type === 'voice' ? (row.transcript ? `[voice note: "${String(row.transcript).slice(0, 400)}"]` : '[voice note]')
-        : row.media_note && row.direction === 'inbound' ? `${row.content}\n[the customer ${row.media_note}]` : row.content;
-      if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content.slice(0, 900)) : content };
-      const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
-      return { role: isBot ? ('bot' as const) : ('agent' as const), text: content.length > 900 ? `${content.slice(0, 900)}…` : content };
-    }).filter((turn) => turn.text);
+  private history(conversationId: number, beforeId: number): Promise<SalesBotTurn[]> {
+    return chatHistory(this.messageRepository, conversationId, beforeId);
   }
 
   /** Photo or voice note for Gemini: our stored files, WhatsApp Cloud media ids, data URLs, public links. */

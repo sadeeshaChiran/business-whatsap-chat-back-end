@@ -133,7 +133,9 @@ export type BotCampaign = {
 };
 
 /** What the AI should know about where this customer came from (null = nothing recent). */
-export async function campaignForBot(ds: DataSource, conversationId: number): Promise<BotCampaign | null> {
+export async function campaignForBot(ds: DataSource, conversationId: number, at?: Date | null): Promise<BotCampaign | null> {
+  // at: the test runner replays an old message at its own time (default: now)
+  const when = at instanceof Date && !Number.isNaN(at.getTime()) ? at.toISOString() : null;
   const [row] = await ds.query(`
     SELECT c.campaign_source, c.campaign_at, c.ad_headline, c.ad_body, c.ad_referred_at, c.ad_source_type, c.ad_source_url,
            mc.name, mc.offer_text, mc.bot_instructions, mc.product_ids, mc.ends_at::text AS ends_at, mc.status,
@@ -142,7 +144,7 @@ export async function campaignForBot(ds: DataSource, conversationId: number): Pr
       LEFT JOIN marketing_campaign mc ON mc.id = c.campaign_id
       LEFT JOIN marketing_link l ON l.id = c.link_id
       LEFT JOIN marketing_ad_cache ac ON ac.ad_id = c.ad_source_id
-     WHERE c.id = $1 AND c.campaign_at > NOW() - make_interval(days => $2::int)`, [conversationId, CAMPAIGN_DAYS]);
+     WHERE c.id = $1 AND c.campaign_at > COALESCE($3::timestamptz, NOW()) - make_interval(days => $2::int)`, [conversationId, CAMPAIGN_DAYS, when]);
   if (!row?.campaign_source) return null;
   const source = row.campaign_source as Source;
   const ended = Boolean(row.ends_at) && String(row.ends_at).slice(0, 10) < sriLankaToday();
