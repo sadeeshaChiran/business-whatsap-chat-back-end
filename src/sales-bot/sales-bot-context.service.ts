@@ -1,7 +1,7 @@
 import { absoluteProductImage } from '../products/product-images';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Raw, Repository } from 'typeorm';
 import { commentCampaign } from './comment-campaign';
 import { type BotCampaign, applyPendingRefs, attributeBroadcastReply, attributeText, campaignForBot } from '../marketing/attribution';
 import { BotOrder } from '../bot-admin/entities/bot-order.entity';
@@ -218,12 +218,17 @@ export class SalesBotContextService {
    * Links the chat to its campaign right before the AI answers (the webhook scan may not have run yet)
    * and returns what the bot should know about it.
    */
-  private async campaignFor(conversationId: number | undefined, message: string | undefined): Promise<BotCampaign | null> {
+  private async campaignFor(conversationId: number | undefined, message: string | undefined, readOnly = false, at: Date | null = null): Promise<BotCampaign | null> {
     if (!conversationId || !this.dataSource) return null;
     try {
       const [row] = await this.dataSource.query(
         `SELECT cu.company_id, c.campaign_at FROM bot_conversation c JOIN bot_channel_user cu ON cu.id = c.bot_channel_user_id WHERE c.id = $1`, [conversationId]);
       if (!row) return null;
+      // the test runner (bot-eval) only reads: it must not link old chats to campaigns again
+      if (readOnly) {
+        return (await campaignForBot(this.dataSource, conversationId, at))
+          ?? await commentCampaign(this.dataSource, conversationId, Number(row.company_id), at);
+      }
       let linked = await applyPendingRefs(this.dataSource, conversationId);
       if (!linked && message) linked = await attributeText(this.dataSource, conversationId, Number(row.company_id), message);
       if (!linked) await attributeBroadcastReply(this.dataSource, conversationId);
@@ -335,7 +340,9 @@ export class SalesBotContextService {
     }
   }
 
-  async build(companyId: number, channelUserId: number | null, channel = 'whatsapp', chat: { conversationId?: number; message?: string } = {}): Promise<SalesBotContext> {
+  async build(companyId: number, channelUserId: number | null, channel = 'whatsapp', chat: { conversationId?: number; message?: string; readOnly?: boolean; asOf?: Date } = {}): Promise<SalesBotContext> {
+    // asOf (test runner only): the orders the customer had at that time, not the ones placed later
+    const before = chat.asOf instanceof Date && !Number.isNaN(chat.asOf.getTime()) ? chat.asOf : null;
     const [company, settings, products, services, zones, knowledge, lastOrder, openOrders, campaign, whatsappNumber] = await Promise.all([
       this.companyRepository.findOne({ where: { id: companyId } }),
       this.getSettings(companyId),
@@ -344,19 +351,19 @@ export class SalesBotContextService {
       this.zoneRepository.find({ where: { company_id: companyId }, order: { area: 'ASC' } }),
       this.trainingRepository.find({ where: { company_id: companyId, is_active: true }, order: { id: 'DESC' }, take: 800 }),
       channelUserId
-        ? this.orderRepository.findOne({ where: { company_id: companyId, bot_channel_user_id: channelUserId }, relations: ['items'], order: { id: 'DESC' } })
+        ? this.orderRepository.findOne({ where: { company_id: companyId, bot_channel_user_id: channelUserId, ...(before ? { created_at: Raw((col) => `${col} < CAST(:before AS timestamptz)`, { before: before.toISOString() }) } : {}) }, relations: ['items'], order: { id: 'DESC' } })
         : Promise.resolve(null),
       channelUserId
         ? this.orderRepository
             .createQueryBuilder('o')
             .leftJoinAndSelect('o.items', 'items')
             .where('o.company_id = :companyId AND o.bot_channel_user_id = :channelUserId', { companyId, channelUserId })
-            .andWhere("o.status::text NOT IN ('Delivered', 'Cancelled')")
+            .andWhere(before ? "o.status::text NOT IN ('Cancelled') AND o.created_at < CAST(:before AS timestamptz)" : "o.status::text NOT IN ('Delivered', 'Cancelled')", before ? { before: before.toISOString() } : {})
             .orderBy('o.id', 'DESC')
             .take(3)
             .getMany()
         : Promise.resolve([] as BotOrder[]),
-      this.campaignFor(chat.conversationId, chat.message),
+      this.campaignFor(chat.conversationId, chat.message, chat.readOnly === true, before),
       channel === 'whatsapp' && channelUserId ? this.whatsappNumberFor(companyId, channelUserId) : Promise.resolve(null),
     ]);
 

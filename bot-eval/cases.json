@@ -1,0 +1,3346 @@
+{
+ "version": 1,
+ "built_from": "agentmetra__3__2.sql",
+ "since": "2026-11-10",
+ "cases": [
+  {
+   "id": "chu-001-known",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 8295,
+   "channel_user_id": 8332,
+   "platform": "messenger",
+   "before_message_id": 106580,
+   "message": "Ona 2 k",
+   "kind": "known",
+   "checks": {
+    "expect_text_any": [
+     "oil",
+     "ඔයිල්",
+     "pot",
+     "පොට්"
+    ],
+    "forbid_text": [
+     "diaper",
+     "ඩයපර්",
+     "ඩයිපර්"
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "oil pot comment: 'Ona 2 k' = 2 oil pots, not diapers"
+  },
+  {
+   "id": "chu-002-known",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4126,
+   "channel_user_id": 4143,
+   "platform": "messenger",
+   "before_message_id": 106691,
+   "message": "Ha.thanks ehenm oder eka danna",
+   "kind": "known",
+   "checks": {
+    "forbid_products": [
+     5757
+    ],
+    "no_duplicate_order_of": [
+     7270,
+     5870
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "after order #120: no Bed Jacket, no second order"
+  },
+  {
+   "id": "chu-003-known",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4126,
+   "channel_user_id": 4143,
+   "platform": "messenger",
+   "before_message_id": 106695,
+   "message": "Aya magulak ..illapu deka ewanna drowing pad eka oni lamayata,,ekai lunch box ekai..mata jaket ona ne\nIllapu deka wetharak ewanna\n[photo: customer photo, not a product: A blue thumbs up icon typically used as a like button in digital messaging.]\n[photo: customer photo = our product Lunch Box Set #7270 (our own photo)]\n[photo: customer photo = our product Drawing Pad PO/ Box (5757) #5870 (our own photo)]\nMe 2 wetharai oni",
+   "kind": "known",
+   "checks": {
+    "forbid_products": [
+     5757
+    ],
+    "max_chars": 500
+   },
+   "note": "customer: only drawing pad + lunch box, no jacket"
+  },
+  {
+   "id": "chu-004-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4810,
+   "channel_user_id": 4827,
+   "platform": "instagram",
+   "before_message_id": 54482,
+   "message": "Hi\n[photo: customer photo = our product Storage Basket Rectangular #5675 (item code on the photo)]\nBucket size pls",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5675
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = STORAGE BASKET RECTANGULAR (available)"
+  },
+  {
+   "id": "chu-005-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5711,
+   "channel_user_id": 5730,
+   "platform": "messenger",
+   "before_message_id": 68565,
+   "message": "[photo: customer photo = our product Table Cloth Golden Desing #7200 (our own photo)]\nMekada golden eka\nOka white ne",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7200
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Golden Desing (available)"
+  },
+  {
+   "id": "chu-006-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6283,
+   "channel_user_id": 6302,
+   "platform": "messenger",
+   "before_message_id": 76373,
+   "message": "[photo: customer photo = our product Table Cloth Golden Desing #7200 (item code on the photo)]\nMekath e sizeda",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7200
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Golden Desing (available)"
+  },
+  {
+   "id": "chu-007-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4951,
+   "channel_user_id": 4968,
+   "platform": "messenger",
+   "before_message_id": 57053,
+   "message": "[photo: customer photo = our product Perfume Refill Bottle 1Pcs #7138 (90% sure)]\nMaka kiyda",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7138
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Perfume Refill Bottle 1Pcs (available)"
+  },
+  {
+   "id": "chu-008-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5133,
+   "channel_user_id": 5150,
+   "platform": "messenger",
+   "before_message_id": 60765,
+   "message": "[photo: customer photo = our product Foldable Single Storage Box Single Color #5431 (item code on the photo)]\nMeke size eka kohomada?\nItem code- 94272512",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5431
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Foldable Single  Storage  Box Single Color (available)"
+  },
+  {
+   "id": "chu-009-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6190,
+   "channel_user_id": 6209,
+   "platform": "messenger",
+   "before_message_id": 74220,
+   "message": "[photo: customer photo = our product 5 in 1 candy round shape storage box #5942 (90% sure)]\nMeke colors monawada tynne",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5942
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = 5 in 1 candy round shape storage box (available)"
+  },
+  {
+   "id": "chu-010-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6449,
+   "channel_user_id": 6469,
+   "platform": "messenger",
+   "before_message_id": 77592,
+   "message": "[photo: customer photo = our product Storage Box (JR-402028) #5677 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5677
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Storage Box (JR-402028) (available)"
+  },
+  {
+   "id": "chu-011-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6118,
+   "channel_user_id": 6137,
+   "platform": "messenger",
+   "before_message_id": 73043,
+   "message": "[photo: customer photo = our product Table Cloth Clear #7201 (90% sure)]\nMekada",
+   "kind": "photo",
+   "checks": {
+    "forbid_products": [
+     7201
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Clear (SOLD OUT)"
+  },
+  {
+   "id": "chu-012-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4082,
+   "channel_user_id": 4099,
+   "platform": "messenger",
+   "before_message_id": 78380,
+   "message": "Mata me item 5 one\n[photo]\n[photo]\n[photo: customer photo = our product Bath Net #3833 (our own photo)]\n[photo: customer photo = our product Gas Cooker WallSticker #7295 (100% sure)]\n[photo: customer photo = our product Baby Bath Cup #7245 (our own photo)]\nFull amount ekata delivery charge ekath add karala kiyanawada",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     3833
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Bath Net (available)"
+  },
+  {
+   "id": "chu-013-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4865,
+   "channel_user_id": 4882,
+   "platform": "messenger",
+   "before_message_id": 55396,
+   "message": "[photo: customer photo = our product Food Storage Box 8Pcs #7068 (95% sure)]\nMe wage ekak\ntiyenawada oyala gawa",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7068
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Food Storage Box 8Pcs (available)"
+  },
+  {
+   "id": "chu-014-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7245,
+   "channel_user_id": 7273,
+   "platform": "messenger",
+   "before_message_id": 88665,
+   "message": "[photo: customer photo = our product Table Cloth Golden Desing #7200 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7200
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Golden Desing (available)"
+  },
+  {
+   "id": "chu-015-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7245,
+   "channel_user_id": 7273,
+   "platform": "messenger",
+   "before_message_id": 88652,
+   "message": "[photo: customer photo = our product Table Cloth Golden Desing #7200 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7200
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Golden Desing (available)"
+  },
+  {
+   "id": "chu-016-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6190,
+   "channel_user_id": 6209,
+   "platform": "messenger",
+   "before_message_id": 80163,
+   "message": "[photo: customer photo = our product Cilicone Ice Cube Mold #5326 (90% sure)]\nMeka tynwda ?",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5326
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Cilicone Ice Cube Mold (available)"
+  },
+  {
+   "id": "chu-017-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6005,
+   "channel_user_id": 6024,
+   "platform": "messenger",
+   "before_message_id": 73731,
+   "message": "[photo: customer photo = our product Table Cloth Clear #7201 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "forbid_products": [
+     7201
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Clear (SOLD OUT)"
+  },
+  {
+   "id": "chu-018-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6042,
+   "channel_user_id": 6061,
+   "platform": "messenger",
+   "before_message_id": 72049,
+   "message": "[photo: customer photo = our product Table Cloth Golden Desing #7200 (item code on the photo)]\nMeka ganna",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7200
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Table Cloth Golden Desing (available)"
+  },
+  {
+   "id": "chu-019-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4661,
+   "channel_user_id": 4678,
+   "platform": "messenger",
+   "before_message_id": 51670,
+   "message": "[photo: customer photo = our product Air Fryer Liners Set Round 160x45mm (A-68) #5281 (item code on the photo)]\n[photo: customer photo = our product Toilet Gel Stamp #5698 (item code on the photo)]\n[photo: customer photo (A fabric storage box with a black and white houndstooth pattern and a black handle, shown in a social media product post.) – could be: Storage Bag New #3797 / Clothes Hamper #5342 – not sure which]\nMata oona me warga 3 witarai\n295 ×3 nexa",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5281
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Air Fryer Liners Set Round 160x45mm (A-68) (available)"
+  },
+  {
+   "id": "chu-020-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2845,
+   "channel_user_id": 2861,
+   "platform": "messenger",
+   "before_message_id": 23892,
+   "message": "[photo: customer photo = our product School Bag (A-1510) #5911 (our own photo)]\nMe bag eke wena clor monwda\nPre school babekta hodai neda",
+   "kind": "photo",
+   "checks": {
+    "forbid_products": [
+     5911
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = School Bag (A-1510) (SOLD OUT)"
+  },
+  {
+   "id": "chu-021-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4965,
+   "channel_user_id": 4982,
+   "platform": "instagram",
+   "before_message_id": 57230,
+   "message": "[photo: customer photo = our product 4PCS Bag Set #5856 (90% sure)]\nමේ bag එක ගන්න තියෙනවද",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     5856
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "customer photo = 4PCS Bag Set (available)"
+  },
+  {
+   "id": "chu-022-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 1642,
+   "channel_user_id": 1645,
+   "platform": "messenger",
+   "before_message_id": 18707,
+   "message": "[photo: customer photo = our product Food Storage Box 8Pcs #7068 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7068
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Food Storage Box 8Pcs (available)"
+  },
+  {
+   "id": "chu-023-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6597,
+   "channel_user_id": 6619,
+   "platform": "messenger",
+   "before_message_id": 86367,
+   "message": "[photo: customer photo = our product Shower Cap Towel #3861 (item code on the photo)]\n6 piece\n[photo: customer photo = our product Table Cloth Clear #7201 (item code on the photo)]\n2 piece\n[photo: customer photo = our product Carpet 02 PCS #5313 (90% sure)]\n3 set",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     3861
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Shower Cap Towel (available)"
+  },
+  {
+   "id": "chu-024-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2380,
+   "channel_user_id": 2383,
+   "platform": "instagram",
+   "before_message_id": 41660,
+   "message": "[photo: customer photo = our product Foot Socks Gel #4269 (90% sure)]\n[photo: customer photo = our product Detox Foot Pad 10pcs #5374 (95% sure)]\nmiss mata meka dekekma one",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     4269
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Foot Socks Gel (available)"
+  },
+  {
+   "id": "chu-025-photo",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7305,
+   "channel_user_id": 7333,
+   "platform": "messenger",
+   "before_message_id": 89457,
+   "message": "[photo: customer photo = our product 2L Water Bottle #7274 (item code on the photo)]",
+   "kind": "photo",
+   "checks": {
+    "forbid_products": [
+     7274
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = 2L Water Bottle (SOLD OUT)"
+  },
+  {
+   "id": "chu-026-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7481,
+   "channel_user_id": 7509,
+   "platform": "messenger",
+   "before_message_id": 91534,
+   "message": "Get started\nIs this available\n[photo: customer photo = our product Detox Foot Pad 10pcs #5374 (item code on the photo)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     5374
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Detox Foot Pad 10pcs"
+  },
+  {
+   "id": "chu-027-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 3937,
+   "channel_user_id": 3954,
+   "platform": "messenger",
+   "before_message_id": 37502,
+   "message": "Ice cream water Bottle",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     3452
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered 1200ml Ice Cream Water Bottle"
+  },
+  {
+   "id": "chu-028-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2589,
+   "channel_user_id": 2596,
+   "platform": "instagram",
+   "before_message_id": 17671,
+   "message": "Noo\nස්තූතියි සර්, මම phone number එක update කළා. Order එකේ විස්තර මෙන්න.\n\n1 x 3 in 1 vaccum cleaner – Rs 750\n1 x Sink Tape 300cm (3m) – Rs 295\n1 x 24 Holes Sock Organizer – Rs 650\nDelivery: Rs 425\nTotal: Rs 2,120\nFaizalsh_426, Royal curtain house, 553, Trincomalee street, Matale, 0767026085\nPayment: Cash on Delivery / Bank Transfer\n\nOrder එක confirm කරන්නද?\nI want these 3",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     5252
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered 3 in 1 vaccum cleaner"
+  },
+  {
+   "id": "chu-029-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5156,
+   "channel_user_id": 5174,
+   "platform": "instagram",
+   "before_message_id": 61424,
+   "message": "[photo: customer photo = our product Paper Organizer File #5891 (90% sure)]\nCan I get",
+   "kind": "ordered",
+   "checks": {
+    "forbid_products": [
+     5891
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Paper Organizer File"
+  },
+  {
+   "id": "chu-030-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2949,
+   "channel_user_id": 2965,
+   "platform": "instagram",
+   "before_message_id": 25650,
+   "message": "[photo: customer photo = our product English Book LWB #5875 (100% sure)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     5875
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered English Book LWB"
+  },
+  {
+   "id": "chu-031-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2835,
+   "channel_user_id": 2851,
+   "platform": "instagram",
+   "before_message_id": 23688,
+   "message": "Double bed sheet",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     3951
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Double Bed Sheet"
+  },
+  {
+   "id": "chu-032-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2832,
+   "channel_user_id": 2848,
+   "platform": "instagram",
+   "before_message_id": 23600,
+   "message": "🎬 Shared a reel\n🙀⁉️මෙච්චර ලස්සන Dispenser Bottles මේ ගානට🙀⁉️ \nඔයාගේ Bathroom එකට,kitchen එකට ඕනෑම තැනකට මේ Dispenser bottles නියමෙට ගැළපෙනවා✅\n🔥මේ ගානට දෙන්නෙ chu.lk අපි විතරයි🔥\n⭕Cash on delivery Available ✅ \n⭕Order Now⭕\n\nBranches : Panadura Town / Wakada / Hospital Branch \n\nContact us : 075 - 4842  421\n\n #wakada #panadura #codavailable💕 #islandwidedeliveryavailable🚚📦 #dispenserbottles #offer #dispenserbottlestorage\nhttps://www.instagram.com/reel/DfbUBFqCBEB/",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     4917
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered Dispenser Bottle"
+  },
+  {
+   "id": "chu-033-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5000,
+   "channel_user_id": 5017,
+   "platform": "messenger",
+   "before_message_id": 63441,
+   "message": "[photo]\n[photo]\n[photo]\n[photo]\n[photo]\n[photo]\n[photo]\n[photo]\n[photo]\n[photo: customer photo = our product Foot Socks Gel #4269 (90% sure)]\n[photo: customer photo = our product Cristal hair remover #5360 (item code on the photo)]\n[photo: customer photo = our product Shoe cleaner #4353 (item code on the photo)]\n[photo: customer photo = our product Potato Press #5604 (item code on the photo)]\nඔය ටික ගන්න පුලුවන්ද",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     5360
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered Cristal hair remover"
+  },
+  {
+   "id": "chu-034-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7705,
+   "channel_user_id": 7737,
+   "platform": "messenger",
+   "before_message_id": 94233,
+   "message": "Table cloth eka\nPw",
+   "kind": "ordered",
+   "checks": {
+    "forbid_products": [
+     7201
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Table Cloth Clear"
+  },
+  {
+   "id": "chu-035-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 3125,
+   "channel_user_id": 3141,
+   "platform": "messenger",
+   "before_message_id": 27770,
+   "message": "[photo: customer photo (A screenshot of a woman holding two compact umbrellas designed to look like wine bottles in green and yellow colors.) – could be: Bottle Umbrella #4891 – not sure which]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     4891
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Bottle Umbrella"
+  },
+  {
+   "id": "chu-036-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2607,
+   "channel_user_id": 2617,
+   "platform": "messenger",
+   "before_message_id": 76863,
+   "message": "[photo: customer photo = our product 7Pcs Spicy Bottle Set #7204 (item code on the photo)]\nමේ සෙට් එක නේද",
+   "kind": "ordered",
+   "checks": {
+    "forbid_products": [
+     7204
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered 7Pcs Spicy Bottle Set"
+  },
+  {
+   "id": "chu-037-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2907,
+   "channel_user_id": 2923,
+   "platform": "messenger",
+   "before_message_id": 24750,
+   "message": "Lunch box and water bottle set 2k",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     5073
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Lunch Box With Bottle (3157/3158)"
+  },
+  {
+   "id": "chu-038-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4397,
+   "channel_user_id": 4414,
+   "platform": "messenger",
+   "before_message_id": 55001,
+   "message": "[photo]\n[photo]\n[photo]\n[photo: customer photo = our product Kids eva raincoat #4301 (90% sure)]\n[photo: customer photo (A screenshot of a social media reel showing a bedsheet with a colorful 3D geometric cube pattern in blue, purple, and green.) – no matching product photo (may still be sold – ask the name)]\n[photo: customer photo = our product Storage Box (JR-402028) #5677 (90% sure)]\nමේ රැක් එකත් ඕනේ\n[photo: customer photo (A black metal entryway organizer featuring two rows of hooks and four white storage drawers, with dimensions shown in centimeters.) – could be: 5 Layer Shoe Rack With Cloth Rack #7008 / 5 Layer Shoe Rack With Hanger #4050 – not sure which]\n1350/= රැක් එකේ අවන් එක තියන්න බැරි වෙයි නේද",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     4301
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered Kids eva raincoat"
+  },
+  {
+   "id": "chu-039-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2579,
+   "channel_user_id": 2584,
+   "platform": "messenger",
+   "before_message_id": 17945,
+   "message": "[photo: customer photo = our product Kids Antler Water Bottle #7091 (95% sure)]\nMeka order kare",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7091
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Kids Antler Water Bottle"
+  },
+  {
+   "id": "chu-040-ordered",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2696,
+   "channel_user_id": 2709,
+   "platform": "messenger",
+   "before_message_id": 36027,
+   "message": "මිස් ම්ස්ට ඕනෙ stainless  steel කේතලය .",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7161
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered Stainless Steel Kettle"
+  },
+  {
+   "id": "chu-041-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6980,
+   "channel_user_id": 7005,
+   "platform": "messenger",
+   "before_message_id": 84790,
+   "message": "183 diga mai neda?",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-042-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6299,
+   "channel_user_id": 6318,
+   "platform": "messenger",
+   "before_message_id": 75163,
+   "message": "195 cmදිග පලල 90cm",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-043-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5321,
+   "channel_user_id": 5340,
+   "platform": "messenger",
+   "before_message_id": 65046,
+   "message": "Kitchen එකේ බෝතල් තියන්න",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-044-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4912,
+   "channel_user_id": 4929,
+   "platform": "messenger",
+   "before_message_id": 56240,
+   "message": "395 eke 4to ekak ewanna",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-045-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5299,
+   "channel_user_id": 5318,
+   "platform": "messenger",
+   "before_message_id": 64174,
+   "message": "Bathroom",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-046-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7815,
+   "channel_user_id": 7848,
+   "platform": "messenger",
+   "before_message_id": 96226,
+   "message": "Ne.awissawelle man page eka balala riply karannam....💕💕💕",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-047-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5253,
+   "channel_user_id": 5271,
+   "platform": "messenger",
+   "before_message_id": 63741,
+   "message": "Bathroom",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-048-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6050,
+   "channel_user_id": 6069,
+   "platform": "messenger",
+   "before_message_id": 71701,
+   "message": "රවුම් ලී  මේසයක් පුටු 6",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-049-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4336,
+   "channel_user_id": 4353,
+   "platform": "messenger",
+   "before_message_id": 45161,
+   "message": "Mama inne Italia wala labana mase thmai Lankawta enne",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-050-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2972,
+   "channel_user_id": 2988,
+   "platform": "messenger",
+   "before_message_id": 25884,
+   "message": "Duwek",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-051-comment",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5586,
+   "channel_user_id": 5605,
+   "platform": "messenger",
+   "before_message_id": 96979,
+   "message": "Ow babage kema banana thiyanna\nBabage kema hadanna ganna puluwanda e bajane?",
+   "kind": "comment",
+   "checks": {
+    "campaign_from_comment": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after a comment on a post"
+  },
+  {
+   "id": "chu-052-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 3376,
+   "channel_user_id": 3392,
+   "platform": "messenger",
+   "before_message_id": 30999,
+   "message": "cash on delivery",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-053-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 8113,
+   "channel_user_id": 8147,
+   "platform": "messenger",
+   "before_message_id": 102766,
+   "message": "Dilini Lanka \n134/35, Nugagaha watte, Andiambalama \n0770 193629\n0112 253209\nGampaha \nKatunayake \nCash on delivery",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-054-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6190,
+   "channel_user_id": 6209,
+   "platform": "messenger",
+   "before_message_id": 100722,
+   "message": "[photo: customer photo = our product Table Cloth Clear #7201 (item code on the photo)]\nAvailable da meka dan\nFb eke post ekak thibba dan",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-055-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4447,
+   "channel_user_id": 4464,
+   "platform": "messenger",
+   "before_message_id": 47278,
+   "message": "Size eka kiynna puluwanda",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-056-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 8127,
+   "channel_user_id": 8161,
+   "platform": "messenger",
+   "before_message_id": 103014,
+   "message": "[photo: customer photo = our product Table Cloth Clear #7201 (item code on the photo)]",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-057-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4816,
+   "channel_user_id": 4833,
+   "platform": "messenger",
+   "before_message_id": 54628,
+   "message": "Diliwari.kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-058-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2751,
+   "channel_user_id": 2764,
+   "platform": "messenger",
+   "before_message_id": 19755,
+   "message": "L size",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-059-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5157,
+   "channel_user_id": 5175,
+   "platform": "messenger",
+   "before_message_id": 87625,
+   "message": "Wardrobe box  6k oni\n6k Ganna puluwanda\nFull cost eka kiyada?\nDelivery ekka",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-060-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4032,
+   "channel_user_id": 4049,
+   "platform": "messenger",
+   "before_message_id": 39688,
+   "message": "Cod thiyenawada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-061-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2872,
+   "channel_user_id": 2888,
+   "platform": "messenger",
+   "before_message_id": 24424,
+   "message": "590 ගානකට තියෙනවා කිව්වේ",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-062-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2752,
+   "channel_user_id": 2765,
+   "platform": "messenger",
+   "before_message_id": 19873,
+   "message": "Price",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-063-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6678,
+   "channel_user_id": 6703,
+   "platform": "messenger",
+   "before_message_id": 80014,
+   "message": "Size chart",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-064-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4083,
+   "channel_user_id": 4100,
+   "platform": "messenger",
+   "before_message_id": 40910,
+   "message": "1195 odar karanna sampoorana gana kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-065-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5501,
+   "channel_user_id": 5520,
+   "platform": "messenger",
+   "before_message_id": 66659,
+   "message": "මේකෙ size දෙනවද. මගේ මේසෙ ටිකක් ලොකුයි . දිග අතට පුටු හතරක් තියන්න පුළුවන් .",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-066-general",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4666,
+   "channel_user_id": 4683,
+   "platform": "messenger",
+   "before_message_id": 83195,
+   "message": "596 එකේ size එක",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "chu-067-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2856,
+   "channel_user_id": 2872,
+   "platform": "messenger",
+   "before_message_id": 24182,
+   "message": "එන්න දවස් කියක් විතර යයිද...",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     5073
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after order #336"
+  },
+  {
+   "id": "chu-068-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2832,
+   "channel_user_id": 2848,
+   "platform": "instagram",
+   "before_message_id": 28487,
+   "message": "[photo: customer photo = our product Plate Rack #5100 (item code on the photo)]\n[shared post] 🍽️🌿 ඔබේ Kitchen එක පිළිවෙළට, ලස්සනට තියාගන්න! 😍💚\n\nපිඟන්, කෝප්ප පිළිවෙළට අසුරා තබාගන්න පුළුවන් ලස්සන වගේම ප්‍රයෝජනවත් Plate Rack එකක් මෙන්න! 🏡✨\n\n🌿 Bamboo Wooden Plate Rack – 2 Tier Storage\n\n✅ ශක්තිමත් Bamboo Wood නිමාව\n✅ තට්ටු 2කින් යුත් ගබඩා පහසුකම\n✅ Kitchen එකේ ඉඩ ඉතිරි කරගන්න උපකාරී වේ\n✅ පිඟන් සහ කෝප්ප පිළිවෙළට තබාගන්න\n✅ ඔබේ Kitchen එකට නවීන, ලස්සන පෙනුමක්! 💚\n\n💰 මිල රු. 1,995/- පමණයි! 🔥\n\n📲 ඇණවුම් කිරීමට WhatsApp කරන්න: 072 435 2501\n\nඔබේ මුළුතැන්ගෙයටත් මේ ලස්සන Plate Rack එක එකතු කරගෙන පිළිවෙළට තියාගන්න අදම ඇණවුම් කරන්න! 🛒✨\n\n#PlateRack #KitchenOrganizer #BambooWood #KitchenAccessories #SriLanka",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7095,
+     7079,
+     7094,
+     5677,
+     5651,
+     3863,
+     4917
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after order #333"
+  },
+  {
+   "id": "chu-069-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4661,
+   "channel_user_id": 4678,
+   "platform": "messenger",
+   "before_message_id": 51524,
+   "message": "[photo: customer photo (A screenshot of a 1000ml plastic liquid soap dispenser with a pump, shown in white, green, and red options.) – could be: Soap Pump & Sponge Caddy #3712 – not sure which]\n[photo: customer photo = our product Toilet Gel Stamp #5698 (item code on the photo)]\n[photo: customer photo = our product Air Fryer Liners Set Round 160x45mm (A-68) #5281 (item code on the photo)]\nMewa available da",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     5235,
+     5281,
+     5698
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #465"
+  },
+  {
+   "id": "chu-070-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 7790,
+   "channel_user_id": 7823,
+   "platform": "instagram",
+   "before_message_id": 95671,
+   "message": "White color oder now\nOk\nCash on delivery",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     5791
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #571"
+  },
+  {
+   "id": "chu-071-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 5250,
+   "channel_user_id": 5268,
+   "platform": "messenger",
+   "before_message_id": 63751,
+   "message": "Thank you",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     3452
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #495"
+  },
+  {
+   "id": "chu-072-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 4059,
+   "channel_user_id": 4076,
+   "platform": "messenger",
+   "before_message_id": 49981,
+   "message": "ඒක හා",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     5424,
+     5257
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after order #459"
+  },
+  {
+   "id": "chu-073-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 2679,
+   "channel_user_id": 2692,
+   "platform": "messenger",
+   "before_message_id": 77911,
+   "message": "Ou",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     6463
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #525"
+  },
+  {
+   "id": "chu-074-after_order",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 6367,
+   "channel_user_id": 6387,
+   "platform": "messenger",
+   "before_message_id": 77566,
+   "message": "[photo: customer photo (A collapsible fabric storage box with a brown and white houndstooth pattern, shown in a video screenshot.) – no matching product photo (may still be sold – ask the name); closest: Foldable Single  Storage  Box Single Color #5431 / Foldable Storage Box  2pcs #5433]\nමෙ බොක්ස් එක නෙද ඔඩර් එක දැන්මෙ",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     5431
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after order #524"
+  },
+  {
+   "id": "chu-075-sku",
+   "shop": "chu",
+   "company_id": 16,
+   "conversation_id": 8286,
+   "channel_user_id": 8323,
+   "platform": "messenger",
+   "before_message_id": 106295,
+   "message": "152539 item code ekata dala tyene",
+   "kind": "sku",
+   "checks": {
+    "expect_products_any": [
+     5677
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "code 152539 = Storage Box (JR-402028)"
+  },
+  {
+   "id": "moodlift-001-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3407,
+   "channel_user_id": 3422,
+   "platform": "whatsapp",
+   "before_message_id": 32157,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) #7193 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-002-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4262,
+   "channel_user_id": 4279,
+   "platform": "whatsapp",
+   "before_message_id": 43854,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Black) #7193 (95% sure)]\n[photo: customer photo (A mustard yellow oversized t-shirt featuring three white bows and French text on the chest.) – could be: Chérie Bow Oversized T-Shirt (Army Green) #7188 – not sure which]\n[voice note]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-003-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3517,
+   "channel_user_id": 3533,
+   "platform": "whatsapp",
+   "before_message_id": 32320,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-004-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5778,
+   "channel_user_id": 5797,
+   "platform": "whatsapp",
+   "before_message_id": 69109,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Black) #7188 (our own photo)]\n2XL",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-005-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5151,
+   "channel_user_id": 5169,
+   "platform": "whatsapp",
+   "before_message_id": 77701,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-006-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3697,
+   "channel_user_id": 3713,
+   "platform": "whatsapp",
+   "before_message_id": 33286,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Light Green) #7188 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-007-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5420,
+   "channel_user_id": 5439,
+   "platform": "whatsapp",
+   "before_message_id": 66122,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Red) #7188 (our own photo)]\n8XL",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-008-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5912,
+   "channel_user_id": 5931,
+   "platform": "whatsapp",
+   "before_message_id": 70437,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) #7193 (90% sure)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-009-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5914,
+   "channel_user_id": 5933,
+   "platform": "whatsapp",
+   "before_message_id": 75294,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Olive Green) #7188 (our own photo)]\n📷 Chérie Bow Oversized T-Shirt – Olive Green – Rs 1,590",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-010-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4728,
+   "channel_user_id": 4745,
+   "platform": "whatsapp",
+   "before_message_id": 52792,
+   "message": "[photo: customer photo (A mustard yellow oversized cotton t-shirt featuring three white bows and French text printed on the chest.) – could be: Chérie Bow Oversized T-Shirt (Army Green) #7188 – not sure which]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Maroon) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Red) #7188 (our own photo)]\nCherie (blow)",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-011-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7413,
+   "channel_user_id": 7441,
+   "platform": "whatsapp",
+   "before_message_id": 90670,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]\n📷 Hi Full Kit (T-Shirt + Pant) – Peach – Rs 3,080\nඔනි",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-012-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4457,
+   "channel_user_id": 4474,
+   "platform": "whatsapp",
+   "before_message_id": 67199,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) #7193 (90% sure)]\nමේක එවන්න XL",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-013-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6716,
+   "channel_user_id": 6741,
+   "platform": "whatsapp",
+   "before_message_id": 80976,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Army Green) #7188 (100% sure)]\nOya pata ewanna",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-014-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3823,
+   "channel_user_id": 3840,
+   "platform": "whatsapp",
+   "before_message_id": 34580,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Pink) #7188 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-015-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5425,
+   "channel_user_id": 5444,
+   "platform": "messenger",
+   "before_message_id": 65961,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Maroon) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Olive Green) #7188 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-016-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6445,
+   "channel_user_id": 6465,
+   "platform": "whatsapp",
+   "before_message_id": 76769,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) #7193 (90% sure)]\nMe kit ek white colour eken gnna puluwanda",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-017-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7801,
+   "channel_user_id": 7834,
+   "platform": "whatsapp",
+   "before_message_id": 95799,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Maroon) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Black) #7188 (100% sure)]\n6xl ona\n[photo: customer photo (A red oversized t-shirt featuring a blue Stitch cartoon character print with pink hearts, shown in a product screenshot.) – no matching product photo (may still be sold – ask the name)]\n[voice note]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-018-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3439,
+   "channel_user_id": 3455,
+   "platform": "whatsapp",
+   "before_message_id": 31874,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Olive Green) #7193 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-019-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7729,
+   "channel_user_id": 7761,
+   "platform": "whatsapp",
+   "before_message_id": 105149,
+   "message": "Madu devindi\nRitz clothing andaraya, madaglle, polpithigam \n0715585237 \nSize 4xl\n[photo: customer photo (A bright yellow oversized cotton t-shirt featuring a red 'URBANCITY VINTAGE' graphic print on the chest.) – no matching product photo (may still be sold – ask the name); closest: Chérie Bow Oversized T-Shirt (Army Green) #7188]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Maroon) #7188 (our own photo)]\nMe coluer dek oni",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-020-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4558,
+   "channel_user_id": 4575,
+   "platform": "whatsapp",
+   "before_message_id": 49374,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Black) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Olive Green) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Army Green) #7188 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-021-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4159,
+   "channel_user_id": 4176,
+   "platform": "whatsapp",
+   "before_message_id": 42257,
+   "message": "[photo]\n📷 Chérie Bow Oversized T-Shirt – Maroon – Rs 1,590\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Navy Blue) #7188 (our own photo)]\n📷 Chérie Bow Oversized T-Shirt – Navy Blue – Rs 1,590\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Pink) #7188 (our own photo)]\n📷 Chérie Bow Oversized T-Shirt – Pink – Rs 1,590\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Red) #7188 (our own photo)]\n📷 Chérie Bow Oversized T-Shirt – Red – Rs 1,590\nMe tiken danna\nMe pata හතර",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "later ordered Chérie Bow Oversized T-Shirt"
+  },
+  {
+   "id": "moodlift-022-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4960,
+   "channel_user_id": 4977,
+   "platform": "whatsapp",
+   "before_message_id": 61901,
+   "message": "T shirt eka L\nPant eka Xl  ewnn miss me color ekeb",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-023-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4375,
+   "channel_user_id": 4392,
+   "platform": "whatsapp",
+   "before_message_id": 53265,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Navy Blue) #7188 (our own photo)]\n📷 Chérie Bow Oversized T-Shirt – Navy Blue – Rs 1,590",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Chérie Bow Oversized T-Shirt"
+  },
+  {
+   "id": "moodlift-024-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4346,
+   "channel_user_id": 4363,
+   "platform": "whatsapp",
+   "before_message_id": 45227,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Navy Blue) #7193 (our own photo)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-025-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4065,
+   "channel_user_id": 4082,
+   "platform": "whatsapp",
+   "before_message_id": 41313,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]\n📷 Hi Full Kit (T-Shirt + Pant) – Peach – Rs 3,080",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-026-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3915,
+   "channel_user_id": 3932,
+   "platform": "whatsapp",
+   "before_message_id": 36977,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Light Blue) #7188 (our own photo)]\nMe colour eken ewanna mis.mata set unoth mama thawa kipayak gannawa mis.",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Chérie Bow Oversized T-Shirt"
+  },
+  {
+   "id": "moodlift-027-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 8255,
+   "channel_user_id": 8292,
+   "platform": "whatsapp",
+   "before_message_id": 105786,
+   "message": "Full kit eka ewanna\nSize TShirt -M\nPant-L\nNavy blue",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-028-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4262,
+   "channel_user_id": 4279,
+   "platform": "whatsapp",
+   "before_message_id": 43766,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Black) #7193 (95% sure)]\nMe full kit eka black color.meke t shirt eka godak kota nh neda\n[unsupported]\nMessage type unknown\n[photo: customer photo (A mustard yellow oversized t-shirt featuring three white bows and French text 'Chérie' on the front.) – could be: Chérie Bow Oversized T-Shirt (Army Green) #7188 – not sure which]\n[photo: customer photo (A pink oversized t-shirt for women featuring the word 'Beautiful' in a gold script font with small heart accents.) – no matching product photo (may still be sold – ask the name)]\nMe t shirts dekath ona\nmata full kost eka kiyada kiynna dear\nshorts ehema nh neda oyala laga",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-029-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3417,
+   "channel_user_id": 3433,
+   "platform": "whatsapp",
+   "before_message_id": 31728,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]\nMe colour eken ganna thiyeda",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-030-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4424,
+   "channel_user_id": 4441,
+   "platform": "whatsapp",
+   "before_message_id": 46938,
+   "message": "Full kit ekam olive green ona Mata dawase kiyak wage yanakota me oder labenawada Mata t shirt Eka xl walinui pant ekath lokuwata thama ona Eka Nisha mage Ina 34 l denna.",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-031-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3451,
+   "channel_user_id": 3467,
+   "platform": "whatsapp",
+   "before_message_id": 36577,
+   "message": "Hi\nMeee dekaa\nOnaaa\n[unsupported]\nMessage type unknown\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Pink) #7188 (our own photo)]\n[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Red) #7188 (our own photo)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Chérie Bow Oversized T-Shirt"
+  },
+  {
+   "id": "moodlift-032-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3430,
+   "channel_user_id": 3446,
+   "platform": "whatsapp",
+   "before_message_id": 31825,
+   "message": "[photo: customer photo (Pink oversized t-shirt for women featuring a vertical graphic print of three butterflies and motivational text.) – no matching product photo (may still be sold – ask the name)]\n4xl one",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Chérie Bow Oversized T-Shirt"
+  },
+  {
+   "id": "moodlift-033-ordered",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5103,
+   "channel_user_id": 5120,
+   "platform": "whatsapp",
+   "before_message_id": 60231,
+   "message": "Ha mta T-shirt eka L\nPant eka XL danna",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Hi Full Kit (T-Shirt + Pant)"
+  },
+  {
+   "id": "moodlift-034-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 8098,
+   "channel_user_id": 8132,
+   "platform": "whatsapp",
+   "before_message_id": 102086,
+   "message": "Hello! Can I get more info on this?\nPrice plc",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-035-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7768,
+   "channel_user_id": 7801,
+   "platform": "whatsapp",
+   "before_message_id": 95307,
+   "message": "Hello! Can I get more info on this?\n3XL price",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-036-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3893,
+   "channel_user_id": 3910,
+   "platform": "whatsapp",
+   "before_message_id": 36204,
+   "message": "M size",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-037-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7598,
+   "channel_user_id": 7627,
+   "platform": "whatsapp",
+   "before_message_id": 92909,
+   "message": "Size chart please",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-038-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4376,
+   "channel_user_id": 4393,
+   "platform": "whatsapp",
+   "before_message_id": 45652,
+   "message": "Hello! Can I get more info on this?Mila kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-039-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6889,
+   "channel_user_id": 6914,
+   "platform": "whatsapp",
+   "before_message_id": 83248,
+   "message": "Price\nHello! Can I get more info on this?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-040-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6906,
+   "channel_user_id": 6931,
+   "platform": "whatsapp",
+   "before_message_id": 83554,
+   "message": "Hello! Can I get more info on this?\nPrice",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-041-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4071,
+   "channel_user_id": 4088,
+   "platform": "whatsapp",
+   "before_message_id": 65823,
+   "message": "Mata bank transfer lesi\nHimaya Pahattuge \nNo.213/16, William Jayasuriya Mw, Kesbewa.\n0775162304\n0776508582\nKesbewa",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-042-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4615,
+   "channel_user_id": 4632,
+   "platform": "whatsapp",
+   "before_message_id": 50332,
+   "message": "Dawas kiyak yanawada deliver ekata..",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-043-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 8246,
+   "channel_user_id": 8283,
+   "platform": "whatsapp",
+   "before_message_id": 105382,
+   "message": "Hello! Can I get more info on this?\nprice",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-044-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5756,
+   "channel_user_id": 5775,
+   "platform": "whatsapp",
+   "before_message_id": 73494,
+   "message": "Hip size  52 ක් තියෙනවා ඒ නිසා මේක හරියන්නේ නැහැ",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-045-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4166,
+   "channel_user_id": 4183,
+   "platform": "whatsapp",
+   "before_message_id": 42240,
+   "message": "Hello! Can I get more info on this?kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-046-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5075,
+   "channel_user_id": 5092,
+   "platform": "whatsapp",
+   "before_message_id": 59419,
+   "message": "Red colour Nedda",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-047-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3919,
+   "channel_user_id": 3936,
+   "platform": "messenger",
+   "before_message_id": 37154,
+   "message": "Total ethakota 3405 ne",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7193,
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #415"
+  },
+  {
+   "id": "moodlift-048-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4630,
+   "channel_user_id": 4647,
+   "platform": "whatsapp",
+   "before_message_id": 54672,
+   "message": "[voice note]",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7193,
+     7193,
+     7193,
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #463"
+  },
+  {
+   "id": "moodlift-049-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4159,
+   "channel_user_id": 4176,
+   "platform": "whatsapp",
+   "before_message_id": 42344,
+   "message": "Ok",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7188,
+     7188,
+     7188,
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #436"
+  },
+  {
+   "id": "moodlift-050-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4375,
+   "channel_user_id": 4392,
+   "platform": "whatsapp",
+   "before_message_id": 53297,
+   "message": "Kawadada wageda lebenne",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #470"
+  },
+  {
+   "id": "moodlift-051-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4424,
+   "channel_user_id": 4441,
+   "platform": "whatsapp",
+   "before_message_id": 47255,
+   "message": "Mis waradimak . Ennaona thisara niwasa kiyala.",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7193,
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #450"
+  },
+  {
+   "id": "moodlift-052-after_order",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4204,
+   "channel_user_id": 4221,
+   "platform": "whatsapp",
+   "before_message_id": 42867,
+   "message": "මොනවා උනත් ඔයාලගෙ සර්විස් එක නම් නියමයි.",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7193,
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "first message after order #438"
+  },
+  {
+   "id": "moodlift-053-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3497,
+   "channel_user_id": 3513,
+   "platform": "whatsapp",
+   "before_message_id": 32151,
+   "message": "[photo: customer photo = our product Chérie Bow Oversized T-Shirt (Army Green) #7188 (our own photo)]\n[photo: customer photo (A maroon oversized cotton t-shirt featuring three white bow graphics and French text on the chest.) – could be: Chérie Bow Oversized T-Shirt (Army Green) #7188 – not sure which]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7188
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Chérie Bow Oversized T-Shirt (available)"
+  },
+  {
+   "id": "moodlift-054-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7899,
+   "channel_user_id": 7932,
+   "platform": "whatsapp",
+   "before_message_id": 97753,
+   "message": "Wena colour ekk ewnn ehenm",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-055-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4122,
+   "channel_user_id": 4139,
+   "platform": "whatsapp",
+   "before_message_id": 44321,
+   "message": "Black colour",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-056-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6351,
+   "channel_user_id": 6371,
+   "platform": "whatsapp",
+   "before_message_id": 78495,
+   "message": "Delivery kohomada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-057-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6745,
+   "channel_user_id": 6770,
+   "platform": "whatsapp",
+   "before_message_id": 81188,
+   "message": "Price",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-058-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4541,
+   "channel_user_id": 4558,
+   "platform": "whatsapp",
+   "before_message_id": 84822,
+   "message": "Me color eken ganna one mata",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-059-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 7476,
+   "channel_user_id": 7504,
+   "platform": "whatsapp",
+   "before_message_id": 91476,
+   "message": "Kit ekatama kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-060-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4014,
+   "channel_user_id": 4031,
+   "platform": "whatsapp",
+   "before_message_id": 38996,
+   "message": "Kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-061-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 5172,
+   "channel_user_id": 5190,
+   "platform": "whatsapp",
+   "before_message_id": 61987,
+   "message": "Me colour ek thyenwa da",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-062-photo",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 3631,
+   "channel_user_id": 3647,
+   "platform": "whatsapp",
+   "before_message_id": 32967,
+   "message": "[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Navy Blue) #7193 (our own photo)]\n[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Olive Green) #7193 (our own photo)]\n[photo: customer photo = our product Hi Full Kit (T-Shirt + Pant) (Peach) #7193 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7193
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Hi Full Kit (T-Shirt + Pant) (available)"
+  },
+  {
+   "id": "moodlift-063-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 6098,
+   "channel_user_id": 6117,
+   "platform": "whatsapp",
+   "before_message_id": 72495,
+   "message": "Hello! Can I get more info on this?\nSize\nChrt",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-064-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4154,
+   "channel_user_id": 4171,
+   "platform": "whatsapp",
+   "before_message_id": 42067,
+   "message": "Size chat ewanna",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "moodlift-065-general",
+   "shop": "moodlift",
+   "company_id": 38,
+   "conversation_id": 4049,
+   "channel_user_id": 4066,
+   "platform": "whatsapp",
+   "before_message_id": 39958,
+   "message": "වෙනත් ආයතනයකින් ඇඳුමක් මිලදී ගන්න ඔබ ඇඳුම ලබාදෙන්නේ නැත්නම් මට හරියට පණිවිඩය කියන්න\nනැතිනම් ඔබගේ එකඟතාවය අනුව රුපියල් හාරසීයක් මට ගෙවන්න වෙන්නේ නෑ",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-001-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7608,
+   "channel_user_id": 7637,
+   "platform": "whatsapp",
+   "before_message_id": 92980,
+   "message": "[photo: customer photo = our product Leopard Cherry T-Shirt (Peach) #7198 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Leopard Cherry T-Shirt (available)"
+  },
+  {
+   "id": "teeza-002-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7945,
+   "channel_user_id": 7978,
+   "platform": "whatsapp",
+   "before_message_id": 98716,
+   "message": "[photo: customer photo = our product Be Kind Girl T-Shirt (Sky Blue) #7196 (our own photo)]\n[photo: customer photo = our product Be Kind Girl T-Shirt (Pink) #7196 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Be Kind Girl T-Shirt (available)"
+  },
+  {
+   "id": "teeza-003-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8057,
+   "channel_user_id": 8091,
+   "platform": "whatsapp",
+   "before_message_id": 101191,
+   "message": "[photo: customer photo = our product Be Kind Girl T-Shirt (Pink) #7196 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Be Kind Girl T-Shirt (available)"
+  },
+  {
+   "id": "teeza-004-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7797,
+   "channel_user_id": 7830,
+   "platform": "whatsapp",
+   "before_message_id": 101203,
+   "message": "[photo: customer photo = our product Cat Hug T-Shirt (Purple) #7195 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7195
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Cat Hug T-Shirt (available)"
+  },
+  {
+   "id": "teeza-005-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7719,
+   "channel_user_id": 7751,
+   "platform": "whatsapp",
+   "before_message_id": 101087,
+   "message": "[photo: customer photo = our product Leopard Cherry T-Shirt (Brown) #7198 (our own photo)]\n📷 Leopard Cherry T-Shirt – Brown – Rs 1,250\n[photo: customer photo = our product Leopard Cherry T-Shirt (Peach) #7198 (our own photo)]\n📷 Leopard Cherry T-Shirt – Peach – Rs 1,250\nMe deka oni",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Leopard Cherry T-Shirt (available)"
+  },
+  {
+   "id": "teeza-006-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7371,
+   "channel_user_id": 7399,
+   "platform": "whatsapp",
+   "before_message_id": 90072,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Leopard Cherry T-Shirt (Black) #7198 (100% sure)]\nAvailable  da\nSizes chart\n[photo: customer photo (A lavender oversized t-shirt featuring a cute graphic print of four stacked cartoon cats and small red hearts.) – could be: Stacked Cats T-Shirt (Black) #7194 – not sure which]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Leopard Cherry T-Shirt (available)"
+  },
+  {
+   "id": "teeza-007-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7796,
+   "channel_user_id": 7829,
+   "platform": "whatsapp",
+   "before_message_id": 95704,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Stacked Cats T-Shirt (Pink) #7194 (our own photo)]\n[photo: customer photo = our product Leopard Cherry T-Shirt (Pink) #7198 (our own photo)]\n[photo: customer photo = our product Be Kind Girl T-Shirt (Pink) #7196 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Stacked Cats T-Shirt (available)"
+  },
+  {
+   "id": "teeza-008-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8103,
+   "channel_user_id": 8137,
+   "platform": "whatsapp",
+   "before_message_id": 102301,
+   "message": "[photo: customer photo = our product Stacked Cats T-Shirt (Black) #7194 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Stacked Cats T-Shirt (available)"
+  },
+  {
+   "id": "teeza-009-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8115,
+   "channel_user_id": 8149,
+   "platform": "whatsapp",
+   "before_message_id": 102728,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Stacked Cats T-Shirt (Brown) #7194 (our own photo)]\nL size thynwda\n[photo: customer photo = our product Leopard Cherry T-Shirt (Black) #7198 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Stacked Cats T-Shirt (available)"
+  },
+  {
+   "id": "teeza-010-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7986,
+   "channel_user_id": 8018,
+   "platform": "whatsapp",
+   "before_message_id": 100925,
+   "message": "[photo: customer photo = our product Stacked Cats T-Shirt (Sky Blue) #7194 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Stacked Cats T-Shirt (available)"
+  },
+  {
+   "id": "teeza-011-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7988,
+   "channel_user_id": 8022,
+   "platform": "whatsapp",
+   "before_message_id": 99584,
+   "message": "[photo: customer photo = our product Cat Hug T-Shirt (Brown) #7195 (our own photo)]\nHow much",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7195
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Cat Hug T-Shirt (available)"
+  },
+  {
+   "id": "teeza-012-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7988,
+   "channel_user_id": 8022,
+   "platform": "whatsapp",
+   "before_message_id": 99586,
+   "message": "[photo: customer photo = our product Leopard Cherry T-Shirt (Brown) #7198 (our own photo)]\n[photo: customer photo = our product Leopard Cherry T-Shirt (Black) #7198 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Leopard Cherry T-Shirt (available)"
+  },
+  {
+   "id": "teeza-013-ordered",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8151,
+   "channel_user_id": 8186,
+   "platform": "whatsapp",
+   "before_message_id": 104624,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo = our product Bubble Tea Teddy T-Shirt (Black) #7197 (our own photo)]\n[photo: customer photo = our product Cat Hug T-Shirt (Black) #7195 (our own photo)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7197
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Bubble Tea Teddy T-Shirt"
+  },
+  {
+   "id": "teeza-014-ordered",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7750,
+   "channel_user_id": 7783,
+   "platform": "whatsapp",
+   "before_message_id": 95050,
+   "message": "[photo: customer photo = our product Leopard Cherry T-Shirt (Pink) #7198 (our own photo)]\nS size tiyada",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Leopard Cherry T-Shirt"
+  },
+  {
+   "id": "teeza-015-ordered",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7719,
+   "channel_user_id": 7751,
+   "platform": "whatsapp",
+   "before_message_id": 94516,
+   "message": "Hi\n[photo: customer photo = our product Leopard Cherry T-Shirt (Brown) #7198 (our own photo)]\nSize chart and material plz",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Leopard Cherry T-Shirt"
+  },
+  {
+   "id": "teeza-016-ordered",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7717,
+   "channel_user_id": 7749,
+   "platform": "messenger",
+   "before_message_id": 94462,
+   "message": "[photo: customer photo = our product Be Kind Girl T-Shirt (Pink) #7196 (our own photo)]",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Be Kind Girl T-Shirt"
+  },
+  {
+   "id": "teeza-017-ordered",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8018,
+   "channel_user_id": 8052,
+   "platform": "whatsapp",
+   "before_message_id": 101871,
+   "message": "[photo]\n📷 Be Kind Girl T-Shirt – Pink – Rs 1,250\n[photo: customer photo = our product Be Kind Girl T-Shirt (Sky Blue) #7196 (our own photo)]\n📷 Be Kind Girl T-Shirt – Sky Blue – Rs 1,250\n[photo: customer photo = our product Be Kind Girl T-Shirt (White) #7196 (our own photo)]\n📷 Be Kind Girl T-Shirt – White – Rs 1,250\n[photo: customer photo = our product Be Kind Girl T-Shirt (Black) #7196 (our own photo)]\n📷 Be Kind Girl T-Shirt – Black – Rs 1,250",
+   "kind": "ordered",
+   "checks": {
+    "expect_products_any": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "later ordered Be Kind Girl T-Shirt"
+  },
+  {
+   "id": "teeza-018-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7777,
+   "channel_user_id": 7810,
+   "platform": "whatsapp",
+   "before_message_id": 95438,
+   "message": "price",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-019-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3350,
+   "channel_user_id": 3366,
+   "platform": "whatsapp",
+   "before_message_id": 30737,
+   "message": "colors mokada thiyenne?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-020-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3238,
+   "channel_user_id": 3254,
+   "platform": "whatsapp",
+   "before_message_id": 29355,
+   "message": "ok, how much is delivery?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-021-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3119,
+   "channel_user_id": 3135,
+   "platform": "messenger",
+   "before_message_id": 38495,
+   "message": "Size chart\nEwnna",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-022-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7654,
+   "channel_user_id": 7683,
+   "platform": "whatsapp",
+   "before_message_id": 93389,
+   "message": "How much price",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-023-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3204,
+   "channel_user_id": 3220,
+   "platform": "whatsapp",
+   "before_message_id": 28811,
+   "message": "ok, how much is delivery?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-024-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8018,
+   "channel_user_id": 8052,
+   "platform": "whatsapp",
+   "before_message_id": 101891,
+   "message": "pink also\n4 colors",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-025-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7496,
+   "channel_user_id": 7524,
+   "platform": "whatsapp",
+   "before_message_id": 91702,
+   "message": "👕 ටී ෂර්ට් එකක මිල කීයද? ❤️",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-026-after_order",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7986,
+   "channel_user_id": 8018,
+   "platform": "whatsapp",
+   "before_message_id": 100987,
+   "message": "Mm",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #580"
+  },
+  {
+   "id": "teeza-027-after_order",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7717,
+   "channel_user_id": 7749,
+   "platform": "messenger",
+   "before_message_id": 94513,
+   "message": "Ok\nThnq",
+   "kind": "after_order",
+   "checks": {
+    "no_duplicate_order_of": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "first message after order #567"
+  },
+  {
+   "id": "teeza-028-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7026,
+   "channel_user_id": 7051,
+   "platform": "whatsapp",
+   "before_message_id": 85491,
+   "message": "[photo: customer photo = our product Be Kind Girl T-Shirt (Sky Blue) #7196 (our own photo)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7196
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Be Kind Girl T-Shirt (available)"
+  },
+  {
+   "id": "teeza-029-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8212,
+   "channel_user_id": 8249,
+   "platform": "whatsapp",
+   "before_message_id": 104612,
+   "message": "Size large thiyeda",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-030-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7797,
+   "channel_user_id": 7830,
+   "platform": "whatsapp",
+   "before_message_id": 101285,
+   "message": "Dekk gnwnm\nDeliver free ndd",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-031-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3198,
+   "channel_user_id": 3214,
+   "platform": "whatsapp",
+   "before_message_id": 28782,
+   "message": "Teddy Beanie T-Shirt thiyenawada? kiyada?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-032-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8063,
+   "channel_user_id": 8097,
+   "platform": "messenger",
+   "before_message_id": 101284,
+   "message": "Do you have large size of these designs",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-033-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7719,
+   "channel_user_id": 7751,
+   "platform": "whatsapp",
+   "before_message_id": 94580,
+   "message": "[unsupported]\nMessage type unknown\n[photo: customer photo (A dark green oversized t-shirt for women featuring a leopard print cherry graphic and the word 'Cherry' in gold.) – could be: Leopard Cherry T-Shirt (Black) #7198 – not sure which]\n[photo: customer photo = our product Leopard Cherry T-Shirt (Brown) #7198 (our own photo)]\nDekama ganna puluwanda",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7198
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Leopard Cherry T-Shirt (available)"
+  },
+  {
+   "id": "teeza-034-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3206,
+   "channel_user_id": 3222,
+   "platform": "whatsapp",
+   "before_message_id": 28821,
+   "message": "Girl & Puppy T-Shirt Pink M 1k ona. Nimal Perera, 10 Temple Road, *. COD",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-035-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7584,
+   "channel_user_id": 7612,
+   "platform": "whatsapp",
+   "before_message_id": 92712,
+   "message": "Kiyada",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-036-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 8115,
+   "channel_user_id": 8149,
+   "platform": "whatsapp",
+   "before_message_id": 102678,
+   "message": "👕 ටී ෂර්ට් එකක මිල කීයද? ❤️",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-037-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3370,
+   "channel_user_id": 3386,
+   "platform": "whatsapp",
+   "before_message_id": 30917,
+   "message": "dekak gaththoth delivery kiyada?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-038-photo",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7629,
+   "channel_user_id": 7658,
+   "platform": "whatsapp",
+   "before_message_id": 93166,
+   "message": "[photo: customer photo = our product Stacked Cats T-Shirt (Sky Blue) #7194 (our own photo)]\n[photo: customer photo (A black women's t-shirt featuring a large graphic of the character Stitch with pink hearts and the text 'We Love Stitch'.) – no matching product photo (may still be sold – ask the name)]",
+   "kind": "photo",
+   "checks": {
+    "expect_products_any": [
+     7194
+    ],
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "customer photo = Stacked Cats T-Shirt (available)"
+  },
+  {
+   "id": "teeza-039-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 3345,
+   "channel_user_id": 3361,
+   "platform": "whatsapp",
+   "before_message_id": 30716,
+   "message": "Bubble Tea Teddy T-Shirt kiyada?",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true
+   },
+   "note": "delivery / price / payment / size question"
+  },
+  {
+   "id": "teeza-040-general",
+   "shop": "teeza",
+   "company_id": 37,
+   "conversation_id": 7770,
+   "channel_user_id": 7803,
+   "platform": "whatsapp",
+   "before_message_id": 95356,
+   "message": "👕 ටී ෂර්ට් එකක මිල කීයද? ❤️",
+   "kind": "general",
+   "checks": {
+    "prices_known": true,
+    "max_chars": 500,
+    "no_handoff": true,
+    "sinhala_script": true
+   },
+   "note": "delivery / price / payment / size question"
+  }
+ ]
+}

@@ -10,15 +10,19 @@ const COMMENT_DAYS = 7;
  * that post – not a random product. Found from the comment we replied to privately, or from Meta's own
  * "You are responding to a user comment … comment_id=…" message in the chat. Null when the chat has no recent comment.
  */
-export async function commentCampaign(ds: DataSource, conversationId: number, companyId: number): Promise<BotCampaign | null> {
+export async function commentCampaign(ds: DataSource, conversationId: number, companyId: number, at?: Date | null): Promise<BotCampaign | null> {
+  // at: the test runner replays an old message at its own time (default: now)
+  const when = at instanceof Date && !Number.isNaN(at.getTime()) ? at.toISOString() : null;
   const [conv] = await ds.query(
-    `SELECT comment_ref FROM bot_conversation WHERE id = $1 AND comment_ref IS NOT NULL AND comment_ref_at > NOW() - make_interval(days => $2::int)`,
-    [conversationId, COMMENT_DAYS]).catch(() => []);
+    `SELECT comment_ref FROM bot_conversation WHERE id = $1 AND comment_ref IS NOT NULL AND comment_ref_at > COALESCE($3::timestamptz, NOW()) - make_interval(days => $2::int)
+        AND comment_ref_at <= COALESCE($3::timestamptz, NOW())`,
+    [conversationId, COMMENT_DAYS, when]).catch(() => []);
   let ref = String(conv?.comment_ref ?? '');
   if (!ref) {
     const [meta] = await ds.query(
       `SELECT content FROM bot_message WHERE conversation_id = $1 AND source = 'meta-context' AND content ~ 'comment_id=[0-9]+'
-          AND created_at > NOW() - make_interval(days => $2::int) ORDER BY id DESC LIMIT 1`, [conversationId, COMMENT_DAYS]).catch(() => []);
+          AND created_at > COALESCE($3::timestamptz, NOW()) - make_interval(days => $2::int)
+          AND created_at <= COALESCE($3::timestamptz, NOW()) ORDER BY id DESC LIMIT 1`, [conversationId, COMMENT_DAYS, when]).catch(() => []);
     ref = /comment_id=(\d+)/.exec(String(meta?.content ?? ''))?.[1] ?? '';
   }
   let comment: { comment_id?: string; post_id?: string; message?: string; post_text?: string; post_link?: string } | undefined;
@@ -32,7 +36,8 @@ export async function commentCampaign(ds: DataSource, conversationId: number, co
     // older chats: our private reply in the chat is the same text as the comment's private_reply
     const [sent] = await ds.query(
       `SELECT content FROM bot_message WHERE conversation_id = $1 AND source = 'social-private-reply'
-          AND created_at > NOW() - make_interval(days => $2::int) ORDER BY id DESC LIMIT 1`, [conversationId, COMMENT_DAYS]).catch(() => []);
+          AND created_at > COALESCE($3::timestamptz, NOW()) - make_interval(days => $2::int)
+          AND created_at <= COALESCE($3::timestamptz, NOW()) ORDER BY id DESC LIMIT 1`, [conversationId, COMMENT_DAYS, when]).catch(() => []);
     if (sent?.content) {
       [comment] = await ds.query(
         `SELECT comment_id, post_id, message, post_text, post_link FROM social_comment
