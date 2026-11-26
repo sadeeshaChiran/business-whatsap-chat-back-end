@@ -2,12 +2,12 @@ import { BillingService } from './billing.service';
 
 const DAY = 86_400_000;
 
-function run(sub: Record<string, unknown>, paidBefore: boolean) {
+function run(sub: Record<string, unknown>, paidBefore: boolean, usage?: { quota: number; remaining: number; percent: number }) {
   const saved: Record<string, unknown>[] = [];
   const self: any = {
     paymentRepository: { save: jest.fn(async (x: unknown) => x) },
     packageRepository: { findOne: jest.fn(async () => ({ id: 5, code: 'pro' })) },
-    quota: { ensure: jest.fn(async () => sub), forget: jest.fn() },
+    quota: { ensure: jest.fn(async () => sub), forget: jest.fn(), ...(usage ? { usage: jest.fn(async () => usage) } : {}) },
     dataSource: { query: jest.fn(async (sql: string) => (sql.includes('FROM platform_payment') ? (paidBefore ? [{ '?column?': 1 }] : []) : [])) },
     subscriptionRepository: { save: jest.fn(async (x: Record<string, unknown>) => { saved.push({ ...x }); return x; }) },
     companyRepository: { update: jest.fn() },
@@ -46,6 +46,21 @@ describe('a paid package starts at once when the current time was free', () => {
   it('Pro already PAID → an early renewal still adds the month after the current one (credits unchanged)', async () => {
     const before = old();
     const s = await run(before, true);
+    expect(new Date(s.period_end as Date).getTime()).toBeGreaterThan(now + 40 * DAY);
+    expect(s.token_period_start).toEqual(before.token_period_start);
+  });
+
+  it('Pro PAID but the credits are used up (Chu.lk 26 Nov) → the new month starts now with fresh credits', async () => {
+    const s = await run(old(), true, { quota: 210_000_000, remaining: 0, percent: 1.02 });
+    expect(Math.abs(new Date(s.period_start as Date).getTime() - now)).toBeLessThan(60_000);
+    expect(new Date(s.period_end as Date).getTime()).toBeLessThan(now + 32 * DAY);
+    expect(Math.abs(new Date(s.token_period_start as Date).getTime() - now)).toBeLessThan(60_000);
+    expect(s.warned_100_at).toBeNull();
+  });
+
+  it('Pro PAID with most credits left → still an early renewal (adds the month, credits unchanged)', async () => {
+    const before = old();
+    const s = await run(before, true, { quota: 210_000_000, remaining: 120_000_000, percent: 0.43 });
     expect(new Date(s.period_end as Date).getTime()).toBeGreaterThan(now + 40 * DAY);
     expect(s.token_period_start).toEqual(before.token_period_start);
   });

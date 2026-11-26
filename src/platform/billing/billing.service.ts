@@ -345,7 +345,12 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
         const currentTimePaid = samePackageStillValid && !sub.is_trial && sub.period_start
           ? await paidSubscriptionSince(this.dataSource, companyId, Number(payment.id), new Date(sub.period_start))
           : false;
-        const extend = samePackageStillValid && currentTimePaid;
+        // An early renewal when the credits are (almost) used up: the customer pays to get the bot working again, so the
+        // new month starts NOW with fresh credits (Chu.lk 26 Nov: paid Pro again with 0 credits left – the time went to
+        // Jan 5 but the credits stayed "used up" until Dec 5). The few unused days of the old month are not added.
+        const usage = samePackageStillValid && currentTimePaid ? await Promise.resolve().then(() => this.quota.usage(companyId)).catch(() => null) : null;
+        const creditsGone = Boolean(usage && usage.quota > 0 && (usage.remaining <= 0 || usage.percent >= 0.9));
+        const extend = samePackageStillValid && currentTimePaid && !creditsGone;
         const start = extend ? new Date(sub.period_end as Date) : now;
         if (!extend) {
           sub.period_start = now;
