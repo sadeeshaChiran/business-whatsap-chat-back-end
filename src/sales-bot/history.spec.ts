@@ -20,9 +20,14 @@ describe('chat history sent to the AI', () => {
     ]);
     expect(turns).toEqual([
       { role: 'customer', text: 'paata monada thiyenne?' },
-      { role: 'bot', text: '[3 photos sent] 📷 Chérie Bow Oversized T-Shirt – Pink, Red – Rs 1,590 | 📷 3d Massage Roller – Rs 495' },
+      { role: 'bot', text: '[photos sent ×3] 📷 Chérie Bow Oversized T-Shirt – Pink, Red – Rs 1,590 | 📷 3d Massage Roller – Rs 495' },
       { role: 'bot', text: 'Miss kamathi paata kiyanna 😊' },
     ]);
+  });
+
+  it('the merged line still starts with "[photo" (the bot skips it in its repeat check)', () => {
+    const [turn] = mergePhotoTurns([{ role: 'bot', text: '📷 A – Rs 1' }, { role: 'bot', text: '📷 B – Rs 2' }]);
+    expect(turn.text.startsWith('[photo')).toBe(true);
   });
 
   it('keeps a single photo as it is', () => {
@@ -36,7 +41,7 @@ describe('chat history sent to the AI', () => {
     rows.push(row(20, 'inbound', 'Black M'));
     const history = await chatHistory(repo(rows), 1, 99);
     expect(history.map((t) => t.role)).toEqual(['customer', 'bot', 'customer']);
-    expect(history[1].text).toContain('[15 photos sent] 📷 Hi Full Kit – Colour 0, Colour 1');
+    expect(history[1].text).toContain('[photos sent ×15] 📷 Hi Full Kit – Colour 0, Colour 1');
   });
 
   it('cuts long chats to about 6,000 characters (newest kept, at least 8 messages)', async () => {

@@ -110,10 +110,11 @@ export async function chatHistory(messageRepository: Repository<BotMessage>, con
 const PHOTO_LABEL = /^(?:\[photo\]\s*)?📷\s*/u;
 /**
  * The bot's photo bubbles ("📷 Chérie Bow T-Shirt – Pink – Rs 1,590" × 15) become ONE line in the history:
- * "[15 photos sent] 📷 Chérie Bow T-Shirt – Pink, Purple … – Rs 1,590" – the AI still knows what was shown, and the text
+ * "[photos sent ×15] 📷 Chérie Bow T-Shirt – Pink, Purple … – Rs 1,590" – the AI still knows what was shown, and the text
  * budget keeps real messages instead of photo labels (Moodlift: 59 % of the rows were labels).
  */
 export function mergePhotoTurns(turns: SalesBotTurn[]): SalesBotTurn[] {
+  if (process.env.SALES_BOT_MERGE_PHOTOS === '0') return turns;   // off: every photo label as its own line (for tests)
   const out: SalesBotTurn[] = [];
   let run: SalesBotTurn[] = [];
   const flush = () => {
@@ -131,7 +132,8 @@ export function mergePhotoTurns(turns: SalesBotTurn[]): SalesBotTurn[] {
     }
     // kept as "📷 <name> – <colours> – Rs …": the bot finds the products already shown in the chat by this pattern
     const lines = [...groups].map(([name, g]) => `📷 ${name}${g.variants.length ? ` – ${g.variants.join(', ')}` : ''}${g.prices.length ? ` – ${g.prices.join(' / ')}` : ''}`);
-    out.push({ role: run[0].role, text: `[${run.length} photos sent] ${lines.join(' | ')}` });
+    // starts with "[photo": the bot's repeat check skips photo lines (a 2nd photo set is not "the same answer again")
+    out.push({ role: run[0].role, text: `[photos sent ×${run.length}] ${lines.join(' | ')}` });
     run = [];
   };
   for (const turn of turns) {
