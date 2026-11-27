@@ -1,5 +1,5 @@
 import { commentCampaign } from './comment-campaign';
-import { SalesBotEngineService, photoPicks, sameOrderMessage } from './sales-bot-engine.service';
+import { SalesBotEngineService, WANTS_NEW_ORDER, alreadyPlacedMessage, changeNotedMessage, itemsKey, photoPicks, sameOrderMessage } from './sales-bot-engine.service';
 
 const ds = (tables: Record<string, unknown[]>) => ({
   query: jest.fn(async (sql: string) => {
@@ -32,26 +32,42 @@ describe('chat that started from a comment gets the post (bug 1)', () => {
   });
 });
 
-describe('after an order is placed (bug 4)', () => {
-  const engine = (orders: unknown[], items: Record<number, unknown[]>) => ({
-    messageRepository: { query: jest.fn(async () => orders) },
-    orderItemRepository: { find: jest.fn(async ({ where }: { where: { order_id: number } }) => items[where.order_id] ?? []) },
+describe('after an order is placed (bug 4) – never a second order by mistake', () => {
+  const recent = (rows: unknown[] | Error) => ({
+    orderRepository: { query: jest.fn(async (sql: string) => {
+      if (rows instanceof Error) throw rows;
+      // the old check used COALESCE(status, '') on the enum column → a SQL error → "no duplicate" every time
+      expect(sql).toContain('status::text');
+      return rows;
+    }) },
   });
-  const run = (self: unknown, ids: number[], asked?: number) =>
-    (SalesBotEngineService.prototype as any).sameAsRecentOrder.call(self, 9, ids.map((id) => ({ product_id: id })), asked);
-  const placed = { 120: [{ product_id: 7270, quantity: 1, product_name: 'Lunch Box Set' }, { product_id: 5870, quantity: 1, product_name: 'Drawing Pad' }] };
+  const run = (self: unknown) => (SalesBotEngineService.prototype as any).recentOpenOrder.call(self, 16, 5686);
 
-  it('the same products again within 24 hours → ask once which they mean', async () => {
-    const got = await run(engine([{ id: 120, order_no: 120 }], placed), [7270]);
-    expect(got).toEqual({ id: 120, no: 120, items: '1 x Lunch Box Set, 1 x Drawing Pad' });
-    expect(sameOrderMessage('sinhala_latin', '120', got.items)).toContain('order #120');
+  it('the newest open order of the last 24 hours, with its items', async () => {
+    const got = await run(recent([{ id: 671, order_no: 166, status: 'Processing', items: [{ product_id: 7199, variant: null, quantity: 1 }, { product_id: 5701, variant: null, quantity: 1 }] }]));
+    expect(got).toMatchObject({ id: 671, no: 166, status: 'Processing' });
+    expect(itemsKey(got.items)).toBe(itemsKey([{ product_id: 5701, quantity: 1 }, { product_id: 7199, quantity: 1 }]));
   });
 
-  it('already asked, a new product, or no recent order → the order goes on', async () => {
-    expect(await run(engine([{ id: 120, order_no: 120 }], placed), [7270], 120)).toBeNull();
-    expect(await run(engine([{ id: 120, order_no: 120 }], placed), [7270, 999])).toBeNull();
-    expect(await run(engine([], placed), [7270])).toBeNull();
-    expect(await run({ messageRepository: { query: async () => { throw new Error('db'); } } }, [7270])).toBeNull();
+  it('no open order, or the check fails → null (the order goes on)', async () => {
+    expect(await run(recent([]))).toBeNull();
+    expect(await run(recent(new Error('db')))).toBeNull();
+  });
+
+  it('a different quantity / option is not the same order', () => {
+    expect(itemsKey([{ product_id: 3452, quantity: 4 }])).not.toBe(itemsKey([{ product_id: 3452, quantity: 5 }]));
+    expect(itemsKey([{ product_id: 7193, variant: 'M', quantity: 1 }])).not.toBe(itemsKey([{ product_id: 7193, variant: 'L', quantity: 1 }]));
+  });
+
+  it('the customer asks for a second order in so many words', () => {
+    for (const text of ['aluth order ekak danna', 'තව එකක් ඕනේ', 'wenama order ekak', 'another one please', 'අලුත් order එකක්']) expect(WANTS_NEW_ORDER.test(text)).toBe(true);
+    for (const text of ['ow', 'මේ ඔර්ඩර් එක තමයි', 'ok thanks', 'ඔව්. Dr', 'Ektama add krnn']) expect(WANTS_NEW_ORDER.test(text)).toBe(false);
+  });
+
+  it('messages', () => {
+    expect(alreadyPlacedMessage('sinhala', 166)).toContain('#166');
+    expect(changeNotedMessage('sinhala', '125')).toContain('#125');
+    expect(sameOrderMessage('sinhala_latin', '120', '1 x Lunch Box Set')).toContain('order #120');
   });
 
   it('a customer photo that is exactly our photo gets no photo back', () => {

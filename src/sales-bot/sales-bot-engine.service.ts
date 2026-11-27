@@ -236,9 +236,26 @@ const MAX_MEDIA_BYTES = 15 * 1024 * 1024;
 
 /** The customer confirmed an order that is already placed: no second order, just say so. */
 export function alreadyPlacedMessage(language: string, orderId: number): string {
-  if (language === 'sinhala' || language === 'sinhala_latin') return `ඔයාගේ order එක (#${orderId}) දැනටමත් දාලා තියෙන්නේ 😊 අලුතින් වෙනසක් ඕනේ නම් කියන්න.`;
-  if (language === 'tamil') return `உங்கள் order (#${orderId}) ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது 😊 ஏதாவது மாற்ற வேண்டுமா என்று சொல்லுங்கள்.`;
-  return `Your order (#${orderId}) is already placed 😊 Tell us if you want to change anything.`;
+  if (language === 'sinhala') return `ඔයාගේ order එක (#${orderId}) දැනටමත් ලැබිලා තියෙන්නේ ✅ අපි ඒක එවනවා 😊 වෙනසක් ඕනේ නම් කියන්න. වෙනම තව order එකක් නම් "අලුත් order එකක්" කියන්න.`;
+  if (language === 'sinhala_latin') return `Oyage order eka (#${orderId}) dan labila thiyenne ✅ Api eka ewanawa 😊 Wenasak one nam kiyanna. Wenama thawa order ekak nam "aluth order ekak" kiyanna.`;
+  if (language === 'tamil') return `உங்கள் order (#${orderId}) ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது ✅ ஏதாவது மாற்ற வேண்டுமா என்று சொல்லுங்கள். தனி புதிய order என்றால் "புதிய order" என்று சொல்லுங்கள்.`;
+  return `Your order (#${orderId}) is already placed ✅ We will send it 😊 Tell us if you want to change anything. For a separate new order, just say "new order".`;
+}
+
+/** The earlier order is already being packed: the change went to the team as a note. */
+export function changeNotedMessage(language: string, no: string): string {
+  if (language === 'sinhala') return `ඔයාගේ order #${no} එකට මේ වෙනස්කම් අපේ team එකට දැනුම් දුන්නා ✅ ඔවුන් update කරලා confirm කරයි 😊`;
+  if (language === 'sinhala_latin') return `Oyage order #${no} ekata me wenaskam api team ekata kiwwa ✅ Eyala update karala confirm karai 😊`;
+  if (language === 'tamil') return `உங்கள் order #${no} க்கான மாற்றங்களை எங்கள் குழுவுக்கு தெரிவித்தோம் ✅ அவர்கள் புதுப்பித்து உறுதிப்படுத்துவார்கள் 😊`;
+  return `We passed these changes for your order #${no} to our team ✅ They will update it and confirm 😊`;
+}
+
+/** "aluth order ekak", "thawa ekak", "wenama order", "new order", "another one": the customer wants a second order. */
+export const WANTS_NEW_ORDER = /(?:aluth|alut|aluthin|අලුත්|අලුතින්|wenama|venama|වෙනම|thawa|tawa|තව|deweni|දෙවෙනි|2nd|second|another|new|separate|புதிய)\s*(?:order|ඕඩර්|ඇණවුම|ekak|එකක්|one)/i;
+
+/** Items compared by product, option and quantity. */
+export function itemsKey(rows: Array<{ product_id?: unknown; variant?: unknown; quantity?: unknown }>): string {
+  return rows.map((row) => `${Number(row.product_id ?? 0)}|${String(row.variant ?? '').trim().toLowerCase()}|${Number(row.quantity ?? 0)}`).sort().join(';');
 }
 
 /** After a change of a placed order: the AI's short line (without any amounts it worked out itself) + the saved order. */
@@ -716,7 +733,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // Save first, so a blocked order never gets a "confirmed!" message
     // the order in progress BEFORE this answer: while an order is being taken the chat is not flooded with product photos
     const orderBefore = session.pending_order?.items?.length ? session.pending_order : null;
-    const outcome = await this.applyActions(companyId, conversation, channelUser, result, session);
+    const outcome = await this.applyActions(companyId, conversation, channelUser, result, session, message);
     // the order summary ("Order එක confirm කරන්නද?") is shown now – new, or with other items than the summary before →
     // the photos of what she is ordering (one per order line, its colour) go WITH it, so she confirms what she sees.
     // Not again on the "ok" that confirms it.
@@ -859,6 +876,8 @@ export class SalesBotEngineService implements OnModuleInit {
 
   /** how many times in a row a reply was thrown away because the customer kept writing (per conversation) */
   private readonly redone = new Map<number, number>();
+  /** the update of an earlier Pending order made in handleOrder (the customer sent the order again with changes) */
+  private readonly lastMerge = new Map<number, { invoice?: number; totals?: Parameters<typeof changedOrderMessage>[2] }>();
 
   private async saveUsage(companyId: number, conversationId: number, result: SalesBotResult) {
     await this.usageRepository.save(this.usageRepository.create({
@@ -1362,7 +1381,7 @@ export class SalesBotEngineService implements OnModuleInit {
   /* ───────────────────────── Actions ───────────────────────── */
 
   private async applyActions(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    result: SalesBotResult, session: BotSession): Promise<Outcome> {
+    result: SalesBotResult, session: BotSession, customerText = ''): Promise<Outcome> {
     const intents = new Set<string>();
     let replyOverride: string | null = null;
     const invoiceOrderIds: number[] = [];
@@ -1445,7 +1464,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const order = orderToHandle(result, pendingNow);
     if (order) {
       const wantSummary = SUMMARY_WORDS.test(String(result.reply ?? '')) || (!String(pendingNow?.address ?? '').trim() && Boolean(String(order.address ?? '').trim()));
-      const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, order, session, wantSummary);
+      const orderOutcome = await this.handleOrder(companyId, conversation, channelUser, order, session, wantSummary, customerText, who);
       if (orderOutcome.startsWith('saved:')) {
         savedOrderId = Number(orderOutcome.slice(6));
         invoiceOrderIds.push(savedOrderId);
@@ -1454,6 +1473,19 @@ export class SalesBotEngineService implements OnModuleInit {
       if (orderOutcome.startsWith('duplicate:')) {
         replyOverride = alreadyPlacedMessage(result.language, Number(orderOutcome.slice(10)));
         intents.add('order_exists');
+      }
+      if (orderOutcome.startsWith('merged:')) {
+        // the customer sent the order again with changes: the Pending order was updated instead of a second order
+        const merged = this.lastMerge.get(conversation.id);
+        this.lastMerge.delete(conversation.id);
+        if (merged?.invoice) invoiceOrderIds.push(merged.invoice);
+        if (merged?.totals) replyOverride = changedOrderMessage(result.language, '', merged.totals);
+        intents.add('order_changed');
+      }
+      if (orderOutcome.startsWith('change_noted:')) {
+        // the earlier order is already being packed: the change goes to the team as a note – no second order
+        replyOverride = changeNotedMessage(result.language, orderOutcome.slice(13));
+        intents.add('change_request');
       }
       if (orderOutcome.startsWith('cart:') && session.pending_order) {
         // "order eke mokada thiyenne?" / "total eka?" before the address is in: the items so far + the total,
@@ -1486,7 +1518,7 @@ export class SalesBotEngineService implements OnModuleInit {
       }
       if (orderOutcome.startsWith('duplicate:')) {
         const [no, list] = orderOutcome.slice(10).split('|');
-        replyOverride = sameOrderMessage(result.language, no, list ?? '');
+        replyOverride = list ? sameOrderMessage(result.language, no, list) : alreadyPlacedMessage(result.language, Number(no));
       }
       if (orderOutcome.startsWith('unavailable:')) {
         replyOverride = unavailableMessage(result.language, orderOutcome.slice(12));
@@ -1634,7 +1666,7 @@ export class SalesBotEngineService implements OnModuleInit {
     const row = await this.findOpenBooking(companyId, channelUser.id, cancel.booking_id);
     if (!row) return false;
     const reason = String(cancel.reason ?? '').trim() || 'no reason given';
-    this.appendBookingNote(row, `❌ Cancelled by the customer: ${reason}`);
+    this.appendBookingNote(row, `❌ Customer order එක cancel කළා: ${reason}`);
     row.status = 'cancelled';
     await this.bookingRepository.save(row);
     await this.notifyTeam(companyId, 'booking_cancelled', 'MEDIUM', `Booking #${row.id} cancelled by the customer`,
@@ -1954,7 +1986,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (note.about === 'order') {
       const order = savedOrderId ? { id: savedOrderId } : await this.findOpenOrder(companyId, channelUser.id);
       if (order) {
-        await this.appendOrderNote(order.id, `📝 Special note: ${note.text}`);
+        await this.appendOrderNote(order.id, `📝 විශේෂ සටහන: ${note.text}`);
         await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note on order #${orderNo(order)}`, `${who}: ${note.text}`, conversation.id, order.id);
         return;
       }
@@ -1981,7 +2013,7 @@ export class SalesBotEngineService implements OnModuleInit {
     if (!order) return { intent: null };
 
     if (order.status !== 'Pending') {
-      await this.appendOrderNote(order.id, `🔔 Customer asked to change the order: ${request}`);
+      await this.appendOrderNote(order.id, `🔔 Customer order එක වෙනස් කරන්න ඉල්ලුවා: ${request}`);
       await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${orderNo(order)} (${order.status})`, `${who}: ${request}`, conversation.id, order.id);
       return order.status === 'Shipped'
         ? { intent: 'change_request', handoff: `Order #${orderNo(order)} already shipped – customer wants a change: ${request}` }
@@ -1997,7 +2029,7 @@ export class SalesBotEngineService implements OnModuleInit {
       // an item that is not available now → tell the customer, the order stays as it is
       if (priced.problem.startsWith('unavailable:')) return { intent: null, unavailable: priced.problem.slice(12) };
       if (priced.problem || !priced.items.length) {
-        await this.appendOrderNote(order.id, `🔔 Customer asked to change the order (not applied automatically: ${priced.problem || 'no items'}): ${request}`);
+        await this.appendOrderNote(order.id, `🔔 Customer order එක වෙනස් කරන්න ඉල්ලුවා (bot එකට වෙනස් කරන්න බැරි වුණා: ${priced.problem || 'items නැහැ'}): ${request}`);
         await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${orderNo(order)}`, `${who}: ${request}`, conversation.id, order.id);
         return { intent: 'change_request', hold: true };
       }
@@ -2022,7 +2054,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // "0764264699 / 0769906256": the first number is the order phone, the others go into the note (never glued together)
     const { phone: firstPhone, others: otherPhones } = splitOrderPhones(String(change.customer_phone ?? ''));
     const phone = String(firstPhone ?? '').replace(/[^\d+]/g, '');
-    if (otherPhones.length) await this.appendOrderNote(order.id, `📞 Other phone: ${otherPhones.join(' / ')}`);
+    if (otherPhones.length) await this.appendOrderNote(order.id, `📞 තවත් දුරකථන අංකයක්: ${otherPhones.join(' / ')}`);
     await this.orderRepository.update(order.id, {
       total_amount: subtotal + (fee ?? 0), delivery_fee: fee, total_weight_kg: weight || null,
       delivery_area: zone?.area ?? order.delivery_area,
@@ -2034,7 +2066,7 @@ export class SalesBotEngineService implements OnModuleInit {
       order_id: order.id, status: 'Pending', message: `Order changed by the customer in chat (sales bot): ${request}`,
     }));
     await this.stock?.syncOrderSafe(order.id);
-    await this.appendOrderNote(order.id, `✏️ Changed by the customer: ${request}`);
+    await this.appendOrderNote(order.id, `✏️ Customer order එක වෙනස් කළා: ${request}`);
     await this.notifyTeam(companyId, 'order_changed', 'MEDIUM', `Order #${orderNo(order)} changed by the customer`, `${who}: ${request}`, conversation.id, order.id);
     await this.advanceLead(conversation.id, 'won', { order_value: subtotal + (fee ?? 0), order_id: order.id });
     // a new invoice only when the order really changed (items, prices, total, name, address, phone) – the AI often
@@ -2058,12 +2090,12 @@ export class SalesBotEngineService implements OnModuleInit {
         order_id: order.id, status: 'Cancelled', message: `Cancelled by the customer in chat (sales bot): ${reason}`,
       }));
       await this.stock?.syncOrderSafe(order.id);
-      await this.appendOrderNote(order.id, `❌ Cancelled by the customer: ${reason}`);
+      await this.appendOrderNote(order.id, `❌ Customer order එක cancel කළා: ${reason}`);
       await this.notifyTeam(companyId, 'order_cancelled', 'MEDIUM', `Order #${orderNo(order)} cancelled by the customer`, `${who}: ${reason}`, conversation.id, order.id);
       await this.advanceLead(conversation.id, 'lost', { lost_reason: reason });
       return { intent: 'cancelled' };
     }
-    await this.appendOrderNote(order.id, `🔔 Customer requested cancellation: ${reason}`);
+    await this.appendOrderNote(order.id, `🔔 Customer order එක cancel කරන්න ඉල්ලුවා: ${reason}`);
     await this.notifyTeam(companyId, 'cancel_request', 'HIGH', `Cancellation request for order #${orderNo(order)} (${order.status})`, `${who}: ${reason}`, conversation.id, order.id);
     return order.status === 'Shipped'
       ? { intent: 'cancel_request', handoff: `Order #${orderNo(order)} already shipped – customer wants to cancel: ${reason}` }
@@ -2137,28 +2169,29 @@ export class SalesBotEngineService implements OnModuleInit {
     return { items: priced, problem: '' };
   }
 
-  /** A Pending order of this customer from the last 24 hours that already has every one of these products (null = none, or already asked). */
-  private async sameAsRecentOrder(channelUserId: number, items: PricedItem[], alreadyAsked?: number): Promise<{ id: number; no: number; items: string } | null> {
+  /** The newest order of this customer from the last 24 hours that is still open (Pending / Confirmed / Processing). */
+  private async recentOpenOrder(companyId: number, channelUserId: number): Promise<{ id: number; no: number; status: string;
+    items: Array<{ product_id: number; variant: string | null; quantity: number }> } | null> {
     try {   // a failing check never stops an order
-      const rows: Array<{ id: number; order_no: number | null }> = await this.messageRepository.query(
-        `SELECT id, order_no FROM bot_order WHERE bot_channel_user_id = $1 AND status = 'Pending' AND created_at > NOW() - INTERVAL '24 hours'
-          ORDER BY id DESC LIMIT 3`, [channelUserId]);
-      for (const row of rows ?? []) {
-        if (Number(row.id) === Number(alreadyAsked)) return null;
-        const placed = await this.orderItemRepository.find({ where: { order_id: Number(row.id) } });
-        const ids = new Set(placed.map((item) => Number(item.product_id)));
-        if (placed.length && items.every((item) => ids.has(Number(item.product_id)))) {
-          return { id: Number(row.id), no: orderNo(row), items: placed.map((item) => `${item.quantity} x ${item.product_name}`).join(', ').slice(0, 200) };
-        }
-      }
+      const rows: Array<{ id: number; order_no: number | null; status: string; items: unknown }> = await this.orderRepository.query(
+        `SELECT o.id, o.order_no, o.status::text AS status,
+                COALESCE(json_agg(json_build_object('product_id', i.product_id, 'variant', i.variant_text, 'quantity', i.quantity))
+                  FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+           FROM bot_order o LEFT JOIN bot_order_item i ON i.order_id = o.id
+          WHERE o.company_id = $1 AND o.bot_channel_user_id = $2 AND o.created_at > NOW() - INTERVAL '24 hours'
+            AND o.status::text IN ('Pending', 'Confirmed', 'Processing')
+          GROUP BY o.id ORDER BY o.id DESC LIMIT 1`, [companyId, channelUserId]);
+      const row = rows?.[0];
+      if (!row) return null;
+      const items = (typeof row.items === 'string' ? JSON.parse(row.items) : row.items) as Array<{ product_id: number; variant: string | null; quantity: number }>;
+      return Array.isArray(items) && items.length ? { id: Number(row.id), no: orderNo(row), status: row.status, items } : null;
     } catch {
       return null;
     }
-    return null;
   }
 
   private async handleOrder(companyId: number, conversation: BotConversation, channelUser: BotChannelUser,
-    order: SalesBotOrder, session: BotSession, wantSummary = false): Promise<string> {
+    order: SalesBotOrder, session: BotSession, wantSummary = false, customerText = '', who = ''): Promise<string> {
     // "ok" after the summary: the AI (often the small model) may send the order without the items / name / address it
     // already gave - the customer agreed to the summary they saw, so the missing parts come from that summary
     // name / phone / address / area the customer already gave stay in the order when the AI leaves them out
@@ -2236,14 +2269,45 @@ export class SalesBotEngineService implements OnModuleInit {
     }
     // the same products as an order this customer placed in the last 24 hours (Pending): never a second order by
     // mistake ("ok thanks, order eka danna" after it was placed, or the photos sent again) – ask once which they mean
-    if (!problem && items.length && (order.confirm_order || order.summary_shown === true || wantSummary)) {
-      const same = await this.sameAsRecentOrder(channelUser.id, items, previous?.same_as_asked);
-      if (same) {
-        session.pending_order = { ...pending, summary_shown: false, same_as_asked: same.id };
-        return `duplicate:${same.no}|${same.items}`;
+    // A recent open order of this customer (24 h, not shipped / delivered / cancelled) – the customer sending the
+    // order or the details again must never make a second order (Chu.lk #125/#128, #166/#167):
+    //   same items            → no new order, they are told it is already placed (a new one only when they say "aluth order")
+    //   changed (some same)   → Pending: the earlier order is updated (+ a note);  Confirmed / Processing: a note for the team
+    //   other products only   → a new order (+ a note on it that this customer has another order today)
+    const wantsNew = WANTS_NEW_ORDER.test(customerText);
+    const recent = !problem && items.length && !wantsNew ? await this.recentOpenOrder(companyId, channelUser.id) : null;
+    if (recent && (order.confirm_order || order.summary_shown === true || wantSummary)) {
+      const sameItems = itemsKey(recent.items) === itemsKey(items.map((item) => ({ product_id: item.product_id, variant: item.variant_name, quantity: item.quantity })));
+      if (sameItems) {
+        session.pending_order = null;
+        await this.appendOrderNote(recent.id, `🤖 Customer order එකම ආයෙත් එව්වා – අලුත් order එකක් හැදුවේ නැහැ`);
+        return `duplicate:${recent.no}`;
+      }
+      const overlap = items.some((item) => recent.items.some((row) => Number(row.product_id) === Number(item.product_id)));
+      if (overlap && order.confirm_order && previousShown) {
+        const list = items.map((item) => `${item.quantity} x ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''}`).join(', ');
+        if (recent.status === 'Pending') {
+          const change = await this.handleOrderChange(companyId, conversation, channelUser, {
+            order_id: recent.id, request: `Customer order එක වෙනස් කරලා ආයෙත් එව්වා (bot): ${list}`.slice(0, 400),
+            items: items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id ?? undefined, quantity: item.quantity })),
+            address: pending.address, customer_name: pending.customer_name, customer_phone: pending.customer_phone,
+            delivery_area: pending.delivery_area ?? undefined,
+          } as NonNullable<SalesBotResult['order_change']>, who);
+          if (change.intent === 'order_changed') {
+            session.pending_order = null;
+            this.lastMerge.set(conversation.id, { invoice: change.invoice, totals: change.totals });
+            return `merged:${recent.no}`;
+          }
+        } else {
+          await this.appendOrderNote(recent.id, `✏️ Customer order එක වෙනස් කරන්න ඉල්ලුවා (${recent.status} නිසා bot එක වෙනස් කළේ නැහැ): ${list}` +
+            `${pending.address ? ` | ලිපිනය: ${pending.address}` : ''}${pending.customer_phone ? ` | දුරකථන: ${pending.customer_phone}` : ''}`);
+          await this.notifyTeam(companyId, 'change_request', 'HIGH', `Change request for order #${recent.no} (${recent.status})`,
+            `${who}: ${list}`, conversation.id, recent.id);
+          session.pending_order = null;
+          return `change_noted:${recent.no}`;
+        }
       }
     }
-    if (previous?.same_as_asked) pending.same_as_asked = previous.same_as_asked;
     if (!order.confirm_order) {
       session.pending_order = pending;
       if (summaryShown) await this.advanceLead(conversation.id, 'proposal', { order_value: total });
@@ -2300,18 +2364,20 @@ export class SalesBotEngineService implements OnModuleInit {
 
     // the same customer already has this exact order (same items) from the last 24 hours that is not cancelled: a second
     // "ok" / the details sent again must not place it twice (#439 / #445, #433 / #434) – the customer is told it is placed
-    const same = await this.sameRecentOrder(companyId, channelUser.id, items);
+    const same = wantsNew ? null : await this.sameRecentOrder(companyId, channelUser.id, items);
     if (same) {
       session.pending_order = null;
       return `duplicate:${same}`;
     }
 
+    const otherToday = await this.recentOpenOrder(companyId, channelUser.id);
     const saved = await this.orderRepository.save(this.orderRepository.create({
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
       total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
       admin_note: ['Created by the sales bot.', orderDetailsNote(pending.details) || await this.customerDetailsMessage(conversation.id),
-        ...(pending.notes ?? []).map((text) => `📝 Special note: ${text} (${stamp()})`)].filter(Boolean).join('\n'),
+        ...(pending.notes ?? []).map((text) => `📝 විශේෂ සටහන: ${text} (${stamp()})`),
+        ...(otherToday ? [`⚠️ මේ customer ට අද order #${otherToday.no} (${otherToday.status}) එකකුත් තියෙනවා – එකට එවන්න පුළුවන්ද බලන්න (${stamp()})`] : [])].filter(Boolean).join('\n'),
       created_by: 'bot', agent_id: await this.customerAgent(conversation),
     }));
     await fillOrderNo(this.orderRepository, saved);
@@ -2347,7 +2413,7 @@ export class SalesBotEngineService implements OnModuleInit {
               FILTER (WHERE i.id IS NOT NULL), '[]') AS items
          FROM bot_order o LEFT JOIN bot_order_item i ON i.order_id = o.id
         WHERE o.company_id = $1 AND o.bot_channel_user_id = $2 AND o.created_at > NOW() - INTERVAL '24 hours'
-          AND COALESCE(o.status, '') NOT IN ('Cancelled', 'Canceled', 'Rejected', 'Returned')
+          AND COALESCE(o.status::text, '') NOT IN ('Cancelled', 'Canceled', 'Rejected', 'Returned')
         GROUP BY o.id ORDER BY o.id DESC LIMIT 5`, [companyId, channelUserId])).catch(() => [])) as Array<{ id: number; order_no: number | null; items: unknown }>;
     for (const order of recent) {
       const rows = (typeof order.items === 'string' ? JSON.parse(order.items) : order.items) as Array<{ product_id?: unknown; variant?: unknown; quantity?: unknown }>;

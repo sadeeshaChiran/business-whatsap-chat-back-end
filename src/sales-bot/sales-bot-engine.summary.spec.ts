@@ -100,3 +100,66 @@ describe('general matching rules', () => {
     expect(nameMatch('Washable Diaper Plain', 'Washable Diapper PLAIN (two Inserts)')).toBe(1);
   });
 });
+
+describe('the customer sends the order again (Chu.lk #125/#128, #166/#167)', () => {
+  const order = { items: [{ product_id: 5, quantity: 1 }], customer_name: 'Ruwini', address: 'No 42, Meegalewa', delivery_area: '*', summary_shown: true };
+  function setup(recent: any) {
+    const service = engine();
+    const saved: any[] = []; const notes: Array<[number, string]> = []; const changes: any[] = []; const team: string[] = [];
+    const repo = { create: (row: any) => row, save: async (row: any) => { saved.push(row); return { id: 99, ...row }; }, query: async () => [] };
+    Object.assign(service, { orderRepository: repo, orderItemRepository: repo, orderHistoryRepository: repo,
+      channelUserRepository: { update: async () => undefined }, pusherService: { trigger: () => undefined },
+      notifyTeam: async (_c: number, _k: string, _p: string, title: string) => { team.push(title); }, customerAgent: async () => null,
+      recentOpenOrder: async () => recent,
+      appendOrderNote: async (id: number, line: string) => { notes.push([id, line]); },
+      handleOrderChange: async (_c: number, _v: unknown, _u: unknown, change: any) => { changes.push(change); return { intent: 'order_changed', invoice: recent?.id, totals: { id: recent?.id, items: [], fee: 350, total: 3550 } }; },
+    });
+    return { service, saved, notes, changes, team };
+  }
+  const placed = (status: string, quantity = 1, product_id = 5) => ({ id: 671, no: 166, status, items: [{ product_id, variant: null, quantity }] });
+
+  it('same items again → no second order, told it is placed, a Sinhala note on the order', async () => {
+    const { service, saved, notes } = setup(placed('Processing'));
+    const session: any = {};
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, order, session, false, 'Ok')).toBe('duplicate:166');
+    expect(session.pending_order).toBeNull();
+    expect(saved).toHaveLength(0);
+    expect(notes[0]).toEqual([671, expect.stringContaining('අලුත් order එකක් හැදුවේ නැහැ')]);
+  });
+
+  it('changed (2 instead of 1) and the earlier order is Pending → it is updated, no second order', async () => {
+    const { service, saved, changes } = setup(placed('Pending'));
+    const session: any = {};
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { ...order, items: [{ product_id: 5, quantity: 2 }] }, session, false, '2k ona')).toBe('summary_shown');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true }, session, false, 'ow')).toBe('merged:166');
+    expect(changes[0]).toMatchObject({ order_id: 671, items: [{ product_id: 5, quantity: 2 }], address: 'No 42, Meegalewa' });
+    expect(saved).toHaveLength(0);
+    expect(session.pending_order).toBeNull();
+  });
+
+  it('changed and the earlier order is already Processing → a note + the team is told, no second order', async () => {
+    const { service, saved, notes, team } = setup(placed('Processing'));
+    const session: any = {};
+    await service.handleOrder(16, { id: 1 }, whatsappUser, { ...order, items: [{ product_id: 5, quantity: 2 }] }, session, false, '2k ona');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true }, session, false, 'ow')).toBe('change_noted:166');
+    expect(notes[0][1]).toContain('වෙනස් කරන්න ඉල්ලුවා');
+    expect(team[0]).toContain('#166');
+    expect(saved).toHaveLength(0);
+  });
+
+  it('"aluth order ekak" → a second order is made', async () => {
+    const { service, saved } = setup(placed('Processing'));
+    const session: any = {};
+    await service.handleOrder(16, { id: 1 }, whatsappUser, order, session, false, 'aluth order ekak danna');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true }, session, false, 'aluth order ekak danna')).toBe('saved:99');
+    expect(saved.length).toBeGreaterThan(0);
+  });
+
+  it('other products only → a new order with a note that there is another order today', async () => {
+    const { service, saved } = setup(placed('Processing', 1, 8));
+    const session: any = {};
+    await service.handleOrder(16, { id: 1 }, whatsappUser, order, session, false, 'meka ona');
+    expect(await service.handleOrder(16, { id: 1 }, whatsappUser, { confirm_order: true }, session, false, 'ow')).toBe('saved:99');
+    expect(saved[0].admin_note).toContain('order #166');
+  });
+});
