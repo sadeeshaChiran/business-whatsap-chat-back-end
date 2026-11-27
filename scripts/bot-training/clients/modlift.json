@@ -103,7 +103,7 @@
     },
     {
       "title": "First reply – full details with every photo",
-      "text": "FIRST find out WHICH product she means: the ad / boosted post she came from (CAMPAIGN products / ad text), a product photo she sent or replied to, or a product she named ('Full Kit', 'set', 'pant', 'Hi' = Hi Full Kit; 'Chérie', 'bow', 'ribbon' = Chérie).\n- The product IS known (ad, photo or name) → send its FULL message below, exactly as written (3 short parts with an empty line between them - keep them, do not add more empty lines), AND every photo of it (its product_id in photo_product_ids + photo_all = true) AND its size chart(s) (size_chart_product_ids). English / Tamil customers: the same lines translated.\n- NOT known ('price' / 'info' / 'Hello! Can I get more info on this?' with no ad, no photo, no product named) → only the short greeting with both products (style example 'Hi') and ask which one she likes; no long message, no photos.\n- Each full message only ONCE per chat.\nHI FULL KIT MESSAGE:\n🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – රු. 1,590 (XS–2XL)\n👖 Pant – රු. 1,490\n✨ Full Kit එකම – රු. 3,080\n🚚 Full Kit එකට Delivery FREE!\n\n🎨 T-Shirt එක පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n👖 Pant එක පාට 5යි – Red, Navy Blue, Peach, Olive Green, Black\n🌿 ඇඟට පහසු Cotton (GSM 190) – දවස පුරාම සුවපහසුවට අඳින්න පුළුවන් 😍\n\n📏 T-Shirt එක ටිකක් ලොකුවට (oversized) – මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න.\n👖 Pant (ඉන): 28-30 → M | 32-34 → L | 36-38 → XL | 40-42 → XXL\nමිස්ට කැමති පාටයි size එකයි කියන්න, අදම order කරන්න පුළුවන් 🥰\nCHÉRIE MESSAGE:\n🎀 Chérie Bow Oversized T-Shirt 😍\nXS / S / M / L / XL / 2XL – රු. 1,590\n3XL – රු. 1,690\n4XL – රු. 1,790\n5XL / 6XL – රු. 2,090\n7XL – රු. 2,190\n8XL – රු. 2,290\n\n🎨 පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n🌿 Cotton (GSM 190) – ඇඟට පහසුයි\n🚚 Delivery රු. 130 | T-Shirt 3ක් හෝ ඊට වැඩි නම් Delivery FREE!\n\n📏 ටිකක් ලොකුවට (oversized) – මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න.\nමිස්ට කැමති පාටයි size එකයි කියන්න 🥰"
+      "text": "FIRST find out WHICH product she means: the ad / boosted post she came from (CAMPAIGN products / ad text), a product photo she sent or replied to, or a product she named ('Full Kit', 'set', 'pant', 'Hi' = Hi Full Kit; 'Chérie', 'bow', 'ribbon' = Chérie).\n- The product IS known (ad, photo or name) → send its FULL message below, exactly as written (3 short parts with an empty line between them - keep them, do not add more empty lines), AND every photo of it (its product_id in photo_product_ids + photo_all = true) AND its size chart(s) (size_chart_product_ids). English / Tamil customers: the same lines translated.\n- NOT known ('price' / 'info' / 'Hello! Can I get more info on this?' with no ad, no photo, no product named) → only the short greeting with both products (style example 'Hi') and ask which one she likes; no long message, no photos.\n- Each full message only ONCE per chat.\nHI FULL KIT MESSAGE:\n🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – රු. 1,590 (XS–2XL)\n👖 Pant – රු. 1,490\n✨ Full Kit එකම – රු. 3,080\n🚚 Full Kit එකට Delivery FREE!\n\n🎨 T-Shirt එක පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n👖 Pant එක පාට 5යි – Red, Navy Blue, Peach, Olive Green, Black\n🌿 ඇඟට පහසු Cotton (GSM 190) – දවස පුරාම සුවපහසුවට අඳින්න පුළුවන් 😍\n\nSize තෝරා ගන්න අපහසු නම් අපිට උදව් කරන්න පුළුවන්..\n\nT-Shirt එක ටිකක් ලොකුවට තියෙන්නේ. මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න, ටිකක් ලොකුවට තියේවි... එහෙම අඳිද්දී තමයි ලස්සන..\n\nPant එක ඉනේ size එකට ගත්තොත් හරි:\n\nඉන 28-30 නම් M\nඉන 32-34 නම් L\nඉන 36-38 නම් XL\nඉන 40-42 නම් XXL\n\nඅවශ්‍ය නම් අපිට call කරන්න 😊\nCHÉRIE MESSAGE:\n🎀 Chérie Bow Oversized T-Shirt 😍\nXS / S / M / L / XL / 2XL – රු. 1,590\n3XL – රු. 1,690\n4XL – රු. 1,790\n5XL / 6XL – රු. 2,090\n7XL – රු. 2,190\n8XL – රු. 2,290\n\n🎨 පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n🌿 Cotton (GSM 190) – ඇඟට පහසුයි\n🚚 Delivery රු. 130 | T-Shirt 3ක් හෝ ඊට වැඩි නම් Delivery FREE!\n\n📏 ටිකක් ලොකුවට (oversized) – මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න.\nමිස්ට කැමති පාටයි size එකයි කියන්න 🥰"
     },
     {
       "title": "Delivery",
@@ -165,7 +165,7 @@
     },
     {
       "customer": "Price (Hi Full Kit ad / Hi set photo / Hello! Can I get more info on this?)",
-      "reply": "🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – රු. 1,590 (XS–2XL)\n👖 Pant – රු. 1,490\n✨ Full Kit එකම – රු. 3,080\n🚚 Full Kit එකට Delivery FREE!\n\n🎨 T-Shirt එක පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n👖 Pant එක පාට 5යි – Red, Navy Blue, Peach, Olive Green, Black\n🌿 ඇඟට පහසු Cotton (GSM 190) – දවස පුරාම සුවපහසුවට අඳින්න පුළුවන් 😍\n\n📏 T-Shirt එක ටිකක් ලොකුවට (oversized) – මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න.\n👖 Pant (ඉන): 28-30 → M | 32-34 → L | 36-38 → XL | 40-42 → XXL\nමිස්ට කැමති පාටයි size එකයි කියන්න, අදම order කරන්න පුළුවන් 🥰"
+      "reply": "🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – රු. 1,590 (XS–2XL)\n👖 Pant – රු. 1,490\n✨ Full Kit එකම – රු. 3,080\n🚚 Full Kit එකට Delivery FREE!\n\n🎨 T-Shirt එක පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n👖 Pant එක පාට 5යි – Red, Navy Blue, Peach, Olive Green, Black\n🌿 ඇඟට පහසු Cotton (GSM 190) – දවස පුරාම සුවපහසුවට අඳින්න පුළුවන් 😍\n\nSize තෝරා ගන්න අපහසු නම් අපිට උදව් කරන්න පුළුවන්..\n\nT-Shirt එක ටිකක් ලොකුවට තියෙන්නේ. මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න, ටිකක් ලොකුවට තියේවි... එහෙම අඳිද්දී තමයි ලස්සන..\n\nPant එක ඉනේ size එකට ගත්තොත් හරි:\n\nඉන 28-30 නම් M\nඉන 32-34 නම් L\nඉන 36-38 නම් XL\nඉන 40-42 නම් XXL\n\nඅවශ්‍ය නම් අපිට call කරන්න 😊"
     },
     {
       "customer": "Chérie T-shirt eke price kiyada? (first time)",
@@ -185,7 +185,7 @@
     },
     {
       "customer": "Can I get more info on this? (English customer, Full Kit ad)",
-      "reply": "🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – Rs 1,590 (XS–2XL)\n👖 Pant – Rs 1,490\n✨ Full Kit – Rs 3,080\n🚚 FREE delivery for the Full Kit!\n\n🎨 T-shirt in all 15 colours (see the colour chart 😊)\n👖 Pant in 5 colours – Red, Navy Blue, Peach, Olive Green, Black\n🌿 Soft cotton (GSM 190)\n\n📏 The T-shirt is oversized – take your usual size.\n👖 Pant by waist: 28-30 M | 32-34 L | 36-38 XL | 40-42 XXL\nWhich colours and size would you like? 🥰"
+      "reply": "🌸 Hi Full Kit (T-Shirt + Pant) ❤️\n👕 T-Shirt – Rs 1,590 (XS–2XL)\n👖 Pant – Rs 1,490\n✨ Full Kit – Rs 3,080\n🚚 FREE delivery for the Full Kit!\n\n🎨 T-shirt in all 15 colours (see the colour chart 😊)\n👖 Pant in 5 colours – Red, Navy Blue, Peach, Olive Green, Black\n🌿 Soft cotton (GSM 190)\n\nNeed help with the size? We are happy to help..\n\nThe T-shirt is a little big (oversized). Take the size you normally wear – it fits a little loose, and that is how it looks nice..\n\nTake the pant by your waist size:\n\nWaist 28-30 → M\nWaist 32-34 → L\nWaist 36-38 → XL\nWaist 40-42 → XXL\n\nCall us any time if you need help 😊"
     },
     {
       "customer": "pant eka pink thiyenawada?",
@@ -257,7 +257,7 @@
           "3,080",
           "Delivery FREE",
           "Olive Green",
-          "32-34 → L"
+          "ඉන 32-34 නම් L"
         ]
       }
     },
