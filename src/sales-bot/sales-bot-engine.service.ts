@@ -79,21 +79,12 @@ export async function chatHistory(messageRepository: Repository<BotMessage>, con
     .where('m.conversation_id = :conversationId', { conversationId })
     .andWhere('m.id < :beforeId', { beforeId })
     .orderBy('m.id', 'DESC')
-    // up to the last 40 messages, cut to a text budget below (bots often answer in several bubbles, so 20 rows was
-    // only a few customer turns and the bot "forgot" what was said a minute ago); older facts live in CHAT MEMORY,
+    // the last messages, cut to a text budget below (bots often answer in several bubbles, so 20 rows was only a few
+    // customer turns and the bot "forgot" what was said a minute ago); older facts live in CHAT MEMORY,
     // ORDER IN PROGRESS and OPEN ORDERS, which are sent with every message
     .limit(HISTORY_ROWS)
     .getMany();
-  // newest first: keep messages until the text budget is used, then put them back in order
-  let budget = HISTORY_CHARS;
-  const kept: typeof rows = [];
-  for (const row of rows) {
-    const size = Math.min(String(row.content ?? '').length, 900) + 20;
-    if (kept.length >= 8 && budget - size < 0) break;
-    budget -= size;
-    kept.push(row);
-  }
-  return kept.reverse().map((row) => {
+  const turns = mergePhotoTurns(rows.reverse().map((row) => {
     const caption = PLACEHOLDER.test(row.content.trim()) ? '' : row.content;
     // a photo says what it was: the customer's photo → the product it matched; the bot's photo → its label
     const content = row.message_type === 'image'
@@ -103,7 +94,54 @@ export async function chatHistory(messageRepository: Repository<BotMessage>, con
     if (row.direction === 'inbound') return { role: 'customer' as const, text: content ? withQuote(row, content.slice(0, 900)) : content };
     const isBot = ['sales_bot', 'bot', 'meta_bot', 'n8n'].includes(String(row.source ?? ''));
     return { role: isBot ? ('bot' as const) : ('agent' as const), text: content.length > 900 ? `${content.slice(0, 900)}…` : content };
-  }).filter((turn) => turn.text);
+  }).filter((turn) => turn.text));
+  // newest first: keep turns until the text budget is used (at least 8), then put them back in order
+  let budget = HISTORY_CHARS;
+  const kept: SalesBotTurn[] = [];
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const size = Math.min(turns[i].text.length, 900) + 20;
+    if (kept.length >= 8 && budget - size < 0) break;
+    budget -= size;
+    kept.push(turns[i]);
+  }
+  return kept.reverse();
+}
+
+const PHOTO_LABEL = /^(?:\[photo\]\s*)?📷\s*/u;
+/**
+ * The bot's photo bubbles ("📷 Chérie Bow T-Shirt – Pink – Rs 1,590" × 15) become ONE line in the history:
+ * "[15 photos sent] 📷 Chérie Bow T-Shirt – Pink, Purple … – Rs 1,590" – the AI still knows what was shown, and the text
+ * budget keeps real messages instead of photo labels (Moodlift: 59 % of the rows were labels).
+ */
+export function mergePhotoTurns(turns: SalesBotTurn[]): SalesBotTurn[] {
+  const out: SalesBotTurn[] = [];
+  let run: SalesBotTurn[] = [];
+  const flush = () => {
+    if (run.length < 2) { out.push(...run); run = []; return; }
+    const groups = new Map<string, { variants: string[]; prices: string[] }>();
+    for (const turn of run) {
+      const parts = turn.text.replace(PHOTO_LABEL, '').split(/\s+[–-]\s+/).map((part) => part.trim()).filter(Boolean);
+      const price = parts.length > 1 && /^(?:Rs|රු)/i.test(parts[parts.length - 1]) ? parts.pop()! : '';
+      const name = parts.shift() ?? '';
+      const group = groups.get(name) ?? { variants: [], prices: [] };
+      const variant = parts.join(' – ');
+      if (variant && !group.variants.includes(variant)) group.variants.push(variant);
+      if (price && !group.prices.includes(price)) group.prices.push(price);
+      groups.set(name, group);
+    }
+    // kept as "📷 <name> – <colours> – Rs …": the bot finds the products already shown in the chat by this pattern
+    const lines = [...groups].map(([name, g]) => `📷 ${name}${g.variants.length ? ` – ${g.variants.join(', ')}` : ''}${g.prices.length ? ` – ${g.prices.join(' / ')}` : ''}`);
+    out.push({ role: run[0].role, text: `[${run.length} photos sent] ${lines.join(' | ')}` });
+    run = [];
+  };
+  for (const turn of turns) {
+    if (turn.role !== 'customer' && PHOTO_LABEL.test(turn.text) && (!run.length || run[0].role === turn.role)) { run.push(turn); continue; }
+    flush();
+    if (turn.role !== 'customer' && PHOTO_LABEL.test(turn.text)) { run.push(turn); continue; }
+    out.push(turn);
+  }
+  flush();
+  return out;
 }
 
 export function splitReply(text: string, maxParts = 3): string[] {
@@ -142,8 +180,10 @@ function usageTools(tools: unknown): string {
 }
 const PLACEHOLDER = /^\[[^\]]*\]$/;
 /** Chat history sent to the bot with every message: at most this many messages and about this much text. */
-const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 40;
-const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 9000;
+// 60 rows: the photo bubbles become one line, so the text budget (not the row count) decides how much is sent
+const HISTORY_ROWS = Number(process.env.SALES_BOT_HISTORY_ROWS) || 60;
+// 6,000 characters (was 9,000): Sinhala text is ~1 token per character, so this saves ~2–3k tokens on a long chat
+const HISTORY_CHARS = Number(process.env.SALES_BOT_HISTORY_CHARS) || 6000;
 
 /** One product whose photos the bot sends; skipIfSentWithinMin = do not repeat a photo sent this recently. */
 type PhotoPick = { id: number; variant?: string | null; variantId?: number; skipIfSentWithinMin: number; /** an order line: its own option's photo */ orderLine?: boolean; /** order line: its own option + price on the label */ linePrice?: number;
