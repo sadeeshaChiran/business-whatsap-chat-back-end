@@ -176,7 +176,7 @@ export class PlanService {
     const hit = this.creditHolders.get(companyId);
     if (hit && Date.now() - hit.at < 30_000) return hit.active;
     const rows: Array<{ active: boolean }> = await this.packageRepository.manager.query(
-      `SELECT EXISTS (SELECT 1 FROM token_adjustment WHERE company_id = $1 AND tokens > 0 AND expires_at > NOW()) AS active`, [companyId]).catch(() => []);
+      `SELECT COALESCE(SUM(tokens), 0) > 0 AS active FROM token_adjustment WHERE company_id = $1 AND expires_at > NOW()`, [companyId]).catch(() => []);
     const active = Boolean(rows[0]?.active);
     this.creditHolders.set(companyId, { at: Date.now(), active });
     return active;

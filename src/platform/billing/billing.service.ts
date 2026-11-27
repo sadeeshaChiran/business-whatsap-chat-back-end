@@ -356,6 +356,8 @@ export class BillingService implements OnModuleInit, OnModuleDestroy {
           sub.period_start = now;
           if (sub.package_id !== pkg.id || samePackageStillValid || sub.is_trial) {
             // new package, or paid time replacing free time → fresh credit month with the paid quota
+            // what the old month took from bought packs is written off first (else the pack counts again)
+            await Promise.resolve().then(() => this.quota.settlePacks(sub, now)).catch(() => undefined);
             sub.token_period_start = now;
             sub.token_period_end = addMonths(now, 1);
             sub.warned_80_at = null;

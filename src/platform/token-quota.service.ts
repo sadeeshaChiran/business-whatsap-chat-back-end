@@ -90,6 +90,7 @@ export class TokenQuotaService implements OnModuleInit {
       changed = true;
     }
     if (new Date(sub.token_period_end) <= now) {
+      await this.settlePacks(sub, new Date(sub.token_period_end));
       let start = new Date(sub.token_period_end);
       let end = addMonths(start, 1);
       while (end <= now) { start = end; end = addMonths(start, 1); }
@@ -106,6 +107,42 @@ export class TokenQuotaService implements OnModuleInit {
     }
     if (changed) sub = await this.subscriptionRepository.save(sub);
     return sub;
+  }
+
+  /**
+   * Bought credit packs (with an end date) count in every credit month until they end, but "used" starts again with each
+   * credit month – so before a new credit month starts, what the old month took from the packs is written off
+   * (a minus row with the same end date). Chu.lk 27 Nov: the 1,500 pack used up in the old month showed as 1,500 again.
+   * Order the old month used: the package credits first, then credits the super admin gave this month, then packs.
+   */
+  async settlePacks(sub: CompanySubscription, until: Date): Promise<void> {
+    try {
+      const companyId = Number(sub.company_id);
+      const start = new Date(sub.token_period_start);
+      if (!(until > start)) return;
+      const [packs] = await this.dataSource.query(
+        `SELECT COALESCE(SUM(tokens), 0)::bigint AS net, MAX(expires_at) FILTER (WHERE tokens > 0) AS last_end
+           FROM token_adjustment WHERE company_id = $1 AND expires_at IS NOT NULL AND expires_at > $2`, [companyId, until]);
+      const left = Number(packs?.net ?? 0);
+      if (!(left > 0) || !packs?.last_end) return;
+      const [grants] = await this.dataSource.query(
+        `SELECT COALESCE(SUM(tokens), 0)::bigint AS t FROM token_adjustment
+          WHERE company_id = $1 AND expires_at IS NULL AND created_at >= $2 AND created_at < $3`, [companyId, start, until]);
+      const charged = await this.planService.chargedTokensSql();
+      const [usedRow] = await this.dataSource.query(
+        `SELECT COALESCE(SUM(${charged}), 0)::bigint AS used FROM bot_ai_usage WHERE company_id = $1 AND created_at >= $2 AND created_at < $3`,
+        [companyId, start, until]);
+      const pkg = sub.package_id ? await this.packageRepository.findOne({ where: { id: sub.package_id } }) : null;
+      const freeEnded = pkg?.bot_days != null && sub.bot_free_until != null && new Date(sub.bot_free_until) <= until;
+      const quota = freeEnded ? 0 : Number(pkg?.tokens_per_month ?? 0);
+      const taken = Math.min(left, Math.max(0, Number(usedRow?.used ?? 0) - quota - Number(grants?.t ?? 0)));
+      if (taken <= 0) return;
+      await this.dataSource.query(
+        `INSERT INTO token_adjustment (company_id, tokens, reason, expires_at, created_by_user_id) VALUES ($1, $2, $3, $4, NULL)`,
+        [companyId, -taken, `Used in the credit month ${start.toISOString().slice(0, 10)} – ${until.toISOString().slice(0, 10)}`, packs.last_end]);
+    } catch (error) {
+      this.logger.warn(`settle credit packs for ${sub.company_id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /* ───────────────────────── free trials ───────────────────────── */
@@ -125,6 +162,7 @@ export class TokenQuotaService implements OnModuleInit {
     if (paying) throw new BadRequestException(`This company pays for ${current!.name} until ${new Date(sub.period_end as Date).toISOString().slice(0, 10)}. Give extra credits instead.`);
     const free = await this.planService.byCode('free');
     const end = new Date(now.getTime() + days * 86_400_000);
+    await this.settlePacks(sub, now);
     await this.dataSource.query(`UPDATE company_trial SET ended_at = NOW() WHERE company_id = $1 AND ended_at IS NULL`, [companyId]);
     Object.assign(sub, {
       package_id: pkg.id, billing_cycle: 'monthly', status: 'active', period_start: now, period_end: end,
@@ -159,6 +197,7 @@ export class TokenQuotaService implements OnModuleInit {
     const fallback = (sub.fallback_package_id ? await this.packageRepository.findOne({ where: { id: sub.fallback_package_id } }) : null) ?? (await this.planService.byCode('free'));
     if (!fallback) return false;
     const now = new Date();
+    await this.settlePacks(sub, now);
     Object.assign(sub, {
       package_id: fallback.id, status: 'active', period_start: now, period_end: Number(fallback.price_monthly) > 0 ? addMonths(now, 1) : null,
       is_trial: false, fallback_package_id: null, trial_note: null,
@@ -252,7 +291,7 @@ export class TokenQuotaService implements OnModuleInit {
       [companyId, usedSince],
     ).catch(() => [{ used: 0 }]);
     const [activeRow] = await this.dataSource.query(
-      `SELECT EXISTS (SELECT 1 FROM token_adjustment WHERE company_id = $1 AND tokens > 0 AND expires_at > NOW()) AS active`, [companyId],
+      `SELECT COALESCE(SUM(tokens), 0) > 0 AS active FROM token_adjustment WHERE company_id = $1 AND expires_at > NOW()`, [companyId],
     ).catch(() => [{ active: false }]);
     const [extraRow] = await this.dataSource.query(
       `SELECT COALESCE(SUM(tokens), 0)::bigint AS extra
