@@ -137,7 +137,7 @@ export function lengthLimit(base: number, reply: string, context: SalesBotContex
 }
 
 /** A handoff that is right: payment slip to check, an upset / complaining customer, a damaged or missing order. */
-const RIGHT_HANDOFF = /bank|transfer|receipt|slip|verify|payment\s+proof|upset|angry|complain|refund|return|damag|broken|missing|not\s+received|wrong\s+item|problem/i;
+const RIGHT_HANDOFF = /bank|transfer|receipt|slip|verify|payment\s+proof|upset|angry|complain|refund|return|damag|broken|missing|not\s+received|wrong\s+item|problem|බැංකු|රිසිට්|slip|කේන්ති|තරහ|පැමිණිලි|කැඩ|නැති වෙලා|ලැබුණේ නැ|වැරදි|ප්‍රශ්න/i;
 
 /** Score one bot answer. orderItems: order id -> product ids (for no_duplicate_order_of). */
 export function scoreCase(
