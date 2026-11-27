@@ -96,3 +96,11 @@ describe('bot-eval scoring – fair checks', () => {
     expect(scoreCase(testCase({}), result({ reply: 'ok', order: { items: [{ product_id: 4, quantity: 1 }] } }), ctx, []).checks.no_sold_out).toBe(false);
   });
 });
+
+describe('bot-eval scoring – Sinhala handoff notes', () => {
+  it('a complaint written in Sinhala is a right handoff', () => {
+    const c = testCase({ no_handoff: true });
+    expect(scoreCase(c, result({ reply: 'ok', handoff: { needed: true, reason: 'පාරිභෝගිකයාගේ පැමිණිල්ලක් හෝ ගැටළුවක්' } }), context, []).checks.no_handoff).toBe(true);
+    expect(scoreCase(c, result({ reply: 'ok', handoff: { needed: true, reason: 'size එක අහනවා' } }), context, []).checks.no_handoff).toBe(false);
+  });
+});
