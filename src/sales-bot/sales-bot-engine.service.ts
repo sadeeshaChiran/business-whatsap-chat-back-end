@@ -325,7 +325,8 @@ export function nameMatch(a: string, b: string): number {
 }
 
 /** The AI's text says "here is the order summary" (any language): the real summary must come with it. */
-export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்/i;
+// also "order එකේ විස්තර මෙන්න", "ඇණවුමේ විස්තර මෙන්න", "here is your order:" (Moodlift 27 Nov: that line went out with no summary)
+export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்|(?:order|ඕඩර්) (?:එකේ|eke|ekē) (?:සම්පූර්ණ |sampurna )?(?:විස්තර|wisthara|vistara|details)|ඇණවුම(?:ේ)? (?:සම්පූර්ණ )?(?:විස්තර )?මෙන්න|ඔබේ ඇණවුම මෙන්න|සම්පූර්ණ විස්තර (?:ටික )?මෙන්න|here(?:'s| is) (?:your |the )?(?:full |updated )?order\b/i;
 
 /** The customer already has this order (placed today): the same again, or a new one? */
 export function sameOrderMessage(language: string, no: string, items: string): string {
@@ -688,7 +689,7 @@ export class SalesBotEngineService implements OnModuleInit {
       this.logger.error(`sales bot request failed (conversation ${conversationId}): ${error instanceof Error ? error.message : String(error)}`);
       const language = session.language ?? 'english';
       await this.sendText(companyId, conversation, channelUser, channel, sorryMessage(language), 'handoff', simulated);
-      await this.handoff(companyId, conversation, channelUser, 'bot_error', 'The bot could not answer – please reply to the customer.');
+      await this.handoff(companyId, conversation, channelUser, 'bot_error', 'Bot එකට උත්තරයක් දෙන්න බැරි වුණා – කරුණාකර customer ට reply කරන්න.');
       await this.conversationRepository.query(
         `UPDATE bot_conversation SET followup_status = 'stopped', followup_due_at = NULL WHERE id = $1 AND followup_status = 'waiting'`, [conversationId]);
       await markAnswered();
@@ -1444,10 +1445,10 @@ export class SalesBotEngineService implements OnModuleInit {
     const lead = result.lead;
     if (lead && (lead.need || lead.notes)) {
       const lines = [
-        '🎯 Lead collected by the sales bot',
-        lead.need ? `Need: ${lead.need}` : '', lead.budget ? `Budget: ${lead.budget}` : '',
-        lead.location ? `Location: ${lead.location}` : '', lead.contact_time ? `Best time to contact: ${lead.contact_time}` : '',
-        lead.customer_name ? `Name: ${lead.customer_name}` : '', lead.notes ? `Notes: ${lead.notes}` : '',
+        '🎯 Sales bot එක එකතු කරපු lead එකක්',
+        lead.need ? `අවශ්‍ය දේ: ${lead.need}` : '', lead.budget ? `Budget එක: ${lead.budget}` : '',
+        lead.location ? `ප්‍රදේශය: ${lead.location}` : '', lead.contact_time ? `කතා කරන්න හොඳ වෙලාව: ${lead.contact_time}` : '',
+        lead.customer_name ? `නම: ${lead.customer_name}` : '', lead.notes ? `සටහන: ${lead.notes}` : '',
       ].filter(Boolean);
       await this.noteRepository.save(this.noteRepository.create({
         company_id: companyId, bot_channel_user_id: channelUser.id, content: lines.join('\n'),
@@ -1526,7 +1527,7 @@ export class SalesBotEngineService implements OnModuleInit {
       }
       if (orderOutcome.startsWith('blocked:')) {
         replyOverride = holdMessage(result.language);
-        await this.handoff(companyId, conversation, channelUser, 'order_check', `Order needs a check: ${orderOutcome.slice(8)}`);
+        await this.handoff(companyId, conversation, channelUser, 'order_check', `Order එක check කරන්න ඕනේ: ${orderOutcome.slice(8)}`);
         intents.add('handoff');
       }
     }
@@ -1585,7 +1586,7 @@ export class SalesBotEngineService implements OnModuleInit {
     }
 
     if (result.handoff?.needed && !intents.has('handoff')) {
-      await this.handoff(companyId, conversation, channelUser, 'bot_handoff', result.handoff.reason || 'The bot asked for a person.');
+      await this.handoff(companyId, conversation, channelUser, 'bot_handoff', result.handoff.reason || 'Bot එක team එකේ කෙනෙක්ව ඉල්ලුවා.');
       intents.add('handoff');
     }
     return { intent: intents.size ? [...intents].join(',') : null, replyOverride, invoiceOrderIds, invoiceBookingIds, unavailableItem };
@@ -1998,7 +1999,7 @@ export class SalesBotEngineService implements OnModuleInit {
       }
     }
     await this.noteRepository.save(this.noteRepository.create({
-      company_id: companyId, bot_channel_user_id: channelUser.id, content: `📝 Special note from the customer: ${note.text}`,
+      company_id: companyId, bot_channel_user_id: channelUser.id, content: `📝 Customer ගේ විශේෂ සටහන: ${note.text}`,
       created_by_user_id: null, created_by_name: 'Sales bot',
     }));
     await this.notifyTeam(companyId, 'special_note', 'MEDIUM', `Special note from ${who}`, note.text, conversation.id);
@@ -2263,7 +2264,7 @@ export class SalesBotEngineService implements OnModuleInit {
     // the shop's own form already holds every number; without a form the second number is kept as a note
     if (!details.length) {
       for (const other of otherPhones) {
-        const line = `Second phone number: ${other}`;
+        const line = `📞 තවත් දුරකථන අංකයක්: ${other}`;
         if (!pending.notes.includes(line)) pending.notes = [...pending.notes, line].slice(-10);
       }
     }
@@ -2375,7 +2376,7 @@ export class SalesBotEngineService implements OnModuleInit {
       company_id: companyId, bot_channel_user_id: channelUser.id, customer_name: name, customer_phone: phone,
       address, status: 'Pending', total_amount: total, delivery_fee: fee, payment_method: pending.payment_method,
       total_weight_kg: totalWeight || null, delivery_area: pending.delivery_area,
-      admin_note: ['Created by the sales bot.', orderDetailsNote(pending.details) || await this.customerDetailsMessage(conversation.id),
+      admin_note: ['🤖 Sales bot එකෙන් හැදුව order එකක්.', orderDetailsNote(pending.details) || await this.customerDetailsMessage(conversation.id),
         ...(pending.notes ?? []).map((text) => `📝 විශේෂ සටහන: ${text} (${stamp()})`),
         ...(otherToday ? [`⚠️ මේ customer ට අද order #${otherToday.no} (${otherToday.status}) එකකුත් තියෙනවා – එකට එවන්න පුළුවන්ද බලන්න (${stamp()})`] : [])].filter(Boolean).join('\n'),
       created_by: 'bot', agent_id: await this.customerAgent(conversation),
@@ -2433,9 +2434,11 @@ export class SalesBotEngineService implements OnModuleInit {
     if (settings.bot_off_on_handoff) {
       await this.channelUserRepository.update(channelUser.id, { bot_enabled: false, manual_mode: true });
     }
+    // the Client note is in Sinhala (the shop team reads it); the notification title keeps the English label
     const label = reason === 'order_check' ? 'Order needs a check' : reason === 'bot_error' ? 'Bot could not reply' : 'Customer needs a person';
+    const noteLabel = reason === 'order_check' ? 'Order එක check කරන්න ඕනේ' : reason === 'bot_error' ? 'Bot එකට reply කරන්න බැරි වුණා' : 'Customer ට කෙනෙක් කතා කරන්න ඕනේ';
     await this.noteRepository.save(this.noteRepository.create({
-      company_id: companyId, bot_channel_user_id: channelUser.id, content: `🙋 ${label}: ${note}`,
+      company_id: companyId, bot_channel_user_id: channelUser.id, content: `🙋 ${noteLabel}: ${note}`,
       created_by_user_id: null, created_by_name: 'Sales bot',
     }));
     await this.notifyTeam(companyId, 'handoff', 'HIGH', `${label} – ${channelUser.display_name || channelUser.external_user_id}`,
