@@ -366,7 +366,7 @@ export function nameMatch(a: string, b: string): number {
 
 /** The AI's text says "here is the order summary" (any language): the real summary must come with it. */
 // also "order එකේ විස්තර මෙන්න", "ඇණවුමේ විස්තර මෙන්න", "here is your order:" (Moodlift 27 Nov: that line went out with no summary)
-export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்|(?:order|ඕඩර්) (?:එකේ|eke|ekē) (?:සම්පූර්ණ |sampurna )?(?:විස්තර|wisthara|vistara|details)|ඇණවුම(?:ේ)? (?:සම්පූර්ණ )?(?:විස්තර )?මෙන්න|ඔබේ ඇණවුම මෙන්න|සම්පූර්ණ විස්තර (?:ටික )?මෙන්න|here(?:'s| is) (?:your |the )?(?:full |updated )?order\b/i;
+export const SUMMARY_WORDS = /summary|සාරාංශ|order (?:එක|eka) (?:මෙන්න|mehemai|methana|මෙහෙමයි|මෙතන)|(?:ඕඩර්|ඇණවුම) එක (?:මෙන්න|මෙහෙමයි)|(?:මෙන්න|meka thamai|mehemai) (?:order|ඕඩර්)|order details|ஆர்டர் விவர|சுருக்கம்|(?:order|ඕඩර්) (?:එකේ|eke|ekē) (?:සම්පූර්ණ |sampurna )?(?:විස්තර|wisthara|vistara|details)|ඇණවුම(?:ේ)? (?:සම්පූර්ණ )?(?:විස්තර )?මෙන්න|ඔබේ ඇණවුම මෙන්න|සම්පූර්ණ විස්තර (?:ටික )?මෙන්න|here(?:'s| is) (?:your |the )?(?:full |updated )?order\b/i;
 
 /** The customer already has this order (placed today): the same again, or a new one? */
 export function sameOrderMessage(language: string, no: string, items: string): string {

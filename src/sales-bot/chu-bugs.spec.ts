@@ -82,7 +82,7 @@ describe('the "here is your order" line always gets the summary (Moodlift 27 Nov
   it('knows the lines that promise the order summary', () => {
     const { SUMMARY_WORDS } = require('./sales-bot-engine.service');
     for (const line of ['හරි මිස්, order එකේ විස්තර මෙන්න 😊', 'ඇණවුමේ විස්තර මෙන්න.', 'Thank you Sihana, here is your order:',
-      'හරි මිස්, සම්පූර්ණ විස්තර මෙන්න. මේ ටික බලලා confirm කරන්න.', 'ඔබේ ඇණවුම මෙන්න:', 'Order eke wisthara mehemai']) {
+      'හරි මිස්, සම්පූර්ණ විස්තර මෙන්න. මේ ටික බලලා confirm කරන්න.', 'ඔබේ ඇණවුම මෙන්න:', 'Order eke wisthara mehemai', 'හරි සර්, order එක මෙහෙමයි.']) {
       expect(SUMMARY_WORDS.test(line)).toBe(true);
     }
     for (const line of ['Chérie Bow T-Shirt එකේ විස්තර මෙන්න:', 'ඇණවුම දාන්න මෙන්න මේ විස්තර ටික එවන්න:', 'බැංකු විස්තර මෙන්න:', 'මෙන්න size විස්තර:']) {
