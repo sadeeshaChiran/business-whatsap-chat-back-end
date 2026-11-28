@@ -90,3 +90,17 @@ describe('the "here is your order" line always gets the summary (Moodlift 27 Nov
     }
   });
 });
+
+describe('Full Kit options: the AI left out a word (Moodlift 28 Nov: "size / colour" asked 7 times)', () => {
+  const { looseOptionIndex } = require('./sales-bot-engine.service');
+  const labels = ['T-Shirt / Navy Blue / 2XL', 'T-Shirt / Navy Blue / XL', 'Pant / Navy Blue / XL', 'Pant / Navy Blue / XXL', 'T-Shirt / Red / M'];
+  it('finds the one option that has every word', () => {
+    expect(looseOptionIndex(labels, 'Navy Blue / 2XL T-Shirt')).toBe(0);
+    expect(looseOptionIndex(labels, 'Pant Navy Blue 2XL')).toBe(3);   // 2XL = XXL
+    expect(looseOptionIndex(labels, 'Red M')).toBe(4);
+  });
+  it('does not guess when two options fit', () => {
+    expect(looseOptionIndex(labels, 'Navy Blue / XL')).toBe(-1);
+    expect(looseOptionIndex(labels, 'Green M')).toBe(-1);
+  });
+});
