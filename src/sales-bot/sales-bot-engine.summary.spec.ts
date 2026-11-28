@@ -163,3 +163,23 @@ describe('the customer sends the order again (Chu.lk #125/#128, #166/#167)', () 
     expect(saved[0].admin_note).toContain('order #166');
   });
 });
+
+describe('size charts', () => {
+  it('two T-shirts with the same chart picture → the picture goes once (Ama Fashion 28 Nov: the same chart twice)', async () => {
+    const service = engine();
+    const chart = 'https://api.agentmetra.lk/v1/api/public/product-images/38-1q1g9a4r.jpg';
+    const delivered: string[] = [];
+    Object.assign(service, {
+      productRepository: { find: async () => [
+        { id: 7304, name: 'Week-End Cat Oversized T-Shirt', size_charts: [chart], is_available: true },
+        { id: 7306, name: 'Heart Oversized T-Shirt', size_charts: [chart], is_available: true }] },
+      messageRepository: { query: async () => [], create: (row: any) => row, save: async (row: any) => row },
+      deliverImage: async (...args: any[]) => { delivered.push(args[6].url); return { messageId: 'm1', failed: false }; },
+      touch: async () => undefined,
+    });
+    const sent = await service.sendSizeCharts(39, { id: 1 }, whatsappUser, null, true,
+      { aiIds: [7304, 7306], customerText: 'Hello! Can I get more info on this?', inChat: [] });
+    expect(sent).toBe(1);
+    expect(delivered).toEqual([chart]);
+  });
+});

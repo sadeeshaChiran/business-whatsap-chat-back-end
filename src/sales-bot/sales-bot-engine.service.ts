@@ -1373,10 +1373,14 @@ export class SalesBotEngineService implements OnModuleInit {
     // → a chart that is already in the chat is not sent again for 2 hours (one chat got the same chart 14 times)
     const repeatAfterMin = asksForSizeChart(ask.customerText) ? 1 : 120;
     let sent = 0;
+    // products that share ONE chart picture (every T-shirt of a shop) → that picture goes once, not once per product
+    const sentNow = new Set<string>();
     for (const id of ids) {
       const product = withCharts.find((p) => Number(p.id) === id);
       if (!product) continue;
       for (const url of productSizeCharts(product).slice(0, 2)) {
+        if (sentNow.has(url)) continue;
+        sentNow.add(url);
         if (recent.some((row) => row.media_url === url && Number(row.age_min) < repeatAfterMin)) continue;
         const file = simulated ? null : await this.photoFile(url);
         if (!simulated && !file && (!social || social === 'messenger')) {
