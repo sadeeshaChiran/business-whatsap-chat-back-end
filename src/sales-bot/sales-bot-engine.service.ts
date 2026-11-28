@@ -353,6 +353,16 @@ export function optionKey(text: string): string {
     .split(/[^a-z0-9\u0D80-\u0DFF\u0B80-\u0BFF.]+/).filter(Boolean).sort().join(' ');
 }
 
+const SIZE_ALIAS: Record<string, string> = { xxl: '2xl', xxxl: '3xl', xxxxl: '4xl', xxxxxl: '5xl' };
+/** The one option whose words include every word the AI wrote ("2XL" = "XXL"); -1 when none or more than one fit. */
+export function looseOptionIndex(labels: string[], wanted: string): number {
+  const words = (text: string) => optionKey(text).split(' ').filter(Boolean).map((w) => SIZE_ALIAS[w] ?? w);
+  const want = words(wanted);
+  if (!want.length) return -1;
+  const hits = labels.map((label, i) => ({ i, set: new Set(words(label)) })).filter(({ set }) => want.every((w) => set.has(w)));
+  return hits.length === 1 ? hits[0].i : -1;
+}
+
 /** Words of a product name ("Brand X Cotton Shirt (L) 2 Pcs" → brand, x, cotton, shirt, l, 2, pcs). */
 export function nameWords(name: string): string[] {
   // "Diapper" = "diaper", "pants" = "pant": typos and plurals in shop product names don't matter
@@ -1543,7 +1553,19 @@ export class SalesBotEngineService implements OnModuleInit {
         // summary" line (with no summary to show) is replaced by the short "please send your …" message.
         const said = String(result.reply ?? '').trim();
         if (order.confirm_order || !said || SUMMARY_WORDS.test(said)) {
-          replyOverride = askMissingMessage(result.language, orderOutcome.slice(4).split(','));
+          const ask = askMissingMessage(result.language, orderOutcome.slice(4).split(','));
+          const lastBot = await this.messageRepository.findOne({ where: { conversation_id: conversation.id, direction: 'outbound' }, order: { id: 'DESC' } }).catch(() => null);
+          if (String(lastBot?.content ?? '').trim() !== ask) replyOverride = ask;
+          else if (said && !SUMMARY_WORDS.test(said)) {
+            // already asked with this same message: the AI's own answer goes out (Moodlift 28 Nov: the same line 7 times,
+            // while the customer had sent her sizes and asked other things)
+          } else {
+            // the same ask again and the AI has nothing else: a person finishes this order instead of a loop
+            replyOverride = holdMessage(result.language);
+            await this.handoff(companyId, conversation, channelUser, 'order_check',
+              `Customer ට size / colour හරියට තෝරලා order එක හදන්න bot එකට බැරි වුණා (${orderOutcome.slice(4)}) – කරුණාකර chat එක බලලා order එක දාන්න.`);
+            intents.add('handoff');
+          }
         }
       }
       if (orderOutcome === 'summary' && session.pending_order) {
@@ -2198,7 +2220,9 @@ export class SalesBotEngineService implements OnModuleInit {
             || optionKey(String(option.variant_value ?? '')) === optionKey(wanted);
         };
         const byName = wanted ? options.findIndex(sameOption) : -1;
-        const index = byId && (!wanted || sameOption(byId)) ? Number(item.variant_id) - 1 : byName;
+        let index = byId && (!wanted || sameOption(byId)) ? Number(item.variant_id) - 1 : byName;
+        // "Navy Blue / 2XL" for the option "T-Shirt / Navy Blue / XXL": all the words fit exactly one option → that one
+        if (index < 0 && wanted) index = looseOptionIndex(options.map((option) => variantLabel(option)), wanted);
         if (index < 0) return { items: priced, problem: `choose_variant_for_${product.name}` };
         if (options[index].available === false) return { items: priced, problem: `unavailable:${product.name} (${variantLabel(options[index])})` };
         unit = variantPrice(product, options[index]);
