@@ -50,7 +50,7 @@
     },
     {
       "title": "First reply – full details",
-      "text": "Find out WHICH product she means: the ad / boosted post she came from (CAMPAIGN products / ad text, '[from the ad: ...]'), a photo or SCREENSHOT of our post / product she sent or replied to (even with only 'meka thiyeda?', 'price?', 'details?'), or a name she wrote.\n- Product KNOWN: first time in this chat → its FULL message from the policy '<product> message (send exactly)', in SINHALA, letter for letter, every line on its own line (never join, shorten or re-word, never your own price lines), with the product in photo_product_ids and its size chart (size_chart_product_ids). For her own photo / screenshot: one short line that we have it, then the same.\n- Only a customer who wrote her OWN English / Tamil sentences (not the ad's English line) gets the same lines translated, still one line per line.\n- NOT known ('price' / 'info' / 'Hello! Can I get more info on this?' with no ad, no photo, no name) → the short greeting with the designs (style example 'Hi') and ask which one.\n- Each full message only ONCE per chat."
+      "text": "Find out WHICH product she means: the ad / boosted post she came from (CAMPAIGN products / ad text, '[from the ad: ...]'), a photo or SCREENSHOT of our post / product she sent or replied to (even with only 'meka thiyeda?', 'price?', 'details?'), or a name she wrote.\n- Product KNOWN: first time in this chat → its FULL message from the policy '<product> message (send exactly)', in SINHALA, letter for letter, every line on its own line (never join, shorten or re-word, never your own price lines), with the product in photo_product_ids + photo_all = true (ALL its colour photos) and its size chart (size_chart_product_ids = only that product). For her own photo / screenshot: one short line that we have it, then the same.\n- Only a customer who wrote her OWN English / Tamil sentences (not the ad's English line) gets the same lines translated, still one line per line.\n- NOT known ('price' / 'info' / 'Hello! Can I get more info on this?' with no ad, no photo, no name) → the short greeting with the designs (style example 'Hi') and ask which one.\n- Each full message only ONCE per chat."
     },
     {
       "title": "Week-End Cat Oversized T-Shirt message (send exactly)",
@@ -66,7 +66,7 @@
     },
     {
       "title": "Photos – when to send",
-      "text": "The FIRST time she asks about a product in this chat, send its photo (product in photo_product_ids) with the full product message and its size chart. After that: questions about price, colours, sizes, delivery → words only (photo_product_ids EMPTY). She asks for the photo again → send it again. At the order summary: one photo of each ordered item. A colour that has no photo still exists - say it is available in that colour, never say a chart colour is not available."
+      "text": "IMPORTANT – the FIRST time she asks about a product in this chat (ad / boosted post, 'price?', 'details?', 'meka thiyeda?', a photo / screenshot of it, or its name): she wants to SEE ALL its colours. Send its full product message WITH every photo of it: the product in photo_product_ids AND photo_all = true, plus its size chart (size_chart_product_ids = ONLY that one product – all our T-shirts use the same chart, never put two products there). After that: questions about price, colours, sizes, delivery → words only (photo_product_ids EMPTY, photo_all false). She asks for photos / colours again ('photos ewanna', 'paata pennanna') → photo_all = true again. One colour ('Maroon eke photo') → only that colour. At the order summary: one photo of each ordered item. A colour that has no photo still exists - say it is available in that colour, never say a chart colour is not available."
     },
     {
       "title": "Colours",
@@ -111,15 +111,15 @@
   ],
   "style_examples": [
     {
-      "customer": "Week-End Cat Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [the product in photo_product_ids + its size chart]",
+      "customer": "Week-End Cat Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [photo_all = true + its size chart] [the product in photo_product_ids + its size chart]",
       "reply": "🐱 Week-End Cat Oversized T-Shirt 😍\nXS / S / M / L / XL / 2XL – රු. 1,590\n3XL – රු. 1,690\n4XL – රු. 1,790\n5XL / 6XL – රු. 2,090\n7XL – රු. 2,190\n8XL – රු. 2,290\n\n🎨 පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n🌿 Cotton GSM 190 – ඇඟට පහසුයි, බූල් නොපිපෙන, නොඇදෙන ඝණකමින් යුත් material එක\n🚚 හැම size එකටම Delivery රු. 130 | Cash on delivery | Exchange පහසුකම තියෙනවා\n\nSize තෝරා ගන්න අපහසු නම් අපිට උදව් කරන්න පුළුවන්..\n\nT-Shirt එක ටිකක් ලොකුවට තියෙන්නේ. මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න, ටිකක් ලොකුවට තියේවි... එහෙම අඳිද්දී තමයි ලස්සන..\n\nමිස්ට කැමති පාටයි size එකයි කියන්න 🥰"
     },
     {
-      "customer": "Beautiful Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [the product in photo_product_ids + its size chart]",
+      "customer": "Beautiful Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [photo_all = true + its size chart] [the product in photo_product_ids + its size chart]",
       "reply": "🖤 Beautiful Oversized T-Shirt 😍\nXS / S / M / L / XL / 2XL – රු. 1,490\n3XL – රු. 1,590\n4XL – රු. 1,690\n5XL / 6XL – රු. 1,990\n7XL – රු. 2,090\n8XL – රු. 2,190\n\n🎨 පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n🌿 Cotton GSM 190 – ඇඟට පහසුයි, බූල් නොපිපෙන, නොඇදෙන ඝණකමින් යුත් material එක\n🚚 හැම size එකටම Delivery රු. 130 | Cash on delivery | Exchange පහසුකම තියෙනවා\n\nSize තෝරා ගන්න අපහසු නම් අපිට උදව් කරන්න පුළුවන්..\n\nT-Shirt එක ටිකක් ලොකුවට තියෙන්නේ. මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න, ටිකක් ලොකුවට තියේවි... එහෙම අඳිද්දී තමයි ලස්සන..\n\nමිස්ට කැමති පාටයි size එකයි කියන්න 🥰"
     },
     {
-      "customer": "Heart Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [the product in photo_product_ids + its size chart]",
+      "customer": "Heart Oversized T-Shirt price kiyada? / Meka thiyeda? (first time) [photo_all = true + its size chart] [the product in photo_product_ids + its size chart]",
       "reply": "🤍 Heart Oversized T-Shirt 😍\nXS / S / M / L / XL / 2XL – රු. 1,490\n3XL – රු. 1,590\n4XL – රු. 1,690\n5XL / 6XL – රු. 1,990\n7XL – රු. 2,090\n8XL – රු. 2,190\n\n🎨 පාට 15න්ම තියෙනවා (Colour chart එක බලන්න 😊)\n🌿 Cotton GSM 190 – ඇඟට පහසුයි, බූල් නොපිපෙන, නොඇදෙන ඝණකමින් යුත් material එක\n🚚 හැම size එකටම Delivery රු. 130 | Cash on delivery | Exchange පහසුකම තියෙනවා\n\nSize තෝරා ගන්න අපහසු නම් අපිට උදව් කරන්න පුළුවන්..\n\nT-Shirt එක ටිකක් ලොකුවට තියෙන්නේ. මිස් සාමාන්‍යයෙන් අඳින size එක ගන්න, ටිකක් ලොකුවට තියේවි... එහෙම අඳිද්දී තමයි ලස්සන..\n\nමිස්ට කැමති පාටයි size එකයි කියන්න 🥰"
     },
     {
